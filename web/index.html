@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pressure preview</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -3 24 24'%3E%3Cpath d='M1 17 L7 4 L13 17 Z M7 4 L17 1 L13 17 M17 1 L23 13 L13 17' fill='none' stroke='%230b6fbf' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=TASA+Orbiter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="app/theme.css">
+<link rel="stylesheet" href="app/app.css">
+<link rel="stylesheet" href="app/model/model.css">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
+<script type="module" src="app/main.js"></script>
+</head>
+<body data-screen="start" data-mode="result">
+<header class="topbar">
+	<div class="brand">
+		<svg class="mark" viewBox="0 0 24 18" aria-hidden="true"><path d="M1 17 L7 4 L13 17 Z M7 4 L17 1 L13 17 M17 1 L23 13 L13 17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+		<span class="app-name">Pressure preview</span>
+	</div>
+	<nav class="cases" role="tablist" aria-label="Open cases" data-cases></nav>
+	<div class="topbar-end">
+		<div class="modes" role="tablist" aria-label="View" data-modes hidden></div>
+		<div data-export hidden></div>
+	</div>
+</header>
+<main class="work">
+	<div class="stage">
+		<div class="toolbar-host" data-toolbar></div>
+		<div class="viewport viewer" data-viewport>
+			<div class="overlay" data-overlay></div>
+			<div class="pane-labels" data-pane-labels></div>
+			<div class="legend-host" data-legend></div>
+			<div class="center" data-center></div>
+			<div class="strip" data-strip></div>
+			<div class="drop-veil" aria-hidden="true"><span>Drop to open</span></div>
+		</div>
+		<div class="dock-resizer" data-dock-resizer role="separator" aria-orientation="horizontal" aria-label="Resize plots"></div>
+		<div class="dock-host" data-dock></div>
+	</div>
+	<div class="panel-resizer" data-panel-resizer role="separator" aria-orientation="vertical" aria-label="Resize panel"></div>
+	<aside class="panel" data-panel>
+		<div class="panel-tabs" role="tablist" data-panel-tabs></div>
+		<div class="panel-body" data-panel-body></div>
+	</aside>
+	<aside class="model-host" data-model hidden></aside>
+</main>
+</body>
+</html>

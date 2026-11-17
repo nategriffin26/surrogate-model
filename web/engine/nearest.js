@@ -1,0 +1,74 @@
+/** Nearest-point queries over a point set, through a uniform grid of buckets. */
+
+/**
+ * @param {Float32Array} positions (N, 3)
+ * @returns {{ positions: Float32Array, origin: number[], cell: number, shape: number[], starts: Uint32Array, order: Uint32Array }}
+ */
+export function buildPointGrid(positions) {
+  const count = positions.length / 3;
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      if (positions[i + k] < min[k]) min[k] = positions[i + k];
+      if (positions[i + k] > max[k]) max[k] = positions[i + k];
+    }
+  }
+  // About one point per bucket of the bounding box; a surface fills few buckets, each with several.
+  const volume = Math.max((max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]), 1e-12);
+  const cell = Math.max(Math.cbrt(volume / Math.max(count, 1)), 1e-6);
+  const shape = [0, 1, 2].map((k) => Math.floor((max[k] - min[k]) / cell) + 1);
+  const bucketOf = (i) => {
+    const bx = Math.floor((positions[3 * i] - min[0]) / cell);
+    const by = Math.floor((positions[3 * i + 1] - min[1]) / cell);
+    const bz = Math.floor((positions[3 * i + 2] - min[2]) / cell);
+    return (bx * shape[1] + by) * shape[2] + bz;
+  };
+  const starts = new Uint32Array(shape[0] * shape[1] * shape[2] + 1);
+  for (let i = 0; i < count; i++) starts[bucketOf(i) + 1]++;
+  for (let b = 1; b < starts.length; b++) starts[b] += starts[b - 1];
+  const fill = starts.slice(0, -1);
+  const order = new Uint32Array(count);
+  for (let i = 0; i < count; i++) order[fill[bucketOf(i)]++] = i;
+  return { positions, origin: min, cell, shape, starts, order };
+}
+
+/** Index of the grid's point nearest to (x, y, z), searching shells of buckets outward. */
+export function nearestPoint(grid, x, y, z) {
+  const { positions, origin, cell, shape, starts, order } = grid;
+  const cx = clamp(Math.floor((x - origin[0]) / cell), shape[0]);
+  const cy = clamp(Math.floor((y - origin[1]) / cell), shape[1]);
+  const cz = clamp(Math.floor((z - origin[2]) / cell), shape[2]);
+  let best = -1;
+  let bestDistance = Infinity;
+  const largest = Math.max(...shape);
+  for (let ring = 0; ring <= largest; ring++) {
+    for (let bx = cx - ring; bx <= cx + ring; bx++) {
+      if (bx < 0 || bx >= shape[0]) continue;
+      for (let by = cy - ring; by <= cy + ring; by++) {
+        if (by < 0 || by >= shape[1]) continue;
+        const onShell = bx === cx - ring || bx === cx + ring || by === cy - ring || by === cy + ring;
+        for (let bz = cz - ring; bz <= cz + ring; bz += onShell ? 1 : 2 * ring || 1) {
+          if (bz < 0 || bz >= shape[2]) continue;
+          const bucket = (bx * shape[1] + by) * shape[2] + bz;
+          for (let s = starts[bucket]; s < starts[bucket + 1]; s++) {
+            const i = order[s];
+            const dx = positions[3 * i] - x, dy = positions[3 * i + 1] - y, dz = positions[3 * i + 2] - z;
+            const distance = dx * dx + dy * dy + dz * dz;
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              best = i;
+            }
+          }
+        }
+      }
+    }
+    // Every bucket beyond this shell is at least `ring` cells away from the query's bucket.
+    if (best >= 0 && Math.sqrt(bestDistance) <= ring * cell) break;
+  }
+  return best;
+}
+
+function clamp(index, size) {
+  return index < 0 ? 0 : index >= size ? size - 1 : index;
+}
