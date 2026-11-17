@@ -1,5 +1,6 @@
 // The section tool: a plane normal to x, y or z, placed by typing or by dragging its line on the car; its line drawn
-// on the car, the car optionally clipped at it, and the field plotted along it with a cursor linked to the car.
+// on the car, the car optionally clipped at it, and the shown field plotted along the outer surface it cuts, with a
+// cursor linked to the car.
 
 import { h } from './dom.js';
 import { metres, signed } from './format.js';
@@ -8,88 +9,66 @@ import { CUT_AXES, branches, cut } from './section.js';
 
 const AXIS_NAMES = ['x', 'y', 'z'];
 const GRAB_PX = 8;
-/** The band around predicted pressure spans this many standard deviations of the networks, each side. */
-const BAND_SIGMAS = 2;
 
-/** What a plot of each field shows at a cut point: the value, the model-spread band (pressure only), and CFD. */
+/** What the plot shows for each field at a cut point. Pressure is drawn with negative values up, as aerodynamicists do. */
 const QUANTITY = {
-	cp: { label: 'Cp', invert: true, value: (q) => q.cp, band: true, cfd: (q) => q.cfd },
-	cfd: { label: 'Cp', invert: true, value: (q) => q.cp, band: true, cfd: (q) => q.cfd },
-	none: { label: 'Cp', invert: true, value: (q) => q.cp, band: true, cfd: (q) => q.cfd },
-	error: { label: 'ΔCp', invert: false, value: (q) => q.cp - q.cfd },
-	sigma: { label: 'σ', invert: false, value: (q) => q.sigma },
-	drag: { label: '−Cp nₓ', invert: false, value: (q) => -q.cp * q.nx },
+	cp: { label: 'Cp', key: 'cp', invert: true, value: (q) => q.cp },
+	drag: { label: '−Cp nₓ', key: 'drag', invert: false, value: (q) => -q.cp * q.nx },
+	sigma: { label: 'σ', key: 'sigma', invert: false, value: (q) => q.sigma },
 };
 
-/** The cut of a case's working mesh at its current section, cached until the section moves. */
-function sectionOf(c) {
-	const { axis, offset } = c.view.section;
+/** The cut of a case's working mesh at a section, cached until the section moves. */
+function sectionOf(c, { axis, offset }) {
 	if (c.cut?.axis === axis && c.cut.offset === offset) return c.cut;
 	const lines = cut(c.result.mesh, axis, offset);
 	c.cut = { axis, offset, lines, branches: branches(lines, axis) };
 	return c.cut;
 }
 
-/** Plot series for a section: per branch, rows [along, value, sigma, cfd] in path order. */
-function sectionRows(c, field) {
-	const section = sectionOf(c);
-	const q = QUANTITY[field];
+/** Plot rows of a section: per branch, rows {along, value, p} in path order. */
+function sectionRows(c, section, field) {
 	const { along } = CUT_AXES[section.axis];
-	const hasCfd = c.result.source.hasCfd;
-	return section.branches.map((paths) => paths.map((path) => path.map((p) => ({
-		along: p.p[along], value: q.value(p), sigma: p.sigma, cfd: q.cfd && hasCfd ? q.cfd(p) : null, p: p.p,
-	}))));
+	const q = QUANTITY[field];
+	return sectionOf(c, section).branches.map((paths) => paths.map((path) => path.map((p) => ({ along: p.p[along], value: q.value(p), p: p.p }))));
 }
 
-export function sectionCsv(c) {
-	const field = c.view.field;
-	const { axis } = c.view.section;
-	const rows = sectionRows(c, field);
-	const names = CUT_AXES[axis].branches;
-	const quantity = QUANTITY[field].label;
-	const head = ['branch', 'path', 'x_m', 'y_m', 'z_m', quantity === 'Cp' ? 'cp' : field, 'sigma', ...(QUANTITY[field].cfd && c.result.source.hasCfd ? ['cp_cfd'] : [])];
-	const lines = [head.join(',')];
-	rows.forEach((paths, b) => paths.forEach((path, k) => {
-		for (const r of path) lines.push([names[b], k, ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6), r.sigma.toFixed(6), ...(r.cfd === null ? [] : [r.cfd.toFixed(6)])].join(','));
+export function sectionCsv(c, view) {
+	const names = CUT_AXES[view.section.axis].branches;
+	const lines = [['branch', 'x_m', 'y_m', 'z_m', QUANTITY[view.field].key].join(',')];
+	sectionRows(c, view.section, view.field).forEach((paths, b) => paths.forEach((path) => {
+		for (const r of path) lines.push([names[b], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)].join(','));
 	}));
 	return lines.join('\n') + '\n';
 }
 
 /**
- * host: the overlay over the 3D view (markers for the plot cursor); viewport: the element the car is dragged in.
- * actions.changed(patch) applies a change to the section.
+ * host: the overlay over the 3D view (markers for the plot cursor); viewport: the element the car is dragged in;
+ * view: the shared view, whose section and field this tool reads. changed(patch) applies a change to the section.
  */
-export function createSectionTool({ host, viewport, viewer, active, changed }) {
+export function createSectionTool({ host, viewport, viewer, active, view, changed }) {
 	const markers = [0, 1].map((b) => h('div', { class: `cut-marker b${b}`, hidden: true }));
 	host.append(...markers);
 	let plot = null;
 	let cursorAt = null;
 
-	const enabled = () => {
-		const c = active();
-		return Boolean(c?.result && c.view.section.on);
-	};
+	const enabled = () => Boolean(active()?.result && view.section.on);
 
 	/** Distance in pixels from a client point to the cut line on screen, and the cut point nearest to it. */
 	function nearestOnScreen(clientX, clientY) {
-		const c = active();
 		const rect = viewport.getBoundingClientRect();
 		const x = clientX - rect.left, y = clientY - rect.top;
 		let best = { d: Infinity, point: null };
-		const panes = viewer.paneRects().length;
-		for (let pane = 0; pane < panes; pane++) {
-			for (const line of sectionOf(c).lines) {
-				let previous = null;
-				for (const q of line.points) {
-					const s = viewer.project(q.p, pane);
-					if (previous && s.visible) {
-						const dx = s.x - previous.x, dy = s.y - previous.y;
-						const t = Math.max(0, Math.min(1, ((x - previous.x) * dx + (y - previous.y) * dy) / (dx * dx + dy * dy || 1)));
-						const d = Math.hypot(previous.x + t * dx - x, previous.y + t * dy - y);
-						if (d < best.d) best = { d, point: q.p };
-					}
-					previous = s;
+		for (const line of sectionOf(active(), view.section).lines) {
+			let previous = null;
+			for (const q of line.points) {
+				const s = viewer.project(q.p);
+				if (previous && s.visible) {
+					const dx = s.x - previous.x, dy = s.y - previous.y;
+					const t = Math.max(0, Math.min(1, ((x - previous.x) * dx + (y - previous.y) * dy) / (dx * dx + dy * dy || 1)));
+					const d = Math.hypot(previous.x + t * dx - x, previous.y + t * dy - y);
+					if (d < best.d) best = { d, point: q.p };
 				}
+				previous = s;
 			}
 		}
 		return best;
@@ -97,17 +76,16 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 
 	/** Screen pixels the plane moves per metre along its normal, measured at a point on it. */
 	function screenNormal(point) {
-		const axis = active().view.section.axis;
 		const a = viewer.project(point);
 		const moved = [...point];
-		moved[axis] += 0.01;
+		moved[view.section.axis] += 0.01;
 		const b = viewer.project(moved);
 		return { x: (b.x - a.x) / 0.01, y: (b.y - a.y) / 0.01 };
 	}
 
 	let dragging = false;
 	viewport.addEventListener('pointerdown', (e) => {
-		if (e.button !== 0 || !enabled() || active().view.compare) return;
+		if (e.button !== 0 || !enabled()) return;
 		const near = nearestOnScreen(e.clientX, e.clientY);
 		if (near.d > GRAB_PX) return;
 		const n = screenNormal(near.point);
@@ -117,12 +95,11 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 		e.preventDefault();
 		dragging = true;
 		viewport.setPointerCapture(e.pointerId);
-		const start = { x: e.clientX, y: e.clientY, offset: active().view.section.offset };
-		viewer.setSection({ ...active().view.section, plane: true });
-		const digits = 3;
+		const start = { x: e.clientX, y: e.clientY, offset: view.section.offset };
+		viewer.setSection({ ...view.section, plane: true });
 		const move = (ev) => {
 			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / perMetre;
-			changed({ offset: Number(offset.toFixed(digits)) });
+			changed({ offset: Number(offset.toFixed(3)) });
 		};
 		const up = () => {
 			dragging = false;
@@ -136,16 +113,14 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 
 	viewport.addEventListener('pointermove', (e) => {
 		if (dragging || e.buttons || !enabled()) return;
-		const near = nearestOnScreen(e.clientX, e.clientY).d <= GRAB_PX && !active().view.compare;
+		const near = nearestOnScreen(e.clientX, e.clientY).d <= GRAB_PX;
 		viewport.classList.toggle('over-cut', near);
-		const section = active().view.section;
-		if (Boolean(viewer.section?.plane) !== near) viewer.setSection({ ...section, plane: near });
+		if (Boolean(viewer.section?.plane) !== near) viewer.setSection({ ...view.section, plane: near });
 	});
 
 	/** Markers on the car where the plot cursor meets each branch. */
 	function placeMarkers() {
-		const c = active();
-		const rows = cursorAt === null || !enabled() ? null : sectionRows(c, c.view.field);
+		const rows = cursorAt === null || !enabled() ? null : sectionRows(active(), view.section, view.field);
 		markers.forEach((marker, b) => {
 			const point = rows ? pointAlong(rows[b], cursorAt) : null;
 			marker.hidden = point === null;
@@ -160,37 +135,23 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 	/** The section plot into an SVG of a given size, with its readout element. */
 	function drawSection(svg, readout, width, height) {
 		const c = active();
-		const field = c.view.field;
-		const q = QUANTITY[field];
-		const { axis } = c.view.section;
-		const { along } = CUT_AXES[axis];
-		const rows = sectionRows(c, field);
-		const series = [];
-		rows.forEach((paths, b) => {
-			for (const path of paths) {
-				if (q.band) series.push({ kind: 'band', cls: `b${b}`, points: path.map((r) => [r.along, r.value - BAND_SIGMAS * r.sigma, r.value + BAND_SIGMAS * r.sigma]) });
-			}
-		});
-		rows.forEach((paths, b) => {
-			for (const path of paths) {
-				if (path[0]?.cfd !== null && path[0]?.cfd !== undefined) series.push({ kind: 'dashed', cls: `b${b} cfd`, points: path.map((r) => [r.along, r.cfd]) });
-				series.push({ kind: 'line', cls: `b${b}`, points: path.map((r) => [r.along, r.value]) });
-			}
-		});
-		const b = c.result.geometry.bounds;
-		const domain = [b[2 * along] - 0.05, b[2 * along + 1] + 0.05];
+		const q = QUANTITY[view.field];
+		const { along, branches: names } = CUT_AXES[view.section.axis];
+		const rows = sectionRows(c, view.section, view.field);
+		const series = rows.flatMap((paths, b) => paths.map((path) => ({ kind: 'line', cls: `b${b}`, points: path.map((r) => [r.along, r.value]) })));
+		const bounds = c.result.geometry.bounds;
+		const domain = [bounds[2 * along] - 0.05, bounds[2 * along + 1] + 0.05];
 		let lo = Infinity, hi = -Infinity;
 		for (const paths of rows) for (const path of paths) for (const r of path) {
-			lo = Math.min(lo, r.value - (q.band ? BAND_SIGMAS * r.sigma : 0), r.cfd ?? Infinity);
-			hi = Math.max(hi, r.value + (q.band ? BAND_SIGMAS * r.sigma : 0), r.cfd ?? -Infinity);
+			lo = Math.min(lo, r.value);
+			hi = Math.max(hi, r.value);
 		}
 		if (!Number.isFinite(lo)) [lo, hi] = [-1, 1];
 		// Pressure keeps a steady scale while the plane is dragged; other fields follow their values.
 		if (q.invert) [lo, hi] = [Math.min(-1.2, Math.floor(lo * 2) / 2), Math.max(1, Math.ceil(hi * 2) / 2)];
 		const pad = (hi - lo) * 0.06 || 1;
-		plot = { frame: drawPlot(svg, { width, height, x: { domain, label: `${AXIS_NAMES[along]}, m` }, y: { domain: [lo - pad, hi + pad], label: q.label, invert: q.invert }, series }), rows, readout, along };
+		plot = { frame: drawPlot(svg, { width, height, x: { domain, label: `${AXIS_NAMES[along]}, m` }, y: { domain: [lo - pad, hi + pad], label: q.label, invert: q.invert }, series }), rows, readout, along, names };
 		setCursor(cursorAt);
-		const names = CUT_AXES[axis].branches;
 		svg.onpointermove = (e) => {
 			const rect = svg.getBoundingClientRect();
 			const f = plot.frame;
@@ -198,7 +159,6 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 			setCursor(x < f.m.l || x > f.width - f.m.r ? null : f.x.invert(x));
 		};
 		svg.onpointerleave = () => setCursor(null);
-		plot.names = names;
 	}
 
 	/** Put the plot cursor at a coordinate along the plot axis (or remove it), with the car markers and readout. */
@@ -228,7 +188,7 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 
 	/** Header controls for the dock: normal axis, position, clip. */
 	function controls(c) {
-		const s = c.view.section;
+		const s = view.section;
 		const b = c.result.geometry.bounds;
 		const [min, max] = [b[2 * s.axis], b[2 * s.axis + 1]];
 		const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', value: signed(s.offset, 3), 'aria-label': 'Position, m', spellcheck: 'false' });
@@ -252,16 +212,9 @@ export function createSectionTool({ host, viewport, viewer, active, changed }) {
 			segmented('Clip', [[0, 'Off', 'No clipping'], [1, `−${name}`, `Keep ${name} below the plane`], [-1, `+${name}`, `Keep ${name} above the plane`]], s.clip, (clip) => changed({ clip })));
 	}
 
-	function key(c) {
-		const field = c.view.field;
-		const q = QUANTITY[field];
-		const names = CUT_AXES[c.view.section.axis].branches;
-		return [
-			h('span', { class: 'key-item b0' }, h('i'), names[0]),
-			h('span', { class: 'key-item b1' }, h('i'), names[1]),
-			q.band ? h('span', { class: 'key-item band' }, h('i'), `±${BAND_SIGMAS}σ of ${c.result.forces.cdPModels.length} networks`) : null,
-			q.cfd && c.result.source.hasCfd ? h('span', { class: 'key-item cfd' }, h('i'), 'CFD') : null,
-		];
+	function key() {
+		const names = CUT_AXES[view.section.axis].branches;
+		return names.map((name, b) => h('span', { class: `key-item b${b}` }, h('i'), name));
 	}
 
 	return { drawSection, controls, key, followCar, setCursor, forget: () => (plot = null) };

@@ -55,6 +55,7 @@ export class Viewer extends EventTarget {
 		this.pending = false;
 		this.lastMotion = -Infinity;
 		this.lastFrame = 0;
+		/** What the last frame drew: its layer and triangle count. */
 		this.drawn = null;
 		this.lod = { budget: MOVING_BUDGET_MS };
 		this.resetLod(null);
@@ -112,6 +113,8 @@ export class Viewer extends EventTarget {
 			uOrtho: { value: 0 },
 			uViewDir: { value: new THREE.Vector3() },
 			uSection: { value: 0 },
+			uCursor: { value: new THREE.Vector4() },
+			uAccent: { value: new THREE.Color(ACCENT) },
 			uPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
 			uClip: { value: 0 },
 			uArrival: { value: new THREE.Vector4() },
@@ -294,6 +297,14 @@ export class Viewer extends EventTarget {
 	clipped(point) {
 		const s = this.section;
 		return Boolean(s?.clip) && s.clip * (point[s.axis] - s.offset) > 0;
+	}
+
+	/** A thin line on the car where coordinate `axis` equals `offset` (a plot's cursor), or none for null. */
+	setCursorLine(line) {
+		const n = [0, 0, 0];
+		if (line) n[line.axis] = 1;
+		this.uniforms.uCursor.value.set(...n, line ? line.offset : 0);
+		this.requestRender();
 	}
 
 	/** Objects drawn with the car in world space (the model view's stencil), or null. The caller owns and disposes them. */
@@ -831,12 +842,7 @@ export class Viewer extends EventTarget {
 		});
 		renderer.autoClear = true;
 		renderer.setScissorTest(false);
-		// `full` says whether every triangle of the file was drawn: the preview is the full mesh in the working role.
-		const drawn = { layer: layer ? layerName : null, triangles: layer ? layer.triangles : 0, full: Boolean(layer) && layer === this.surface.full };
-		if (drawn.layer !== this.drawn?.layer || drawn.triangles !== this.drawn?.triangles || drawn.full !== this.drawn?.full) {
-			this.drawn = drawn;
-			this.dispatchEvent(new CustomEvent('drawn', { detail: drawn }));
-		}
+		this.drawn = { layer: layer ? layerName : null, triangles: layer ? layer.triangles : 0 };
 		this.dispatchEvent(new CustomEvent('camera'));
 	}
 

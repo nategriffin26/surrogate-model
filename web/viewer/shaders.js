@@ -42,6 +42,8 @@ uniform float uZmin;
 uniform float uOrtho;
 uniform vec3 uViewDir;
 uniform float uSection;      // 1 draws the section line
+uniform vec4 uCursor;        // a plot cursor drawn on the car: unit normal, offset; w of normal 0 draws none
+uniform vec3 uAccent;
 uniform vec4 uArrival;       // x of the front, front width, streak depth, 1 while the field is arriving
 uniform float uFade;         // 0..1 fade from clay, used instead of the front under reduced motion
 ${CLIP}
@@ -112,6 +114,7 @@ void main() {
 	// The inside of the shell, seen through a clip, reads darker than the outside.
 	if (!gl_FrontFacing) colour *= 0.62;
 	if (uSection > 0.5) colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
+	if (dot(uCursor.xyz, uCursor.xyz) > 0.0) colour = mix(colour, uAccent, 0.9 * lineAt(dot(vWorld, uCursor.xyz) - uCursor.w, 1.5));
 	gl_FragColor = vec4(colour, 1.0);
 	#include <colorspace_fragment>
 }`;

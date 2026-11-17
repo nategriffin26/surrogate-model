@@ -23,7 +23,7 @@ async function exampleFacts() {
 		const response = await fetch(new URL(`${id}.json`, EXAMPLE_BASE));
 		if (!response.ok) throw new Error(`${id}.json: ${response.status}`);
 		const { source } = await response.json();
-		return `${millions(source.cells)} polygons${source.hasCfd ? ' · CFD' : ''}`;
+		return `${millions(source.cells)} cells`;
 	}));
 }
 

@@ -30,27 +30,26 @@ export function createToolbar(actions) {
 		edges: tool('edges', 'Edges', 'Mesh edges (E)', () => actions.toggle('edges')),
 		ground: tool('ground', 'Ground', 'Ground (G)', () => actions.toggle('ground')),
 		section: tool('section', 'Section', 'Section cut (S)', () => actions.toggle('section')),
-		compare: tool('compare', 'Compare', 'Predicted and CFD side by side (C)', () => actions.toggle('compare')),
 	};
 	const controls = menu(h('button', { type: 'button', class: 'tool tool-quiet', title: 'Mouse and keys' }, icon('controls')), h('dl', { class: 'controls-list' },
 		[['Rotate', 'Drag'], ['Pan', 'Right-drag, Shift-drag, two fingers'], ['Zoom', 'Wheel, pinch'], ['Orbit centre', 'Double-click'],
-			['Probe', 'Click'], ['Fit', 'F'], ['Views', '0–6'], ['Edges · Ground', 'E · G'], ['Section · Compare', 'S · C']]
+			['Probe', 'Click'], ['Fit', 'F'], ['Views', '0–6'], ['Edges · Ground', 'E · G'], ['Section', 'S']]
 			.map(([what, how]) => [h('dt', {}, what), h('dd', {}, how)])), { align: 'right' });
 	const el = h('div', { class: 'toolbar' },
 		fields,
 		h('div', { class: 'toolbar-end' },
 			h('div', { class: 'tool-group' }, views.el, tools.fit),
 			h('div', { class: 'tool-group' }, tools.edges, tools.ground),
-			h('div', { class: 'tool-group' }, tools.section, tools.compare),
+			h('div', { class: 'tool-group' }, tools.section),
 			controls.el));
 
-	/** state: {fields: [names], field, maps, enabled, projection, display: {edges, ground}, section, compare, canCompare} */
+	/** state: {fields: [names], field, maps, enabled, projection, display: {edges, ground}, section} */
 	function render(state) {
 		fields.replaceChildren(...state.fields.map((f) => {
 			const map = FIELDS[f].map ? state.maps?.[FIELDS[f].map] : null;
 			return h('button', {
 				type: 'button', role: 'radio', class: 'field', 'data-field': f, title: FIELDS[f].tip,
-				'aria-checked': String(f === state.field), disabled: !state.enabled && f !== 'none',
+				'aria-checked': String(state.enabled && f === state.field), disabled: !state.enabled,
 				onclick: () => actions.field(f),
 			}, h('span', {}, FIELDS[f].label), h('span', { class: 'field-ramp', style: map ? `background:${rampCss(map.ramp)}` : null }));
 		}));
@@ -59,8 +58,6 @@ export function createToolbar(actions) {
 		tools.ground.setAttribute('aria-pressed', String(state.display.ground));
 		tools.section.setAttribute('aria-pressed', String(state.section));
 		tools.section.disabled = !state.enabled;
-		tools.compare.setAttribute('aria-pressed', String(state.compare));
-		tools.compare.hidden = !state.canCompare;
 	}
 	return { el, render };
 }

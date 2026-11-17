@@ -1,21 +1,21 @@
-// The tool's shell: open cases in tabs, the 3D view with its toolbar and legend, the plot dock and the results
-// panel, all kept in step with the active case. Each case keeps its own view: camera, field, colour maps, section,
-// probes and plot.
+// The tool's shell: open cases in tabs, the 3D view with its toolbar, legend and result card, and the dock of plots
+// and probes under it. Every case is seen through one view (camera, field, colour maps, section and dock tab), so
+// flipping tabs compares cars from the same angle on the same colour scale; each case keeps only its own probes.
 
 import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
 import { VIEWS, Viewer } from '../viewer/viewer.js';
 import { createSectionTool } from './cut.js';
-import { createDock, plotCsv } from './dock.js';
+import { createDock, dockCsv } from './dock.js';
 import { download, h } from './dom.js';
 import { baseName, savePicture } from './export.js';
-import { FIELDS, defaultMaps, fieldsFor } from './fields.js';
+import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
 import { menu } from './menu.js';
-import { createProbes, probesCsv } from './probes.js';
+import { createProbes } from './probes.js';
 import { createProgress } from './progress.js';
-import { drawnText, renderResults } from './results.js';
+import { renderResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
 import { VIEW_KEYS, createToolbar } from './toolbar.js';
@@ -26,9 +26,8 @@ const viewport = $('[data-viewport]');
 const overlay = $('[data-overlay]');
 const center = $('[data-center]');
 const strip = $('[data-strip]');
+const card = $('[data-card]');
 const paneLabels = $('[data-pane-labels]');
-const panel = $('[data-panel]');
-const panelBody = $('[data-panel-body]');
 const modelHost = $('[data-model]');
 
 const engine = createEngine();
@@ -37,50 +36,47 @@ const viewer = new Viewer(viewport);
 viewport.append(createTriad(viewer));
 const display = { edges: false, ground: true };
 let mode = 'result';
-let drawn = null;
 
 const active = () => session.active;
 const ready = () => session.active?.status === 'ready';
 
-// ---- per-case view state -------------------------------------------------------------------------------------------
+// ---- the shared view ----------------------------------------------------------------------------------------------------
 
-function newView() {
-	return {
-		camera: null,
-		field: 'none',
-		maps: null,
-		defaults: null,
-		compare: false,
-		section: { on: false, axis: 1, offset: 0, clip: 0 },
-		probes: [],
-		nextProbe: 1,
-		dock: 'buildup',
-		dockCollapsed: false,
-		panel: 'results',
-		arrived: false,
-	};
-}
+/** The colour maps start from the first car with a result and then stay put, so every car reads on one scale. */
+const view = {
+	field: 'cp',
+	maps: null,
+	section: { on: false, axis: 1, offset: 0, clip: 0 },
+	dock: 'buildup',
+	dockCollapsed: false,
+};
+/** The camera frames the first car; after that it stays where the engineer put it, whichever car is shown. */
+let framed = false;
 
-/** Once fields exist: starting colour maps and the predicted pressure. */
-function fillView(c) {
-	if (c.view.maps) return;
-	c.view.defaults = defaultMaps(c.result.mesh);
-	c.view.maps = structuredClone(c.view.defaults);
-	c.view.field = 'cp';
-}
+/**
+ * While the Model view is on screen it may choose what the car shows: panes [{ field, label }], or null to show the
+ * shared view. The shared view is left untouched, so Result comes back as it was.
+ */
+let modelPanes = null;
+const modelOwnsCar = () => mode === 'model' && modelPanes !== null;
 
-function mapFor(c, field) {
+function mapFor(field) {
 	const name = FIELDS[field].map;
-	if (!name || !c.view.maps) return null;
-	const map = c.view.maps[name];
+	if (!name || !view.maps) return null;
+	view.maps[name] ??= defaultMaps(active().result.mesh)[name];
+	const map = view.maps[name];
 	return { ...map, bands: bandCount(map) };
 }
 
-function panesFor(c) {
-	if (!c?.view) return [{ field: 'none', map: null }];
-	if (c.view.compare) return [{ field: 'cp', label: 'Predicted', map: mapFor(c, 'cp') }, { field: 'cfd', label: 'CFD', map: mapFor(c, 'cfd') }];
-	return [{ field: c.view.field, map: mapFor(c, c.view.field) }];
+/** The panes the car is drawn in: the Model view's while it owns the car, otherwise the shared field. */
+function panes() {
+	if (modelOwnsCar()) return modelPanes.map((pane) => ({ ...pane, map: mapFor(pane.field) }));
+	const field = active()?.result ? view.field : 'none';
+	return [{ field, map: mapFor(field) }];
 }
+
+/** The field the legend shows and edits: the first pane drawn in colour. */
+const legendField = () => panes().find((pane) => FIELDS[pane.field].map)?.field ?? 'none';
 
 // ---- components ------------------------------------------------------------------------------------------------------
 
@@ -88,9 +84,7 @@ const progress = createProgress({ cancel: (c) => session.close(c) });
 
 const toolbar = createToolbar({
 	field: (field) => {
-		const c = active();
-		c.view.field = field;
-		c.view.compare = false;
+		view.field = field;
 		update('toolbar', 'legend', 'viewer', 'dock');
 	},
 	view: (name) => viewer.view(name),
@@ -102,14 +96,19 @@ const toolbar = createToolbar({
 	toggle: (what) => toggle(what),
 });
 $('[data-toolbar]').append(toolbar.el);
-const panelToggle = h('button', { type: 'button', class: 'tool tool-quiet panel-toggle', title: 'Results panel', onclick: () => {
-	body.classList.toggle('panel-closed');
-	update('toolbar');
-} }, icon('panel'));
-toolbar.el.querySelector('.toolbar-end').append(panelToggle);
+
+/** Turning the section on brings its plot up; turning it off leaves the drag build-up in its place. */
+function showSection(on) {
+	view.section.on = on;
+	if (on) {
+		view.dock = 'section';
+		view.dockCollapsed = false;
+	} else if (view.dock === 'section') {
+		view.dock = 'buildup';
+	}
+}
 
 function toggle(what) {
-	const c = active();
 	switch (what) {
 		case 'edges':
 		case 'ground':
@@ -117,66 +116,57 @@ function toggle(what) {
 			viewer.setDisplay(display);
 			break;
 		case 'section':
-			if (!c?.result) return;
-			c.view.section.on = !c.view.section.on;
-			if (c.view.section.on) {
-				c.view.dock = 'section';
-				c.view.dockCollapsed = false;
-			}
-			break;
-		case 'compare':
-			if (!c?.result?.source.hasCfd) return;
-			c.view.compare = !c.view.compare;
+			if (!active()?.result || modelOwnsCar()) return;
+			showSection(!view.section.on);
 			break;
 		default:
 			throw new Error(`Unknown toggle ${what}`);
 	}
-	update('toolbar', 'legend', 'viewer', 'dock', 'layout');
+	update('toolbar', 'viewer', 'dock', 'layout');
 }
 
 const legend = createLegend({
 	change: (patch) => {
-		const c = active();
-		const name = FIELDS[c.view.compare ? 'cp' : c.view.field].map;
-		Object.assign(c.view.maps[name], patch);
+		Object.assign(view.maps[FIELDS[legendField()].map], patch);
 		update('legend', 'toolbar', 'viewer');
 	},
 	reset: () => {
-		const c = active();
-		const name = FIELDS[c.view.compare ? 'cp' : c.view.field].map;
-		c.view.maps[name] = structuredClone(c.view.defaults[name]);
+		const name = FIELDS[legendField()].map;
+		view.maps[name] = defaultMaps(active().result.mesh)[name];
 		update('legend', 'toolbar', 'viewer');
 	},
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, viewer, active, changed: () => update('panel', 'markers') });
+const probes = createProbes({ host: overlay, viewer, active, view, changed: () => update('dock', 'layout', 'markers') });
 
 const section = createSectionTool({
 	host: overlay,
 	viewport,
 	viewer,
 	active,
+	view,
 	changed: (patch) => {
-		const c = active();
-		Object.assign(c.view.section, patch);
+		Object.assign(view.section, patch);
 		update('viewer', 'dock');
 	},
 });
 
 const dock = createDock({
 	section,
+	probes,
+	viewer,
 	active,
+	view,
 	actions: {
 		tab: (name) => {
-			const c = active();
-			c.view.dock = name;
-			c.view.dockCollapsed = false;
-			update('dock', 'layout');
+			if (name === 'section') showSection(true);
+			view.dock = name;
+			view.dockCollapsed = false;
+			update('toolbar', 'viewer', 'dock', 'layout');
 		},
 		collapse: () => {
-			const c = active();
-			c.view.dockCollapsed = !c.view.dockCollapsed;
+			view.dockCollapsed = !view.dockCollapsed;
 			update('dock', 'layout');
 		},
 	},
@@ -203,51 +193,48 @@ let modelMounted = null;
 function setMode(next) {
 	mode = next;
 	if (mode === 'model' && !modelMounted) {
-		modelMounted = import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer }));
+		const showPanes = (panes) => {
+			modelPanes = panes;
+			update('toolbar', 'legend', 'viewer');
+		};
+		modelMounted = import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer, showPanes }));
 	}
-	update('layout');
+	update('layout', 'toolbar', 'legend', 'viewer');
+}
+
+/** A CSV file of one of the dock's tabs, whichever tab is showing. */
+function saveCsv(tab) {
+	exportMenu.close();
+	const c = active();
+	download(new Blob([dockCsv(c, { ...view, dock: tab })], { type: 'text/csv' }), `${baseName(c)}-${tab}.csv`);
 }
 
 const exportItems = {
 	picture: h('button', { type: 'button', class: 'menu-item', onclick: () => {
 		exportMenu.close();
-		savePicture(active(), viewer, panesFor(active()).map((pane) => ({ ...pane, map: active().view.maps[FIELDS[pane.field].map] ?? null })));
+		savePicture(active(), viewer, { field: view.field, map: view.maps[FIELDS[view.field].map] });
 	} }, h('span', {}, 'Picture'), h('kbd', {}, 'PNG')),
-	plot: h('button', { type: 'button', class: 'menu-item', onclick: () => {
-		exportMenu.close();
-		const c = active();
-		download(new Blob([plotCsv(c)], { type: 'text/csv' }), `${baseName(c)}-${c.view.dock}.csv`);
-	} }, h('span', {}, 'Plot'), h('kbd', {}, 'CSV')),
-	probes: h('button', { type: 'button', class: 'menu-item', onclick: () => {
-		exportMenu.close();
-		const c = active();
-		download(new Blob([probesCsv(c)], { type: 'text/csv' }), `${baseName(c)}-probes.csv`);
-	} }, h('span', {}, 'Probes'), h('kbd', {}, 'CSV')),
+	section: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('section') }, h('span', {}, 'Section'), h('kbd', {}, 'CSV')),
+	buildup: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('buildup') }, h('span', {}, 'Drag build-up'), h('kbd', {}, 'CSV')),
+	probes: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('probes') }, h('span', {}, 'Probes'), h('kbd', {}, 'CSV')),
 };
 const exportMenu = menu(h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export'), h('div', { class: 'menu-list' }, Object.values(exportItems)), { align: 'right' });
 $('[data-export]').append(exportMenu.el);
 
-// ---- panel -------------------------------------------------------------------------------------------------------------
+// ---- result card ----------------------------------------------------------------------------------------------------------
 
-const panelTabs = $('[data-panel-tabs]');
-function renderPanel() {
+/** The card rises in when a car's result first shows, and updates in place after that. */
+function renderCard() {
 	const c = active();
-	if (!c || c.status === 'failed' || c.status === 'loading') return;
-	const tab = c.result ? c.view.panel : 'results';
-	const probeCount = c.view?.probes.length ?? 0;
-	panelTabs.replaceChildren(...[['results', 'Results'], ['probes', `Probes${probeCount ? ` (${probeCount})` : ''}`]].map(([name, label]) =>
-		h('button', { type: 'button', role: 'tab', class: 'panel-tab', 'aria-selected': String(name === tab), disabled: name === 'probes' && !c.result, onclick: () => {
-			c.view.panel = name;
-			renderPanel();
-		} }, label)));
-	const scroll = panelBody.scrollTop;
-	panelBody.replaceChildren(tab === 'probes' ? probes.table(c) : renderResults(c, { device: session.device, drawn }));
-	panelBody.scrollTop = scroll;
-}
-
-function renderDrawn() {
-	const cell = panelBody.querySelector('[data-fact="drawn"] .row-value');
-	if (cell && drawn) cell.textContent = drawnText(drawn);
+	if (!c?.result) {
+		card.replaceChildren();
+		delete card.dataset.case;
+		return;
+	}
+	const next = renderResultCard(c);
+	if (card.dataset.case === String(c.id)) next.classList.add('settled');
+	card.dataset.case = c.id;
+	card.replaceChildren(next);
 }
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
@@ -307,8 +294,7 @@ function renderCenter() {
 
 function renderLayout() {
 	const c = active();
-	const screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' ? 'notice' : 'case';
-	body.dataset.screen = screen;
+	body.dataset.screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' ? 'notice' : 'case';
 	if (!ready() && mode === 'model') mode = 'result';
 	body.dataset.mode = mode;
 	for (const b of modes.children) b.setAttribute('aria-selected', String(b.dataset.mode === mode));
@@ -316,43 +302,42 @@ function renderLayout() {
 	$('[data-export]').hidden = !ready();
 	modelHost.hidden = mode !== 'model';
 	viewer.hoverPicking = ready();
-	body.classList.toggle('dock-closed', Boolean(c?.view?.dockCollapsed));
+	body.classList.toggle('dock-closed', view.dockCollapsed);
 	if (ready()) {
-		exportItems.plot.disabled = c.view.dock === 'section' && !c.view.section.on;
-		exportItems.probes.disabled = c.view.probes.length === 0;
+		exportItems.section.disabled = !view.section.on;
+		exportItems.probes.disabled = c.probes.length === 0;
 	}
 }
 
+/** While the Model view owns the car, the field picker and the section wait until Result is back. */
 function renderToolbar() {
 	const c = active();
+	const enabled = Boolean(c?.result) && !modelOwnsCar();
 	toolbar.render({
-		fields: fieldsFor(Boolean(c?.result?.source.hasCfd)),
-		field: c?.view && !c.view.compare ? c.view.field : null,
-		maps: c?.view?.maps,
-		enabled: Boolean(c?.result),
+		fields: RESULT_FIELDS,
+		field: view.field,
+		maps: view.maps,
+		enabled,
 		projection: viewer.projection,
 		display,
-		section: Boolean(c?.view?.section.on),
-		compare: Boolean(c?.view?.compare),
-		canCompare: Boolean(c?.result?.source.hasCfd),
+		section: enabled && view.section.on,
 	});
-	panelToggle.setAttribute('aria-pressed', String(!body.classList.contains('panel-closed')));
 }
 
 function renderLegend() {
-	const c = active();
-	const field = c?.view ? (c.view.compare ? 'cp' : c.view.field) : 'none';
-	const map = c?.view?.maps && FIELDS[field].map ? c.view.maps[FIELDS[field].map] : null;
-	legend.render({ field, title: c?.view?.compare ? 'Cp' : FIELDS[field].title, map, mapName: FIELDS[field].map });
+	const field = legendField();
+	const mapName = FIELDS[field].map;
+	const title = panes().length > 1 ? FIELDS[field].symbol : FIELDS[field].title;
+	legend.render({ field, title, map: mapName ? view.maps[mapName] : null, mapName });
 }
 
 function applyViewer() {
 	const c = active();
-	const panes = panesFor(c);
-	viewer.setPanes(panes);
-	paneLabels.replaceChildren(...(panes.length > 1 ? panes.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
-	const s = c?.view?.section;
-	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
+	const shown = panes();
+	viewer.setPanes(shown);
+	paneLabels.replaceChildren(...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
+	const s = view.section;
+	viewer.setSection(c?.result && s.on && !modelOwnsCar() ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
 	viewer.setDisplay(display);
 }
 
@@ -363,7 +348,7 @@ const RENDER = {
 	legend: renderLegend,
 	viewer: applyViewer,
 	dock: () => dock.render(),
-	panel: renderPanel,
+	card: renderCard,
 	center: renderCenter,
 	markers: () => probes.place(),
 };
@@ -372,41 +357,35 @@ function update(...parts) {
 	for (const part of parts) RENDER[part]();
 }
 
-/**
- * Put a case on screen, or bring the screen up to date with it: its surface, its camera (restored when switching to
- * it, framed when its car first appears) and everything drawn from its view.
- */
-function present(c, { switching = false } = {}) {
-	if (c?.surface && !c.view) c.view = newView();
-	if (c?.result) fillView(c);
+/** Put a case on screen, or bring the screen up to date with it: its surface, its result and everything drawn from it. */
+function present(c) {
+	if (c?.result && !view.maps) view.maps = defaultMaps(c.result.mesh);
 	const surface = c?.surface ?? null;
 	if (viewer.surface !== surface) {
 		viewer.show(surface);
-		if (c?.view?.camera) viewer.restoreCamera(c.view.camera);
-		else viewer.view('isometric', { animate: false });
+		if (surface && !framed) {
+			viewer.view('isometric', { animate: false });
+			framed = true;
+		}
 	} else if (surface) {
-		if (switching && c.view.camera) viewer.restoreCamera(c.view.camera);
 		viewer.surfaceChanged();
 	}
 	viewer.setBackdrop(!c ? 'still' : surface ? 'none' : c.status === 'failed' ? 'still' : 'moving');
 	if (surface || !c) viewer.setSweep(null);
-	update('layout', 'tabs', 'toolbar', 'legend', 'viewer', 'center', 'panel', 'dock', 'markers');
-	if (c?.result && !c.view.arrived) {
-		c.view.arrived = true;
+	update('layout', 'tabs', 'toolbar', 'legend', 'viewer', 'center', 'card', 'dock', 'markers');
+	if (c?.result && !c.arrived) {
+		c.arrived = true;
 		viewer.arrive();
 	}
 }
 
-let shown = null;
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
 	switch (what) {
 		case 'cases':
 			update('tabs');
 			return;
 		case 'active':
-			if (shown?.view) shown.view.camera = viewer.cameraState();
-			shown = c;
-			present(c, { switching: true });
+			present(c);
 			return;
 		case 'status':
 			update('tabs');
@@ -415,22 +394,19 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 		case 'stage':
 			if (c !== active()) return;
 			if (!c.surface) viewer.setSweep(progress.fraction(c));
-			update('center', 'panel');
+			update('center');
 			return;
 		case 'geometry':
-			if (c !== active()) return;
-			present(c);
+			if (c === active()) present(c);
 			return;
 		case 'full':
-			if (c !== active()) return;
-			viewer.surfaceChanged();
-			update('panel');
+			if (c === active()) viewer.surfaceChanged();
 			return;
 		case 'numbers':
-			if (c === active()) update('panel', 'dock');
+			if (c === active()) update('card', 'dock');
 			return;
 		case 'device':
-			if (active()?.status === 'analysing' || active()?.status === 'queued') update('center', 'panel');
+			if (active()?.status === 'analysing' || active()?.status === 'queued') update('center');
 			return;
 		default:
 			throw new Error(`Unknown change ${what}`);
@@ -439,44 +415,36 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 
 // Stage clocks tick while the active case is being analysed.
 setInterval(() => {
-	const c = active();
-	if (c?.status === 'analysing') update('center');
+	if (active()?.status === 'analysing') update('center');
 }, 200);
 
 viewer.addEventListener('hover', ({ detail: { hit, clientX, clientY } }) => {
 	if (mode !== 'result' || !ready()) return;
 	probes.hover(hit, clientX, clientY);
-	section.followCar(hit);
+	dock.followCar(hit);
 });
 viewer.addEventListener('tap', ({ detail: { hit } }) => {
 	if (mode !== 'result' || !ready()) return;
 	probes.pin(hit);
 });
-viewer.addEventListener('drawn', ({ detail }) => {
-	drawn = detail;
-	renderDrawn();
-});
 
-// ---- panel and dock sizes -------------------------------------------------------------------------------------------------
+// ---- dock height ----------------------------------------------------------------------------------------------------------
 
-function resizer(handle, apply) {
-	handle.addEventListener('pointerdown', (e) => {
-		handle.setPointerCapture(e.pointerId);
-		body.classList.add('resizing');
-		const move = (ev) => apply(ev);
-		const up = () => {
-			body.classList.remove('resizing');
-			handle.removeEventListener('pointermove', move);
-			handle.removeEventListener('pointerup', up);
-		};
-		handle.addEventListener('pointermove', move);
-		handle.addEventListener('pointerup', up);
-	});
-}
-resizer($('[data-panel-resizer]'), (e) => body.style.setProperty('--panel', `${Math.min(560, Math.max(280, innerWidth - e.clientX))}px`));
-resizer($('[data-dock-resizer]'), (e) => {
-	const top = $('[data-dock]').getBoundingClientRect().bottom;
-	body.style.setProperty('--dock', `${Math.min(innerHeight * 0.6, Math.max(150, top - e.clientY))}px`);
+const dockResizer = $('[data-dock-resizer]');
+dockResizer.addEventListener('pointerdown', (e) => {
+	dockResizer.setPointerCapture(e.pointerId);
+	body.classList.add('resizing');
+	const move = (ev) => {
+		const bottom = $('[data-dock]').getBoundingClientRect().bottom;
+		body.style.setProperty('--dock', `${Math.min(innerHeight * 0.6, Math.max(150, bottom - ev.clientY))}px`);
+	};
+	const up = () => {
+		body.classList.remove('resizing');
+		dockResizer.removeEventListener('pointermove', move);
+		dockResizer.removeEventListener('pointerup', up);
+	};
+	dockResizer.addEventListener('pointermove', move);
+	dockResizer.addEventListener('pointerup', up);
 });
 
 // ---- keys -------------------------------------------------------------------------------------------------------------------
@@ -484,8 +452,7 @@ resizer($('[data-dock-resizer]'), (e) => {
 const VIEW_BY_KEY = Object.fromEntries(Object.entries(VIEW_KEYS).map(([name, key]) => [key, name]));
 addEventListener('keydown', (e) => {
 	if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
-	const c = active();
-	if (!c?.surface) return;
+	if (!active()?.surface) return;
 	const key = e.key.toLowerCase();
 	if (VIEW_BY_KEY[key] && VIEWS[VIEW_BY_KEY[key]]) viewer.view(VIEW_BY_KEY[key]);
 	else if (key === 'f') viewer.fit();
@@ -495,11 +462,9 @@ addEventListener('keydown', (e) => {
 	} else if (key === 'e') toggle('edges');
 	else if (key === 'g') toggle('ground');
 	else if (key === 's') toggle('section');
-	else if (key === 'c') toggle('compare');
 });
 
 acceptDrops((file) => session.openFile(file));
-if (innerWidth < 1100) body.classList.add('panel-closed');
 present(null);
 
-export const app = { engine, session, viewer, update };
+export const app = { engine, session, viewer, view, update };

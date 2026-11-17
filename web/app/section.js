@@ -55,7 +55,7 @@ function slabIndex(mesh, axis) {
 
 /**
  * The surface cut by the plane coordinate[axis] = offset. Returns polylines, each an array of points
- * {p: [x, y, z], cp, sigma, cfd, nx}, and whether it closes on itself. A point sits on a mesh edge and its fields are
+ * {p: [x, y, z], cp, sigma, nx}, and whether it closes on itself. A point sits on a mesh edge and its fields are
  * interpolated linearly along that edge, as the GPU does when it draws the triangle.
  */
 export function cut(mesh, axis, offset) {
@@ -70,12 +70,11 @@ export function cut(mesh, axis, offset) {
 		const da = P[3 * a + axis] - offset;
 		const db = P[3 * b + axis] - offset;
 		const t = da / (da - db);
-		const lerp = (field) => (field ? field[a] + (field[b] - field[a]) * t : null);
+		const lerp = (field) => field[a] + (field[b] - field[a]) * t;
 		point = {
 			p: [0, 1, 2].map((k) => (k === axis ? offset : P[3 * a + k] + (P[3 * b + k] - P[3 * a + k]) * t)),
 			cp: lerp(mesh.cp),
 			sigma: lerp(mesh.sigma),
-			cfd: lerp(mesh.cfd),
 			nx: mesh.normals[3 * a] + (mesh.normals[3 * b] - mesh.normals[3 * a]) * t,
 			links: [],
 		};
@@ -135,43 +134,58 @@ export const CUT_AXES = [
 ];
 
 /**
- * Split each polyline at its two ends along the plot axis into the branch on the high side and the branch on the
- * low side of the other in-plane axis. Each branch runs in increasing `along`. An open chain goes whole to the side
- * its mean lies on.
+ * The outer surface of a cut, split at its two ends along the plot axis into the branch on the high side and the
+ * branch on the low side of the other in-plane axis, each running in increasing `along`. The outer surface is the
+ * closed loop enclosing the most area; interior loops (the underbody parts, the cabin) are left out of the plot.
+ * When no loop closes, the longest chain goes whole to the side its mean lies on.
  */
 export function branches(lines, axis) {
 	const { along, across } = CUT_AXES[axis];
-	const high = [];
-	const low = [];
 	const mean = (points) => points.reduce((sum, q) => sum + q.p[across], 0) / points.length;
-	const all = lines.flatMap((line) => line.points);
-	const centre = all.length ? mean(all) : 0;
-	for (const { points, closed } of lines) {
-		if (points.length < 2) continue;
-		if (!closed) {
-			const run = points[0].p[along] <= points.at(-1).p[along] ? points : [...points].reverse();
-			(mean(points) >= centre ? high : low).push(run);
-			continue;
-		}
-		let iMin = 0, iMax = 0;
-		points.forEach((q, i) => {
-			if (q.p[along] < points[iMin].p[along]) iMin = i;
-			if (q.p[along] > points[iMax].p[along]) iMax = i;
-		});
-		const n = points.length;
-		const path = (from, to) => {
-			const out = [];
-			for (let i = from; ; i = (i + 1) % n) {
-				out.push(points[i]);
-				if (i === to) break;
-			}
-			return out;
-		};
-		const forward = path(iMin, iMax);
-		const backward = path(iMax, iMin).reverse();
-		const [top, bottom] = mean(forward) >= mean(backward) ? [forward, backward] : [backward, forward];
-		high.push(top);
-		low.push(bottom);
+	const outer = outerLoop(lines, along, across);
+	if (!outer) return [[], []];
+	const { points, closed } = outer;
+	if (!closed) {
+		const all = lines.flatMap((line) => line.points);
+		const run = points[0].p[along] <= points.at(-1).p[along] ? points : [...points].reverse();
+		return mean(points) >= mean(all) ? [[run], []] : [[], [run]];
 	}
-	return [high, low];
+	let iMin = 0, iMax = 0;
+	points.forEach((q, i) => {
+		if (q.p[along] < points[iMin].p[along]) iMin = i;
+		if (q.p[along] > points[iMax].p[along]) iMax = i;
+	});
+	const n = points.length;
+	const path = (from, to) => {
+		const out = [];
+		for (let i = from; ; i = (i + 1) % n) {
+			out.push(points[i]);
+			if (i === to) break;
+		}
+		return out;
+	};
+	const forward = path(iMin, iMax);
+	const backward = path(iMax, iMin).reverse();
+	const [top, bottom] = mean(forward) >= mean(backward) ? [forward, backward] : [backward, forward];
+	return [[top], [bottom]];
+}
+
+/** The closed loop enclosing the most area in the cut plane, or the longest chain when none closes. */
+function outerLoop(lines, along, across) {
+	let best = null;
+	let bestArea = -1;
+	for (const line of lines) {
+		if (!line.closed || line.points.length < 3) continue;
+		let twice = 0;
+		const pts = line.points;
+		for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+			twice += pts[j].p[along] * pts[i].p[across] - pts[i].p[along] * pts[j].p[across];
+		}
+		if (Math.abs(twice) > bestArea) {
+			bestArea = Math.abs(twice);
+			best = line;
+		}
+	}
+	if (best) return best;
+	return lines.filter((line) => line.points.length >= 2).sort((a, b) => b.points.length - a.points.length)[0] ?? null;
 }

@@ -1,22 +1,21 @@
-// The fields the car can be coloured by, how each is read from a mesh, and the colour maps that suit it.
-// Predicted and CFD pressure share one colour map so they always read on the same scale.
+// The fields the car can be coloured by, how each is read from a mesh, and the colour maps that suit it. The Result
+// view offers pressure, its drag contribution and the spread between the networks; CFD pressure and the error against
+// it are defined here for the Model view, and share the pressure colour map so they read on the same scale.
 
 import { niceTicks } from './format.js';
 
-/**
- * `map` names the colour map the field uses; `ramps` are the ramps offered for it, the first being the default.
- * `cfd` marks fields that exist only when the file carried CFD pressure.
- */
+/** `map` names the colour map the field uses; `ramps` are the ramps offered for it, the first being the default. */
 export const FIELDS = {
-	cp: { label: 'Predicted', title: 'Cp predicted', symbol: 'Cp', map: 'cp', tip: 'Pressure coefficient, mean of the networks' },
-	cfd: { label: 'CFD', title: 'Cp CFD', symbol: 'Cp', map: 'cp', cfd: true, tip: 'Pressure coefficient from the CFD solution in the file' },
-	error: { label: 'Error', title: 'ΔCp predicted − CFD', symbol: 'ΔCp', map: 'error', cfd: true, tip: 'Predicted Cp minus CFD Cp' },
-	sigma: { label: 'Spread', title: 'Model spread σ(Cp)', symbol: 'σ', map: 'sigma', tip: 'Standard deviation of the networks’ Cp' },
-	drag: { label: 'Drag', title: 'Drag contribution −Cp nₓ', symbol: '−Cp nₓ', map: 'drag', tip: 'Local pressure drag: −Cp times the x component of the outward normal' },
+	cp: { label: 'Pressure', title: 'Pressure Cp', symbol: 'Cp', map: 'cp', tip: 'Pressure coefficient, mean of the networks' },
+	drag: { label: 'Drag', title: 'Drag −Cp nₓ', symbol: '−Cp nₓ', map: 'drag', tip: 'Local pressure drag: −Cp times the x component of the outward normal' },
+	sigma: { label: 'Spread', title: 'Spread σ(Cp)', symbol: 'σ', map: 'sigma', tip: 'Standard deviation of the networks’ Cp, scaled by the model’s calibration' },
+	cfd: { label: 'CFD', title: 'Cp CFD', symbol: 'Cp', map: 'cp', tip: 'Pressure coefficient from the CFD solution in the file' },
+	error: { label: 'Error', title: 'ΔCp predicted − CFD', symbol: 'ΔCp', map: 'error', tip: 'Predicted Cp minus CFD Cp' },
 	none: { label: 'None', title: null, symbol: null, map: null, tip: 'Surface only' },
 };
 
-const FIELD_ORDER = ['cp', 'cfd', 'error', 'sigma', 'drag', 'none'];
+/** The fields the Result view offers, in toolbar order. */
+export const RESULT_FIELDS = ['cp', 'drag', 'sigma'];
 
 export const MAPS = {
 	cp: { ramps: ['coolwarm', 'turbo', 'viridis'], diverging: true },
@@ -24,11 +23,6 @@ export const MAPS = {
 	sigma: { ramps: ['purples', 'viridis', 'inferno'], diverging: false },
 	drag: { ramps: ['tealorange', 'coolwarm', 'brownteal'], diverging: true },
 };
-
-/** Fields a result offers, in toolbar order. */
-export function fieldsFor(hasCfd) {
-	return FIELD_ORDER.filter((f) => hasCfd || !FIELDS[f].cfd);
-}
 
 /** A field's value at vertex v of a mesh carrying cp, sigma, cfd and normals. */
 export function valueAt(mesh, field, v) {

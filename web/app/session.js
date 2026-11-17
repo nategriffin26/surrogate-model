@@ -64,7 +64,13 @@ export class Session extends EventTarget {
 			result: null,
 			surface: null,
 			full: null,
-			view: null,
+			/** Probes pinned on this car, numbered from 1. */
+			probes: [],
+			nextProbe: 1,
+			/** Whether its field has made its entrance. */
+			arrived: false,
+			/** The section cut through its working mesh, cached by the section tool. */
+			cut: null,
 			abort: new AbortController(),
 		};
 	}

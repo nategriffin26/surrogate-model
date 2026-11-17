@@ -8,8 +8,14 @@ export const seconds = (s) => (s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} 
 export const count = (n) => n.toLocaleString('en-US');
 export const millions = (n) => `${(n / 1e6).toFixed(n < 1e7 ? 2 : 1)} M`;
 
-/** Drag counts (units of 0.0001) between two coefficients. */
-export const counts = (a, b) => Math.round((a - b) * 1e4);
+/**
+ * One drag count is a change of 0.001 in drag coefficient, the automotive convention (DrivAerML, arXiv 2408.11969:
+ * "An automotive drag count corresponds to a change in drag coefficient of 0.001").
+ */
+export const DRAG_COUNT = 0.001;
+
+/** Drag counts between two coefficients. */
+export const counts = (a, b) => Math.round((a - b) / DRAG_COUNT);
 
 export function bytes(n) {
 	if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
