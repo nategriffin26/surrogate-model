@@ -28,3 +28,7 @@ packages = ["src/surrogate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
