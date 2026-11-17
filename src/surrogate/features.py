@@ -1,14 +1,17 @@
 """Deterministic multi-scale geometric feature extraction on surface meshes.
 
-Builds three translation-invariant, symmetry-aware geometric context blocks strictly
-from polygon coordinates, outward normals, and areas:
+Builds three symmetry-aware geometric context blocks strictly from polygon coordinates,
+outward normals, and areas:
   1. `local`    (10 cols): car-frame offsets, ground clearance, symmetry-folded normal,
                            and normalized bounding-box coordinates.
-  2. `regional` (45 cols): 8 cm, 25 cm, and 75 cm voxelized normal & area-density fields
+  2. `regional` (60 cols): 3, 8, 25, and 75 cm voxelized normal & area-density fields
                            plus local curvature (`n_cell - n_voxel`) and ±h streamwise steps.
   3. `slices`  (121 cols): streamwise XZ buttock-line envelopes (±1.6 m stencil + explicit
-                           on-body occupancy masks), neighboring Y-slice hops (±4, ±12, ±30 cm),
+                           on-body occupancy masks), neighboring Y-slice hops (±4, ±12, ±36 cm),
                            and XY waterline planform offsets for side-facing body panels.
+
+The lookup grids are laid out in the file's own coordinates (`DOMAIN_*`), which every
+DrivAerML run shares; a car placed elsewhere is caught by the coverage check.
 """
 
 from __future__ import annotations
@@ -25,21 +28,25 @@ DOMAIN_X = (-1.3, 4.7)
 DOMAIN_Y_HALF = 1.2
 DOMAIN_Z = (-0.45, 1.35)
 
-DX_OWN = (-1.6, -0.8, -0.4, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+# Shape that is close matters in detail and shape that is far only in bulk, so every set of
+# distances is a ladder: each step a fixed multiple of the last.
+DX_OWN = (-1.6, -0.8, -0.4, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6)  # doubling, 5 cm to a third of the car
 DX_NEIGHBOR = (-0.3, 0.0, 0.3)
-DY_NEIGHBOR = (-0.30, -0.12, -0.04, 0.04, 0.12, 0.30)
+DY_NEIGHBOR = (-0.36, -0.12, -0.04, 0.04, 0.12, 0.36)  # x3 from two raster cells
 DZ_NEIGHBOR = (-0.12, -0.04, 0.04, 0.12)
-VOXEL_SCALES = (0.08, 0.25, 0.75)
+# 75 cm divided by three at each step. 3 cm is the smallest box that still holds ten or more
+# mesh cells (2 to 10 mm across) on 98% of the surface; at 2 cm that falls to 75%.
+VOXEL_SCALES = (0.03, 0.08, 0.25, 0.75)
 
 
 @dataclass(frozen=True)
 class FeatureColumns:
-    """Column slices inside the concatenated 176-feature matrix."""
+    """Column slices inside the concatenated 191-feature matrix."""
 
     local: slice = slice(0, 10)
-    regional: slice = slice(10, 55)
-    slices: slice = slice(55, 176)
-    total_dim: int = 176
+    regional: slice = slice(10, 70)
+    slices: slice = slice(70, 191)
+    total_dim: int = 191
 
 
 FEATURE_COLUMNS = FeatureColumns()
@@ -57,8 +64,8 @@ class _VoxelScaleGrid:
 class SurfaceContext:
     """Precomputed whole-surface geometric lookup structures for one vehicle.
 
-    Built once from all ~8.2M polygons (~1.8 s on M5 Pro), then queried at any subset
-    of cells (120k training samples or 250k display triangles) in <0.3 s.
+    Built once from every polygon of the file (~1.8 s for 8.8M on M5 Pro), then queried at any
+    cells: the 120k training sample of a car, or all of them at inference.
     """
 
     bounds: tuple[float, float, float, float, float, float]
@@ -124,7 +131,7 @@ class SurfaceContext:
         z_peak = z_top.max(axis=0).astype(np.float32)
         section_area_x = ((z_top - z_bot).sum(axis=1) * h * 2.0).astype(np.float32)
 
-        # Multi-scale 3D voxel grids (8 cm, 25 cm, 75 cm)
+        # Multi-scale 3D voxel grids, one per entry of VOXEL_SCALES
         voxel_grids: list[_VoxelScaleGrid] = []
         c_centered = c.copy()
         c_centered[:, 1] -= y_center
@@ -206,7 +213,7 @@ def extract_query_features(
     query_centers: np.ndarray,
     query_normals: np.ndarray,
 ) -> np.ndarray:
-    """Extract the 176-column deterministic feature matrix `[M, 176]` for `M` query cells."""
+    """Extract the deterministic feature matrix `[M, FEATURE_COLUMNS.total_dim]` for `M` query cells."""
     xmin, xmax, ymin, ymax, zmin, zmax = context.bounds
     length = max(xmax - xmin, 1e-6)
     half_width = max(0.5 * (ymax - ymin), 1e-6)
@@ -238,7 +245,7 @@ def extract_query_features(
         axis=1,
     )
 
-    # 2. Isotropic 3D regional voxel features at 8, 25, 75 cm (45 cols)
+    # 2. Isotropic 3D regional voxel features, 15 cols per scale in VOXEL_SCALES
     reg_cols: list[np.ndarray] = []
     for vg in context.voxel_grids:
         h_v = vg.scale

@@ -7,24 +7,26 @@ import numpy as np
 from surrogate.surface import compute_pressure_forces
 
 
-def surface_field_metrics(cp_true: np.ndarray, cp_pred: np.ndarray) -> dict[str, float]:
-    """Compute area-weighted surface pressure metrics on an area-weighted cell sample."""
+def surface_field_metrics(
+    cp_true: np.ndarray, cp_pred: np.ndarray, weights: np.ndarray | None = None
+) -> dict[str, float]:
+    """Compute area-weighted surface pressure metrics.
+
+    `weights` are the cells' areas when the arrays cover every cell; omit them for an
+    area-weighted cell sample, where each cell already stands for equal area.
+    """
     t = np.asarray(cp_true, dtype=np.float64)
     p = np.asarray(cp_pred, dtype=np.float64)
+    w = np.ones(len(t)) if weights is None else np.asarray(weights, dtype=np.float64)
     err = p - t
-    mse = float(np.mean(err * err))
-    rmse = float(np.sqrt(mse))
-    mae = float(np.mean(np.abs(err)))
-    bias = float(np.mean(err))
-    denom_var = float(np.sum((t - t.mean()) ** 2))
-    r2 = float(1.0 - np.sum(err * err) / max(denom_var, 1e-12))
-    rel_l2 = float(np.sqrt(np.sum(err * err) / max(float(np.sum(t * t)), 1e-12)))
+    sse = float(np.sum(w * err * err))
+    mean_true = float(np.average(t, weights=w))
     return {
-        "r2": r2,
-        "rel_l2": rel_l2,
-        "rmse": rmse,
-        "mae": mae,
-        "bias": bias,
+        "r2": float(1.0 - sse / max(float(np.sum(w * (t - mean_true) ** 2)), 1e-12)),
+        "rel_l2": float(np.sqrt(sse / max(float(np.sum(w * t * t)), 1e-12))),
+        "rmse": float(np.sqrt(sse / w.sum())),
+        "mae": float(np.average(np.abs(err), weights=w)),
+        "bias": float(np.average(err, weights=w)),
     }
 
 
@@ -64,8 +66,10 @@ def regional_r2_breakdown(
     cp_pred: np.ndarray,
     centers: np.ndarray,
     normals: np.ndarray,
+    weights: np.ndarray | None = None,
 ) -> dict[str, dict[str, float]]:
     """Break down surface metrics across aerodynamic facing zones and spanwise bands."""
+    w = np.ones(len(cp_true)) if weights is None else np.asarray(weights, dtype=np.float64)
     y_abs = np.abs(centers[:, 1])
     masks = {
         "forebody (nx < -0.7)": normals[:, 0] < -0.7,
@@ -80,14 +84,23 @@ def regional_r2_breakdown(
     for name, mask in masks.items():
         if int(mask.sum()) == 0:
             continue
-        m = surface_field_metrics(cp_true[mask], cp_pred[mask])
+        m = surface_field_metrics(cp_true[mask], cp_pred[mask], w[mask])
         out[name] = {
-            "area_share": round(float(np.mean(mask)), 4),
+            "area_share": round(float(w[mask].sum() / w.sum()), 4),
             "r2": round(m["r2"], 4),
             "mae": round(m["mae"], 4),
             "bias": round(m["bias"], 4),
         }
     return out
+
+
+def spread_coverage(cp_true: np.ndarray, cp_pred: np.ndarray, cp_std: np.ndarray) -> dict[str, float]:
+    """Share of an area-weighted cell sample whose error is within one and two `cp_std`."""
+    abs_err = np.abs(np.asarray(cp_pred, dtype=np.float64) - np.asarray(cp_true, dtype=np.float64))
+    return {
+        "within_1_std": round(float(np.mean(abs_err <= cp_std)), 4),
+        "within_2_std": round(float(np.mean(abs_err <= 2.0 * cp_std)), 4),
+    }
 
 
 def uncertainty_calibration_bins(

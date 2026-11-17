@@ -1,6 +1,6 @@
 # Surface-Only Aerodynamics Surrogate (`DrivAerML`)
 
-Surface pressure surrogate (`CpMeanTrim`) trained on the assigned 10-case subset of [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) (`run_80, 98, 102, 208, 213, 281, 397, 425, 445, 474`). All model inputs, outward normal orientation, frontal-area normalization, and display decimation derive from surface geometry in `boundary_i.vtp`; solver fields are stripped on load.
+Surface pressure surrogate (`CpMeanTrim`) trained on the assigned 10-case subset of [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) (`run_80, 98, 102, 208, 213, 281, 397, 425, 445, 474`). All model inputs, outward normal orientation, and frontal-area normalization derive from surface geometry in `boundary_i.vtp`; solver fields are stripped on load.
 
 ## Setup
 
@@ -12,7 +12,7 @@ uv sync --extra dev
 
 ### 1. Preprocess & Feature Extraction
 
-Reads raw `.vtp` files, verifies outward normal orientation via Gauss's divergence theorem, draws `120,000` area-weighted cell samples per vehicle, and extracts 176 deterministic multi-scale geometric features (`10` local coordinates/normals + `45` midplane-symmetrized 8/25/75 cm regional voxel occupancy/clearance features + `121` streamwise `XZ` buttock envelopes, $\pm 4/12/30\text{ cm}$ spanwise neighbor hops, `XY` waterlines, and body-presence masks):
+Reads raw `.vtp` files, verifies outward normal orientation via Gauss's divergence theorem, draws `120,000` area-weighted cell samples per vehicle, and extracts 191 deterministic multi-scale geometric features (`10` local coordinates/normals + `60` midplane-symmetrized 3/8/25/75 cm regional voxel normal/area-density features + `121` streamwise `XZ` buttock envelopes, $\pm 4/12/36\text{ cm}$ spanwise neighbor hops, `XY` waterlines, and body-presence masks). The lookup grids behind those features are built from every cell of the file; only the training set is a sample (60,000 cells per car score the same as 120,000):
 
 ```bash
 uv run python -m surrogate.preprocess
@@ -20,7 +20,7 @@ uv run python -m surrogate.preprocess
 
 ### 2. Train 5-Fold Ensemble & Ablation Suite
 
-Fits a 5-fold cross-validated per-cell MLP ensemble (`176 -> 256 -> 256 -> 256 -> 1`, GELU, mean squared error on area-weighted cell samples) strictly on the 10 assigned training vehicles, saves `artifacts/ensemble.pt` (3.5 MB), evaluates unseen holdout runs (`run_1`, `run_500`), and records controlled ablations in `artifacts/metrics.json`:
+Fits a 5-fold cross-validated per-cell MLP ensemble (`191 -> 256 -> 256 -> 256 -> 1`, GELU, mean squared error on area-weighted cell samples) strictly on the 10 assigned training vehicles, measures the factor that turns the five models' disagreement into an expected error, saves `artifacts/ensemble.pt` (3.7 MB), evaluates unseen holdout runs (`run_1`, `run_500`), and records controlled ablations in `artifacts/metrics.json`:
 
 ```bash
 uv run python -m surrogate.train
@@ -28,7 +28,7 @@ uv run python -m surrogate.train
 
 ### 3. Cold `.vtp` Inference
 
-Runs geometry-only inference on any `.vtp` file (with or without `CpMeanTrim`), returning area-weighted force coefficients with ensemble spread, geometric domain coverage, spanwise $C_p(x) \pm \sigma$ station slices, cumulative drag buildup $C_{d,p}(x)$, and a decimated triangle mesh for interactive WebGL inspection (~10.6 s end-to-end on an 8.8M-cell mesh):
+Runs geometry-only inference on any `.vtp` file (with or without `CpMeanTrim`). The model is asked at every cell of the file, and every output is summed or averaged over all of them with their areas: $C_p$ and its expected error per cell, pressure drag for the mean field and for each of the five models, geometric domain coverage, spanwise $C_p(x) \pm \sigma$ station slices, and cumulative drag buildup $C_{d,p}(x)$ (~25 s end-to-end on an 8.8M-cell mesh):
 
 ```python
 from surrogate import SurrogateEnsemble, run_vtp_inference
@@ -51,15 +51,16 @@ Evaluated on `120,000` area-weighted native cells per car. Five-fold CV holds ou
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Constant baseline (fold mean $C_p$ / $C_{d,p}$) | 0.0000 | 0.0000 | 0.1661 | 0.0173 | 0.0000 | 0.0332 |
 | PointNet global 64D $\mathbf{g}$ + local $(x,y,z,\mathbf{n})$ | 0.6468 | 0.5717 | 0.0879 | 0.0603 | 0.6697 | 0.0506 |
-| Local MLP only (`10` cols: position + normal) | 0.7691 | 0.6283 | 0.0710 | 0.0465 | 0.7857 | 0.0760 |
-| Local + 3D regional voxels (`55` cols: 8/25/75 cm) | 0.8854 | 0.8262 | 0.0505 | 0.0287 | 0.8979 | 0.0362 |
-| Local + streamwise `XZ`/`XY` slices & Y-hops (`131` cols) | 0.8815 | 0.8292 | 0.0511 | **0.0147** | 0.9044 | 0.0173 |
-| LightGBM 400 trees (`176` cols) | **0.9112** | **0.8785** | **0.0458** | 0.0273 | **0.9336** | 0.0241 |
-| **Shipped 5-Fold MLP Ensemble (`176` cols)** | **0.9015** | **0.8577** | **0.0463** | **0.0157** | **0.9153** | **0.0119** |
+| Local MLP only (`10` cols: position + normal) | 0.7546 | 0.5735 | 0.0699 | 0.0571 | 0.7957 | 0.0866 |
+| Local + 3D regional voxels (`70` cols: 3/8/25/75 cm) | 0.9089 | 0.8626 | 0.0452 | 0.0291 | 0.9288 | 0.0326 |
+| Local + streamwise `XZ`/`XY` slices & Y-hops (`131` cols) | 0.8943 | 0.8143 | 0.0473 | **0.0143** | 0.9243 | 0.0165 |
+| LightGBM 400 trees (`191` cols) | 0.9141 | 0.8826 | 0.0452 | 0.0306 | 0.9346 | 0.0233 |
+| **Shipped 5-Fold MLP Ensemble (`191` cols)** | **0.9235** | **0.8907** | **0.0420** | 0.0147 | **0.9423** | **0.0121** |
 
 ### Key Findings & Scope Boundaries
 
-- **Learned global vectors overfit 8 training cars**: `PointNet` 64D global shape codes memorize training car IDs across DrivAerML's 16 morph parameters and drop unseen-car $R^2$ (`0.6468`) below a purely local MLP (`0.7691`).
-- **Streamwise profiles anchor stagnation and wake recovery**: 3D regional voxels capture local curvature well (`0.8854` CV $R^2$) but leave systematic front-face stagnation bias (`0.0362` holdout $C_{d,p}$ MAE). Adding streamwise `XZ`/`XY` slice envelopes and spanwise neighbor hops cuts holdout $C_{d,p}$ MAE to `0.0119` (`run_1`: predicted `0.261 ± 0.012` vs. CFD `0.274`; `run_500`: predicted `0.262 ± 0.005` vs. CFD `0.273`).
-- **Integrated drag remains an approximate screening check**: `~0.012–0.016` $C_{d,p}$ MAE (~120–160 drag counts) separates high-drag shapes from baseline cars and flags out-of-family geometries, while 5-count final design ranking still requires full CFD.
-- **Monotonic ensemble uncertainty**: Across holdout surface cells binned into 5 quintiles of fold disagreement $\sigma(C_p)$, realized RMSE rises monotonically (`0.0316 -> 0.0385 -> 0.0469 -> 0.0599 -> 0.1429`).
+- **Learned global vectors overfit 8 training cars**: `PointNet` 64D global shape codes memorize training car IDs across DrivAerML's 16 morph parameters and drop unseen-car $R^2$ (`0.6468`) below a purely local MLP (`0.7546`).
+- **Regional voxels and streamwise slices do different jobs**: regional voxels give the higher pointwise $R^2$ of the two (`0.9089` against `0.8943`) but a biased drag integral (`0.0291` CV $C_{d,p}$ MAE, worse than the constant baseline's `0.0173`); streamwise `XZ`/`XY` slice envelopes and spanwise neighbor hops remove that bias (`0.0143`). Together they reach `0.9235`.
+- **Feature distances are ladders, because nearby shape matters in detail and distant shape only in bulk**: voxel sizes are 75 cm divided by three at each step (75, 25, 8, 3 cm); 3 cm is the smallest box that still holds ten or more mesh cells on 98% of the surface, and it resolves the sharp edges where suction peaks. Streamwise offsets double from 5 cm to 1.6 m; spanwise hops are 4, 12, 36 cm. Reaching 3.2 m streamwise or 108 cm spanwise changed CV $R^2$ by less than `0.002`.
+- **Integrated drag is a screening estimate**: summed over every cell, `run_1` gives `0.262` against CFD `0.274` and `run_500` gives `0.261` against `0.273`. In cross-validation the drag error (`0.0147`) is close to that of predicting the training cars' mean drag (`0.0173`), so ten cars do not support ranking designs by drag; that still requires CFD.
+- **Uncertainty is the five models' disagreement, scaled**: the models train on overlapping cars and share blind spots, so their raw standard deviation ranks the error well but understates it. The scale (`2.38`) is fitted on the training cars only, by repeating the fold structure one level down. On the holdout cars `66%` of the surface is within one scaled standard deviation of CFD and `89%` within two, and across its quintiles realized RMSE rises `0.027 -> 0.033 -> 0.040 -> 0.051 -> 0.116`. The five models' drag values are reported individually, not as an error bar: their spread is several times smaller than the drag error.

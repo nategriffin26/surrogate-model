@@ -95,6 +95,8 @@ def read_vtp_surface(path: str | Path, *, include_target: bool = True) -> Surfac
         raise FileNotFoundError(f"Surface VTP file not found: {vtp_path}")
 
     mesh = pv.read(vtp_path)
+    if not isinstance(mesh, pv.PolyData):
+        raise TypeError(f"Expected PolyData surface mesh in {vtp_path}, got {type(mesh).__name__}")
     if mesh.n_cells == 0 or mesh.n_points == 0:
         raise ValueError(f"Empty surface mesh in {vtp_path}")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,9 @@ from surrogate.features import FEATURE_COLUMNS, SurfaceContext, extract_query_fe
 from surrogate.surface import compute_pressure_forces
 
 Z_CLIP = 6.0
+# Threads computing features for a whole file. For 8.8M cells: 36 s on one, 13 s on four,
+# and no faster on eight, where the networks on the GPU set the pace.
+FEATURE_THREADS = 4
 
 
 def select_device() -> torch.device:
@@ -89,15 +93,21 @@ class FoldModel:
 
 @dataclass(frozen=True)
 class EnsemblePrediction:
-    """Mean prediction, epistemic spread across folds, and per-fold outputs."""
+    """Mean prediction, expected error, and per-fold outputs."""
 
     cp_mean: np.ndarray      # (M,) float32
-    cp_std: np.ndarray       # (M,) float32
+    cp_std: np.ndarray       # (M,) float32, fold standard deviation x the ensemble's spread_scale
     cp_per_fold: np.ndarray  # (K, M) float32
 
 
 class SurrogateEnsemble:
-    """5-fold Per-Cell MLP ensemble with training-domain geometric coverage checks."""
+    """5-fold Per-Cell MLP ensemble with training-domain geometric coverage checks.
+
+    The fold models train on overlapping cars and share blind spots, so their raw standard
+    deviation ranks where the error is large but understates its size. `spread_scale` is the
+    factor, measured in training on cars no model saw, that makes one `cp_std` cover the
+    error about two times in three; 1.0 leaves the raw standard deviation.
+    """
 
     def __init__(
         self,
@@ -107,6 +117,7 @@ class SurrogateEnsemble:
         hidden_dim: int,
         depth: int,
         training_envelope: dict[str, Any],
+        spread_scale: float = 1.0,
         device: torch.device | None = None,
     ) -> None:
         if not folds:
@@ -116,34 +127,40 @@ class SurrogateEnsemble:
         self.hidden_dim = hidden_dim
         self.depth = depth
         self.training_envelope = training_envelope
+        self.spread_scale = spread_scale
         self.folds: list[FoldModel] = []
+        self._scalers: list[tuple[torch.Tensor, torch.Tensor]] = []
         for f in folds:
             f.model.to(self.device)
             f.model.eval()
             self.folds.append(f)
+            self._scalers.append(
+                (torch.as_tensor(f.x_mean, device=self.device), torch.as_tensor(f.x_std, device=self.device))
+            )
 
-    def predict_features(self, features: np.ndarray, *, batch_size: int = 65_536) -> EnsemblePrediction:
-        """Run all fold models over `[M, F]` features in bounded-memory chunks."""
+    def _predict_per_fold(self, features: np.ndarray, batch_size: int) -> np.ndarray:
+        """Each fold model's Cp over `[M, F]` features, `(K, M)`, in bounded-memory chunks."""
         if features.ndim != 2 or features.shape[1] != self.in_dim:
             raise ValueError(f"Expected features shape (M, {self.in_dim}), got {features.shape}")
-
-        n_pts = features.shape[0]
-        n_folds = len(self.folds)
-        per_fold = np.empty((n_folds, n_pts), dtype=np.float32)
-
+        per_fold = np.empty((len(self.folds), features.shape[0]), dtype=np.float32)
         with torch.no_grad():
-            for k, fold in enumerate(self.folds):
-                for start in range(0, n_pts, batch_size):
-                    end = min(start + batch_size, n_pts)
-                    x_chunk = (features[start:end] - fold.x_mean) / fold.x_std
-                    x_chunk = np.clip(x_chunk, -Z_CLIP, Z_CLIP)
-                    x_tensor = torch.as_tensor(x_chunk, dtype=torch.float32, device=self.device)
-                    pred_norm = fold.model(x_tensor).cpu().numpy()
-                    per_fold[k, start:end] = pred_norm * fold.y_std + fold.y_mean
+            for start in range(0, features.shape[0], batch_size):
+                x = torch.as_tensor(features[start : start + batch_size], dtype=torch.float32, device=self.device)
+                for k, (fold, (x_mean, x_std)) in enumerate(zip(self.folds, self._scalers, strict=True)):
+                    z = ((x - x_mean) / x_std).clamp(-Z_CLIP, Z_CLIP)
+                    per_fold[k, start : start + batch_size] = (fold.model(z) * fold.y_std + fold.y_mean).cpu().numpy()
+        return per_fold
 
-        cp_mean = per_fold.mean(axis=0, dtype=np.float32)
-        cp_std = per_fold.std(axis=0, dtype=np.float32)
-        return EnsemblePrediction(cp_mean=cp_mean, cp_std=cp_std, cp_per_fold=per_fold)
+    def _summarize(self, per_fold: np.ndarray) -> EnsemblePrediction:
+        return EnsemblePrediction(
+            cp_mean=per_fold.mean(axis=0, dtype=np.float32),
+            cp_std=per_fold.std(axis=0, dtype=np.float32) * np.float32(self.spread_scale),
+            cp_per_fold=per_fold,
+        )
+
+    def predict_features(self, features: np.ndarray, *, batch_size: int = 65_536) -> EnsemblePrediction:
+        """Run all fold models over `[M, F]` features."""
+        return self._summarize(self._predict_per_fold(features, batch_size))
 
     def predict_query_points(
         self,
@@ -151,13 +168,29 @@ class SurrogateEnsemble:
         query_centers: np.ndarray,
         query_normals: np.ndarray,
         *,
-        batch_size: int = 65_536,
+        chunk: int = 250_000,
     ) -> EnsemblePrediction:
-        """Extract 176 geometric features at `query_centers` and run the 5-fold ensemble."""
-        features = extract_query_features(context, query_centers, query_normals)
-        return self.predict_features(features, batch_size=batch_size)
+        """Extract the geometric features at `query_centers` and run the ensemble, chunk by chunk.
 
-    def integrated_forces_with_spread(
+        A whole file is millions of cells, so the feature matrices of at most `FEATURE_THREADS`
+        chunks exist at a time.
+        """
+
+        def features_at(start: int) -> np.ndarray:
+            return extract_query_features(
+                context, query_centers[start : start + chunk], query_normals[start : start + chunk]
+            )
+
+        starts = list(range(0, len(query_centers), chunk))
+        per_fold = np.empty((len(self.folds), len(query_centers)), dtype=np.float32)
+        with ThreadPoolExecutor(FEATURE_THREADS) as pool:
+            for first in range(0, len(starts), FEATURE_THREADS):
+                group = starts[first : first + FEATURE_THREADS]
+                for start, features in zip(group, pool.map(features_at, group), strict=True):
+                    per_fold[:, start : start + chunk] = self._predict_per_fold(features, chunk)
+        return self._summarize(per_fold)
+
+    def integrated_forces(
         self,
         prediction: EnsemblePrediction,
         normals: np.ndarray,
@@ -165,44 +198,37 @@ class SurrogateEnsemble:
         *,
         total_area: float,
         frontal_area: float,
-    ) -> dict[str, float]:
-        """Integrate pressure drag and lift per fold so spatial error correlations survive."""
-        cd_folds: list[float] = []
-        cl_folds: list[float] = []
-        for k in range(prediction.cp_per_fold.shape[0]):
-            f_k = compute_pressure_forces(
-                prediction.cp_per_fold[k],
-                normals,
-                areas,
-                total_area=total_area,
-                ref_area=frontal_area,
-            )
-            cd_folds.append(f_k["cd_p"])
-            cl_folds.append(f_k["cl_p"])
+    ) -> dict[str, Any]:
+        """Integrate pressure drag and lift of the mean field and of each fold's field.
 
-        mean_forces = compute_pressure_forces(
-            prediction.cp_mean,
-            normals,
-            areas,
-            total_area=total_area,
-            ref_area=frontal_area,
+        The folds are given one by one, not as a standard deviation: across cars no fold saw,
+        the drag error is often several times the folds' spread, so it is no error bar.
+        """
+        per_fold = [
+            compute_pressure_forces(cp, normals, areas, total_area=total_area, ref_area=frontal_area)
+            for cp in prediction.cp_per_fold
+        ]
+        mean = compute_pressure_forces(
+            prediction.cp_mean, normals, areas, total_area=total_area, ref_area=frontal_area
         )
         return {
-            "cd_p_mean": mean_forces["cd_p"],
-            "cd_p_std": float(np.std(cd_folds)),
-            "cl_p_mean": mean_forces["cl_p"],
-            "cl_p_std": float(np.std(cl_folds)),
+            "cd_p": mean["cd_p"],
+            "cd_p_per_fold": [f["cd_p"] for f in per_fold],
+            "cl_p": mean["cl_p"],
+            "cl_p_per_fold": [f["cl_p"] for f in per_fold],
         }
 
     def assess_coverage(
         self,
         context: SurfaceContext,
-        prediction: EnsemblePrediction,
+        cp_std: np.ndarray,
+        weights: np.ndarray | None = None,
     ) -> dict[str, Any]:
-        """Evaluate uncalibrated geometric coverage and ensemble spread against the 10-car domain.
+        """Evaluate geometric coverage and ensemble spread against the 10-car domain.
 
         Separates input-space extrapolation (vehicle dimensions & cross-section envelope S(x))
-        from epistemic disagreement across the 5 cross-validation fold models.
+        from epistemic disagreement across the 5 cross-validation fold models. `weights` are
+        the cells' areas when `cp_std` covers every cell; omit them for an area-weighted sample.
         """
         desc = context.shape_descriptor()
         bounds_env = self.training_envelope["descriptor_bounds"]
@@ -233,8 +259,11 @@ class SurrogateEnsemble:
         else:
             silhouette_out_frac = 1.0
 
-        mean_cp_std = float(prediction.cp_std.mean())
-        p95_cp_std = float(np.percentile(prediction.cp_std, 95))
+        w = np.ones(len(cp_std)) if weights is None else np.asarray(weights, dtype=np.float64)
+        mean_cp_std = float(np.average(cp_std, weights=w))
+        order = np.argsort(cp_std)
+        cumulative = np.cumsum(w[order])
+        p95_cp_std = float(cp_std[order][np.searchsorted(cumulative, 0.95 * cumulative[-1])])
         ref_mean_std = float(self.training_envelope.get("cv_mean_cp_std", 0.035))
         spread_ratio = mean_cp_std / max(ref_mean_std, 1e-6)
 
@@ -282,6 +311,7 @@ class SurrogateEnsemble:
             "hidden_dim": self.hidden_dim,
             "depth": self.depth,
             "training_envelope": self.training_envelope,
+            "spread_scale": self.spread_scale,
             "folds": [
                 {
                     "fold_index": f.fold_index,
@@ -329,5 +359,6 @@ class SurrogateEnsemble:
             hidden_dim=hidden_dim,
             depth=depth,
             training_envelope=payload["training_envelope"],
+            spread_scale=float(payload["spread_scale"]),
             device=device,
         )

@@ -17,6 +17,7 @@ from surrogate.features import FEATURE_COLUMNS
 from surrogate.metrics import (
     case_evaluation_summary,
     regional_r2_breakdown,
+    spread_coverage,
     uncertainty_calibration_bins,
 )
 from surrogate.model import (
@@ -76,7 +77,7 @@ def _fit_mlp_fold(
     depth: int = 3,
     epochs: int = 30,
     batch_size: int = 8192,
-    lr: float = 2e-3,
+    lr: float = 5e-3,
     seed: int = 42,
     device: torch.device,
 ) -> FoldModel:
@@ -277,6 +278,45 @@ def _build_training_envelope(
     }
 
 
+def _fit_spread_scale(
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    *,
+    epochs: int,
+    seed: int,
+    device: torch.device,
+) -> float:
+    """Factor that turns the fold models' standard deviation into a one-sigma error.
+
+    Measuring it needs cars that none of the averaged models saw, and every shipped model saw
+    eight of the ten. So the shipped structure is repeated one level down: for each held-out
+    pair, four models are trained on six of the other eight cars each, and their standard
+    deviation on the pair is compared with the error of their mean. The factor returned puts
+    68% of those errors within one scaled standard deviation.
+    """
+    ratios: list[np.ndarray] = []
+    for outer_idx, held_pair in enumerate(CAR_FOLDS):
+        models: list[FoldModel] = []
+        for inner_idx, inner_pair in enumerate(p for p in CAR_FOLDS if p != held_pair):
+            tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_pair + inner_pair)
+            models.append(
+                _fit_mlp_fold(
+                    np.concatenate([arrays_by_run[r]["features"] for r in tr_runs], axis=0),
+                    np.concatenate([arrays_by_run[r]["cp"] for r in tr_runs], axis=0),
+                    fold_index=inner_idx,
+                    train_runs=tr_runs,
+                    val_runs=inner_pair,
+                    epochs=epochs,
+                    seed=seed + 100 * (outer_idx + 1),
+                    device=device,
+                )
+            )
+        for r in held_pair:
+            per_model = np.stack([_predict_single_fold(m, arrays_by_run[r]["features"], device) for m in models])
+            abs_err = np.abs(per_model.mean(axis=0) - arrays_by_run[r]["cp"])
+            ratios.append(abs_err / np.maximum(per_model.std(axis=0), 1e-9))
+    return float(np.quantile(np.concatenate(ratios), 0.68))
+
+
 def train_and_evaluate(
     processed_dir: Path = Path("data/processed"),
     artifacts_dir: Path = Path("artifacts"),
@@ -291,7 +331,7 @@ def train_and_evaluate(
 
     print(f"Device: {device} | Train runs: {len(ALLOWED_TRAIN_RUNS)} | Holdout runs: {holdout_runs}")
 
-    # 1. Train the shipped 5-fold Per-Cell MLP Ensemble on all 176 features
+    # 1. Train the shipped 5-fold Per-Cell MLP Ensemble on every feature column
     t0 = time.perf_counter()
     shipped_folds: list[FoldModel] = []
     oof_preds: dict[int, np.ndarray] = {}
@@ -327,6 +367,8 @@ def train_and_evaluate(
     oof_normals_cat = np.concatenate([arrays_by_run[r]["normals"] for r in ALLOWED_TRAIN_RUNS])
     regions = regional_r2_breakdown(oof_true_cat, oof_pred_cat, oof_centers_cat, oof_normals_cat)
 
+    spread_scale = _fit_spread_scale(arrays_by_run, epochs=epochs, seed=seed, device=device)
+
     # Calibrate reference ensemble spread strictly on the 10 training cars (inflated by sqrt(5/4)
     # because 4 of 5 folds saw each training car).
     envelope = _build_training_envelope(arrays_by_run, meta_by_run)
@@ -336,6 +378,7 @@ def train_and_evaluate(
         hidden_dim=256,
         depth=3,
         training_envelope=envelope,
+        spread_scale=spread_scale,
         device=device,
     )
     in_domain_stds = [
@@ -350,36 +393,40 @@ def train_and_evaluate(
     print(
         f"[Shipped 5-Fold MLP] CV R²={cv_summary['mean_r2']:.4f} "
         f"(worst {cv_summary['worst_car_r2']:.4f}) | "
-        f"Cd,p MAE={cv_summary['cd_p_mae']:.4f} | saved {ckpt_path} ({train_sec:.1f}s)"
+        f"Cd,p MAE={cv_summary['cd_p_mae']:.4f} | spread scale {spread_scale:.2f} | "
+        f"saved {ckpt_path} ({train_sec:.1f}s)"
     )
 
     # Evaluate the saved 5-fold ensemble directly on untouched holdout runs (run_1, run_500)
     holdout_summary: dict[str, Any] = {}
     calibration_bins: list[dict[str, float]] = []
+    coverage: dict[str, float] = {}
     if holdout_runs:
         ho_preds: dict[int, np.ndarray] = {}
         ho_stds: dict[int, np.ndarray] = {}
-        ho_forces_spread: dict[str, dict[str, float]] = {}
+        ho_forces: dict[str, dict[str, Any]] = {}
         for r in holdout_runs:
             ens_pred = ensemble.predict_features(arrays_by_run[r]["features"])
             ho_preds[r] = ens_pred.cp_mean
             ho_stds[r] = ens_pred.cp_std
-            f_spread = ensemble.integrated_forces_with_spread(
+            forces = ensemble.integrated_forces(
                 ens_pred,
                 arrays_by_run[r]["normals"],
                 None,
                 total_area=float(meta_by_run[r]["total_area"]),
                 frontal_area=float(meta_by_run[r]["frontal_area"]),
             )
-            ho_forces_spread[str(r)] = {k: round(v, 5) for k, v in f_spread.items()}
+            ho_forces[str(r)] = {
+                k: [round(x, 5) for x in v] if isinstance(v, list) else round(v, 5) for k, v in forces.items()
+            }
 
         holdout_summary = _summarize_predictions(holdout_runs, ho_preds, arrays_by_run, meta_by_run)
-        holdout_summary["ensemble_force_spread"] = ho_forces_spread
-        calibration_bins = uncertainty_calibration_bins(
-            np.concatenate([arrays_by_run[r]["cp"] for r in holdout_runs]),
-            np.concatenate([ho_preds[r] for r in holdout_runs]),
-            np.concatenate([ho_stds[r] for r in holdout_runs]),
-        )
+        holdout_summary["ensemble_forces"] = ho_forces
+        ho_true = np.concatenate([arrays_by_run[r]["cp"] for r in holdout_runs])
+        ho_pred = np.concatenate([ho_preds[r] for r in holdout_runs])
+        ho_std = np.concatenate([ho_stds[r] for r in holdout_runs])
+        calibration_bins = uncertainty_calibration_bins(ho_true, ho_pred, ho_std)
+        coverage = spread_coverage(ho_true, ho_pred, ho_std)
         print(
             f"[5-Fold Ensemble Holdout] R²={holdout_summary['mean_r2']:.4f} | "
             f"Cd,p MAE={holdout_summary['cd_p_mae']:.4f} (bias {holdout_summary['cd_p_bias']:+.4f})"
@@ -411,6 +458,8 @@ def train_and_evaluate(
 
         const_entry: dict[str, Any] = {
             "label": "Constant fold-mean baseline (no model)",
+            "blocks": [],
+            "learner": "constant",
             "cv": {
                 "mean_r2": 0.0,
                 "worst_car_r2": 0.0,
@@ -443,14 +492,19 @@ def train_and_evaluate(
 
         # 2b. PointNet 64D global latent ablation
         pnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, holdout_runs, device=device, seed=seed)
-        ablations["pointnet_global_64d"] = {"label": "PointNet learned global vector g (64D)", **pnet}
+        ablations["pointnet_global_64d"] = {
+            "label": "PointNet learned global vector g (64D)",
+            "blocks": ["local"],
+            "learner": "pointnet",
+            **pnet,
+        }
         print(f"[Ablation: PointNet 64D g] CV R²={pnet['cv']['mean_r2']:.4f} | Cd,p MAE={pnet['cv']['cd_p_mae']:.4f}")
 
         # 2c. Feature-block MLP ablations (local only, slices only, regional only)
         subset_specs: list[tuple[str, str, tuple[str, ...]]] = [
             ("local_only_mlp", "Local MLP (position + normal only)", ("local",)),
             ("local_plus_slices_mlp", "Local + streamwise XZ/XY slices & Y-hops", ("local", "slices")),
-            ("local_plus_regional_mlp", "Local + 3D regional voxels (8/25/75 cm)", ("local", "regional")),
+            ("local_plus_regional_mlp", "Local + 3D regional voxels (3/8/25/75 cm)", ("local", "regional")),
         ]
         for key, label, blocks in subset_specs:
             sub_folds: list[FoldModel] = []
@@ -477,7 +531,7 @@ def train_and_evaluate(
                     sub_oof[val_run] = _predict_single_fold(fm, x_val, device)
 
             sub_cv = _summarize_predictions(ALLOWED_TRAIN_RUNS, sub_oof, arrays_by_run, meta_by_run)
-            entry: dict[str, Any] = {"label": label, "cv": sub_cv}
+            entry: dict[str, Any] = {"label": label, "blocks": list(blocks), "learner": "mlp", "cv": sub_cv}
             if holdout_runs:
                 sub_ens = SurrogateEnsemble(
                     sub_folds,
@@ -495,7 +549,7 @@ def train_and_evaluate(
             ablations[key] = entry
             print(f"[Ablation: {label}] CV R²={sub_cv['mean_r2']:.4f} | Cd,p MAE={sub_cv['cd_p_mae']:.4f}")
 
-        # 2d. LightGBM baseline on full 176 features
+        # 2d. LightGBM baseline on every feature column
         lgb_res = run_lightgbm_baseline_isolated(
             processed_dir,
             ALLOWED_TRAIN_RUNS,
@@ -504,14 +558,18 @@ def train_and_evaluate(
             arrays_by_run,
             meta_by_run,
         )
-        ablations["lightgbm_full_176"] = {"label": "LightGBM boosted trees (all 176 features)", **lgb_res}
-        print(
-            f"[Baseline: LightGBM 176 cols] CV R²={lgb_res['cv']['mean_r2']:.4f} | "
-            f"Cd,p MAE={lgb_res['cv']['cd_p_mae']:.4f}"
-        )
+        ablations["lightgbm_full"] = {
+            "label": f"LightGBM boosted trees (all {FEATURE_COLUMNS.total_dim} features)",
+            "blocks": ["local", "regional", "slices"],
+            "learner": "trees",
+            **lgb_res,
+        }
+        print(f"[Baseline: LightGBM] CV R²={lgb_res['cv']['mean_r2']:.4f} | Cd,p MAE={lgb_res['cv']['cd_p_mae']:.4f}")
 
     ablations["shipped_mlp_ensemble"] = {
         "label": "Shipped 5-Fold Per-Cell MLP (local + regional + slices)",
+        "blocks": ["local", "regional", "slices"],
+        "learner": "ensemble",
         "cv": cv_summary,
         "holdout": holdout_summary,
     }
@@ -526,7 +584,9 @@ def train_and_evaluate(
         "shipped_cv": cv_summary,
         "shipped_holdout": holdout_summary,
         "regional_breakdown_cv": regions,
+        "spread_scale": round(spread_scale, 3),
         "uncertainty_calibration_holdout": calibration_bins,
+        "uncertainty_coverage_holdout": coverage,
         "ablations": ablations,
     }
     metrics_path = artifacts_dir / "metrics.json"

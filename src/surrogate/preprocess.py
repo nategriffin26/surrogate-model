@@ -2,7 +2,7 @@
 
 Reads each `boundary_i.vtp` once, verifies outward normal orientation and pressure
 force integrals, draws an area-weighted cell sample (`n_samples` per vehicle),
-extracts the 176-column deterministic surface feature matrix, and saves compact
+extracts the deterministic surface feature matrix, and saves compact
 `.npz` archives + `manifest.json` under `data/processed/`.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 
-from surrogate.features import SurfaceContext, extract_query_features
+from surrogate.features import FEATURE_COLUMNS, SurfaceContext, extract_query_features
 from surrogate.surface import compute_pressure_forces, read_vtp_surface, sample_cells_by_area
 
 ALLOWED_TRAIN_RUNS: tuple[int, ...] = (80, 98, 102, 208, 213, 281, 397, 425, 445, 474)
@@ -133,7 +133,7 @@ def main() -> None:
     manifest = {
         "allowed_train_runs": list(ALLOWED_TRAIN_RUNS),
         "samples_per_case": args.samples,
-        "feature_dim": 176,
+        "feature_dim": FEATURE_COLUMNS.total_dim,
         "cases": manifest_cases,
     }
     manifest_path = args.out_dir / "manifest.json"
