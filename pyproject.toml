@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drivaer-surrogate"
+version = "0.1.0"
+description = "Surface-only aerodynamics pressure surrogate and 3D inspection app on DrivAerML"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "lightgbm>=4.5",
+    "numpy>=2.0",
+    "pyvista>=0.44",
+    "scipy>=1.14",
+    "torch>=2.5",
+    "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/surrogate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
