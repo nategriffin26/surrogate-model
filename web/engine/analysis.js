@@ -12,7 +12,7 @@ import { stationX } from './features.js';
 
 const BUILDUP_STATIONS = 60;
 const SPREAD_BINS = 65_536;
-/** Spreads above this share the histogram's last bin; Cp spreads of the networks stay far below. */
+/** Spreads above this share the histogram's last bin; σ(Cp) stays far below it. */
 const SPREAD_RANGE = 2;
 
 /**
@@ -37,7 +37,7 @@ export function evenPicks(areas, count) {
 
 /**
  * Area-weighted sums over polygons, added one polygon (or one pick) at a time: each network's drag,
- * the drag build-up, the agreement with CFD and the networks' spread.
+ * the drag build-up, the agreement with CFD and the spread σ(Cp).
  */
 export class SurfaceTally {
   constructor(networks, frontalArea, bounds) {
@@ -117,7 +117,7 @@ export class SurfaceTally {
     };
   }
 
-  /** Area-weighted mean and 95th percentile of the networks' spread. */
+  /** Area-weighted mean and 95th percentile of the spread σ(Cp). */
   spread() {
     let cumulative = 0;
     let bin = 0;

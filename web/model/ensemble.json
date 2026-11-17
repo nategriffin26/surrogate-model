@@ -1,6 +1,6 @@
 {
  "features": {
-  "count": 176,
+  "count": 191,
   "rasterStep": 0.02,
   "domainX": [
    -1.3,
@@ -31,12 +31,12 @@
    0.3
   ],
   "dyNeighbor": [
-   -0.3,
+   -0.36,
    -0.12,
    -0.04,
    0.04,
    0.12,
-   0.3
+   0.36
   ],
   "dzNeighbor": [
    -0.12,
@@ -45,170 +45,173 @@
    0.12
   ],
   "voxelScales": [
+   0.03,
    0.08,
    0.25,
    0.75
   ]
  },
  "zClip": 6.0,
+ "activation": "GELU",
+ "spreadScale": 2.381927251815796,
  "folds": [
   {
    "xMean": 0,
-   "xStd": 176,
+   "xStd": 191,
    "yMean": -0.20958368480205536,
    "yStd": 0.25581809878349304,
    "layers": [
     {
-     "inputs": 176,
+     "inputs": 191,
      "outputs": 256,
-     "weight": 352,
-     "bias": 45408
+     "weight": 382,
+     "bias": 49278
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 45664,
-     "bias": 111200
+     "weight": 49534,
+     "bias": 115070
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 111456,
-     "bias": 176992
+     "weight": 115326,
+     "bias": 180862
     },
     {
      "inputs": 256,
      "outputs": 1,
-     "weight": 177248,
-     "bias": 177504
+     "weight": 181118,
+     "bias": 181374
     }
    ]
   },
   {
-   "xMean": 177505,
-   "xStd": 177681,
+   "xMean": 181375,
+   "xStd": 181566,
    "yMean": -0.20363309979438782,
    "yStd": 0.25309494137763977,
    "layers": [
     {
-     "inputs": 176,
+     "inputs": 191,
      "outputs": 256,
-     "weight": 177857,
-     "bias": 222913
+     "weight": 181757,
+     "bias": 230653
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 223169,
-     "bias": 288705
+     "weight": 230909,
+     "bias": 296445
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 288961,
-     "bias": 354497
+     "weight": 296701,
+     "bias": 362237
     },
     {
      "inputs": 256,
      "outputs": 1,
-     "weight": 354753,
-     "bias": 355009
+     "weight": 362493,
+     "bias": 362749
     }
    ]
   },
   {
-   "xMean": 355010,
-   "xStd": 355186,
+   "xMean": 362750,
+   "xStd": 362941,
    "yMean": -0.20966635644435883,
    "yStd": 0.25514882802963257,
    "layers": [
     {
-     "inputs": 176,
+     "inputs": 191,
      "outputs": 256,
-     "weight": 355362,
-     "bias": 400418
+     "weight": 363132,
+     "bias": 412028
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 400674,
-     "bias": 466210
+     "weight": 412284,
+     "bias": 477820
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 466466,
-     "bias": 532002
+     "weight": 478076,
+     "bias": 543612
     },
     {
      "inputs": 256,
      "outputs": 1,
-     "weight": 532258,
-     "bias": 532514
+     "weight": 543868,
+     "bias": 544124
     }
    ]
   },
   {
-   "xMean": 532515,
-   "xStd": 532691,
+   "xMean": 544125,
+   "xStd": 544316,
    "yMean": -0.2102881819009781,
    "yStd": 0.25827401876449585,
    "layers": [
     {
-     "inputs": 176,
+     "inputs": 191,
      "outputs": 256,
-     "weight": 532867,
-     "bias": 577923
+     "weight": 544507,
+     "bias": 593403
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 578179,
-     "bias": 643715
+     "weight": 593659,
+     "bias": 659195
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 643971,
-     "bias": 709507
+     "weight": 659451,
+     "bias": 724987
     },
     {
      "inputs": 256,
      "outputs": 1,
-     "weight": 709763,
-     "bias": 710019
+     "weight": 725243,
+     "bias": 725499
     }
    ]
   },
   {
-   "xMean": 710020,
-   "xStd": 710196,
+   "xMean": 725500,
+   "xStd": 725691,
    "yMean": -0.20769615471363068,
    "yStd": 0.2551428973674774,
    "layers": [
     {
-     "inputs": 176,
+     "inputs": 191,
      "outputs": 256,
-     "weight": 710372,
-     "bias": 755428
+     "weight": 725882,
+     "bias": 774778
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 755684,
-     "bias": 821220
+     "weight": 775034,
+     "bias": 840570
     },
     {
      "inputs": 256,
      "outputs": 256,
-     "weight": 821476,
-     "bias": 887012
+     "weight": 840826,
+     "bias": 906362
     },
     {
      "inputs": 256,
      "outputs": 1,
-     "weight": 887268,
-     "bias": 887524
+     "weight": 906618,
+     "bias": 906874
     }
    ]
   }
@@ -848,9 +851,17 @@
     0.0
    ]
   },
-  "spreadMean": 0.0197
+  "spreadMean": 0.0464
  },
  "card": {
+  "dataset": {
+   "name": "DrivAerML",
+   "family": "notchback",
+   "freestreamSpeed": 38.889,
+   "yawDegrees": 0,
+   "wheels": "static",
+   "source": "https://arxiv.org/abs/2408.11969"
+  },
   "trainRuns": [
    80,
    98,
@@ -879,7 +890,14 @@
      80,
      98
     ],
-    "parameters": 177153
+    "parameters": 180993,
+    "layers": [
+     191,
+     256,
+     256,
+     256,
+     1
+    ]
    },
    {
     "trainRuns": [
@@ -896,7 +914,14 @@
      102,
      208
     ],
-    "parameters": 177153
+    "parameters": 180993,
+    "layers": [
+     191,
+     256,
+     256,
+     256,
+     1
+    ]
    },
    {
     "trainRuns": [
@@ -913,7 +938,14 @@
      213,
      281
     ],
-    "parameters": 177153
+    "parameters": 180993,
+    "layers": [
+     191,
+     256,
+     256,
+     256,
+     1
+    ]
    },
    {
     "trainRuns": [
@@ -930,7 +962,14 @@
      397,
      425
     ],
-    "parameters": 177153
+    "parameters": 180993,
+    "layers": [
+     191,
+     256,
+     256,
+     256,
+     1
+    ]
    },
    {
     "trainRuns": [
@@ -947,77 +986,86 @@
      445,
      474
     ],
-    "parameters": 177153
+    "parameters": 180993,
+    "layers": [
+     191,
+     256,
+     256,
+     256,
+     1
+    ]
    }
   ],
   "crossValidation": {
-   "meanR2": 0.9015,
-   "worstCarR2": 0.8577,
-   "mae": 0.0463,
-   "relativeL2": 0.2417,
-   "dragMae": 0.0157
+   "meanR2": 0.9235,
+   "worstCarR2": 0.8907,
+   "mae": 0.042,
+   "relativeL2": 0.2127,
+   "dragMae": 0.0147
   },
   "outsideRuns": [
    {
     "run": 1,
-    "r2": 0.8988,
-    "mae": 0.04465,
-    "dragMae": 0.00727
+    "r2": 0.93114,
+    "mae": 0.03956,
+    "dragMae": 0.01051
    },
    {
     "run": 500,
-    "r2": 0.93175,
-    "mae": 0.03954,
-    "dragMae": 0.0166
+    "r2": 0.95352,
+    "mae": 0.03367,
+    "dragMae": 0.01368
    }
   ],
   "regions": [
    {
     "name": "forebody (nx < -0.7)",
     "areaShare": 0.0732,
-    "r2": 0.8976,
-    "mae": 0.0838
+    "r2": 0.9262,
+    "mae": 0.0717
    },
    {
     "name": "base_wake (nx > 0.7)",
     "areaShare": 0.0905,
-    "r2": 0.9034,
-    "mae": 0.0345
+    "r2": 0.9061,
+    "mae": 0.0342
    },
    {
     "name": "upper_body (nz > 0.7)",
     "areaShare": 0.213,
-    "r2": 0.9467,
-    "mae": 0.0375
+    "r2": 0.9598,
+    "mae": 0.0357
    },
    {
     "name": "underbody (nz < -0.7)",
     "areaShare": 0.2218,
-    "r2": 0.8487,
-    "mae": 0.0534
+    "r2": 0.8859,
+    "mae": 0.0473
    },
    {
     "name": "side_panels (|ny| > 0.7)",
     "areaShare": 0.3853,
-    "r2": 0.8689,
-    "mae": 0.0416
+    "r2": 0.8927,
+    "mae": 0.0376
    },
    {
     "name": "inboard (|y| < 0.3 m)",
     "areaShare": 0.2598,
-    "r2": 0.9303,
-    "mae": 0.0454
+    "r2": 0.9533,
+    "mae": 0.04
    },
    {
     "name": "outboard (|y| > 0.6 m)",
     "areaShare": 0.4933,
-    "r2": 0.8624,
-    "mae": 0.0483
+    "r2": 0.8873,
+    "mae": 0.0438
    }
   ],
   "comparison": [
    {
     "label": "Constant fold-mean baseline (no model)",
+    "learner": "constant",
+    "columnRanges": [],
     "crossValidationR2": 0.0,
     "worstCarR2": 0.0,
     "mae": 0.1661,
@@ -1027,6 +1075,13 @@
    },
    {
     "label": "PointNet learned global vector g (64D)",
+    "learner": "pointnet",
+    "columnRanges": [
+     [
+      0,
+      10
+     ]
+    ],
     "crossValidationR2": 0.6468,
     "worstCarR2": 0.5717,
     "mae": 0.0879,
@@ -1036,50 +1091,109 @@
    },
    {
     "label": "Local MLP (position + normal only)",
-    "crossValidationR2": 0.7691,
-    "worstCarR2": 0.6283,
-    "mae": 0.071,
-    "dragMae": 0.0465,
-    "outsideR2": 0.7857,
-    "outsideDragMae": 0.076
+    "learner": "mlp",
+    "columnRanges": [
+     [
+      0,
+      10
+     ]
+    ],
+    "crossValidationR2": 0.7546,
+    "worstCarR2": 0.5735,
+    "mae": 0.0699,
+    "dragMae": 0.0571,
+    "outsideR2": 0.7957,
+    "outsideDragMae": 0.0866
    },
    {
     "label": "Local + streamwise XZ/XY slices & Y-hops",
-    "crossValidationR2": 0.8815,
-    "worstCarR2": 0.8292,
-    "mae": 0.0511,
-    "dragMae": 0.0147,
-    "outsideR2": 0.9044,
-    "outsideDragMae": 0.0173
+    "learner": "mlp",
+    "columnRanges": [
+     [
+      0,
+      10
+     ],
+     [
+      70,
+      191
+     ]
+    ],
+    "crossValidationR2": 0.8943,
+    "worstCarR2": 0.8143,
+    "mae": 0.0473,
+    "dragMae": 0.0143,
+    "outsideR2": 0.9243,
+    "outsideDragMae": 0.0165
    },
    {
-    "label": "Local + 3D regional voxels (8/25/75 cm)",
-    "crossValidationR2": 0.8854,
-    "worstCarR2": 0.8262,
-    "mae": 0.0505,
-    "dragMae": 0.0287,
-    "outsideR2": 0.8979,
-    "outsideDragMae": 0.0362
+    "label": "Local + 3D regional voxels (3/8/25/75 cm)",
+    "learner": "mlp",
+    "columnRanges": [
+     [
+      0,
+      10
+     ],
+     [
+      10,
+      70
+     ]
+    ],
+    "crossValidationR2": 0.9089,
+    "worstCarR2": 0.8626,
+    "mae": 0.0452,
+    "dragMae": 0.0291,
+    "outsideR2": 0.9288,
+    "outsideDragMae": 0.0326
    },
    {
-    "label": "LightGBM boosted trees (all 176 features)",
-    "crossValidationR2": 0.9112,
-    "worstCarR2": 0.8785,
-    "mae": 0.0458,
-    "dragMae": 0.0273,
-    "outsideR2": 0.9336,
-    "outsideDragMae": 0.0241
+    "label": "LightGBM boosted trees (all 191 features)",
+    "learner": "trees",
+    "columnRanges": [
+     [
+      0,
+      10
+     ],
+     [
+      10,
+      70
+     ],
+     [
+      70,
+      191
+     ]
+    ],
+    "crossValidationR2": 0.9141,
+    "worstCarR2": 0.8826,
+    "mae": 0.0452,
+    "dragMae": 0.0306,
+    "outsideR2": 0.9346,
+    "outsideDragMae": 0.0233
    },
    {
     "label": "Shipped 5-Fold Per-Cell MLP (local + regional + slices)",
-    "crossValidationR2": 0.9015,
-    "worstCarR2": 0.8577,
-    "mae": 0.0463,
-    "dragMae": 0.0157,
-    "outsideR2": 0.9153,
-    "outsideDragMae": 0.0119
+    "learner": "ensemble",
+    "columnRanges": [
+     [
+      0,
+      10
+     ],
+     [
+      10,
+      70
+     ],
+     [
+      70,
+      191
+     ]
+    ],
+    "crossValidationR2": 0.9235,
+    "worstCarR2": 0.8907,
+    "mae": 0.042,
+    "dragMae": 0.0147,
+    "outsideR2": 0.9423,
+    "outsideDragMae": 0.0121
    }
   ]
  },
- "weightsSha256": "45d7f4408ad91c7813a2b80926f1195c3b12dc83f8f35465d609d8ca2230ac14"
+ "weightsSha256": "e807307f886948b9809a165d46ed05d72711052a3d81048736c65920ab572cfc"
 }

@@ -24,6 +24,9 @@ export async function loadEnsemble(baseUrl) {
   const weights = new Float32Array(buffer);
   const take = (offset, length) => weights.subarray(offset, offset + length);
   const inputs = spec.features.count;
+  // The kernels here and in gpu.js compute GELU in its erf form, PyTorch's default.
+  if (spec.activation !== 'GELU') throw new Error(`The model's networks use ${spec.activation} between layers; this page computes GELU.`);
+  if (!(spec.spreadScale > 0)) throw new Error('The model file has no spread scale: export it again from a current checkpoint.');
   const folds = spec.folds.map((fold) => {
     if (fold.layers[0].inputs !== inputs || fold.layers.at(-1).outputs !== 1) {
       throw new Error(`The model file's networks take ${fold.layers[0].inputs} inputs; its features number ${inputs}.`);
@@ -142,10 +145,13 @@ function dense(input, { inputs, outputs, weight, bias }, output) {
 }
 
 /**
- * Mean and standard deviation over the networks at each point (population, as NumPy's `std`).
+ * Mean Cp over the networks at each point, and the spread σ(Cp): their standard deviation
+ * (population, as NumPy's `std`) times the scale fitted in training.
  * @param {Float32Array} models (networks, count)
+ * @param {number} count
+ * @param {number} spreadScale
  */
-export function ensembleStatistics(models, count) {
+export function ensembleStatistics(models, count, spreadScale) {
   const networks = models.length / count;
   const cp = new Float32Array(count);
   const sigma = new Float32Array(count);
@@ -159,7 +165,7 @@ export function ensembleStatistics(models, count) {
       squares += d * d;
     }
     cp[p] = mean;
-    sigma[p] = Math.sqrt(squares / networks);
+    sigma[p] = Math.sqrt(squares / networks) * spreadScale;
   }
   return { cp, sigma };
 }

@@ -18,7 +18,7 @@
 
 import { readSurface } from './vtp.js';
 import { measureCells, frontalArea } from './geometry.js';
-import { buildContext, computeFeatures, describeColumns, featureLayout } from './features.js';
+import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { ensembleStatistics, loadEnsemble, predictOnCpu } from './network.js';
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
@@ -43,8 +43,7 @@ const engine = prepare();
 engine.then(
   ({ device, ensemble }) => {
     self.postMessage({ type: 'device', device });
-    const { card, activation, spreadScale, envelope, features } = ensemble;
-    self.postMessage({ type: 'model', model: { ...card, activation, spreadScale, dimensions: envelope.dimensions, columns: describeColumns(features) } });
+    self.postMessage({ type: 'model', model: modelCard(ensemble) });
   },
   (error) => self.postMessage({ type: 'unavailable', message: error.message }),
 );
@@ -54,7 +53,15 @@ async function prepare() {
   const layout = featureLayout(ensemble.features);
   const gpu = await createGpuNetworks(ensemble);
   const pool = createPool(HELPERS, ensemble);
-  return { ensemble, layout, runners: { gpu, pool, networks: ensemble.folds.length }, device: deviceName(gpu) };
+  const runners = { gpu, pool, networks: ensemble.folds.length, spreadScale: ensemble.spreadScale };
+  return { ensemble, layout, runners, device: deviceName(gpu) };
+}
+
+/** @returns {import('./result.js').ModelCard} */
+function modelCard({ card, activation, spreadScale, envelope, features }) {
+  const columns = describeColumns(features);
+  const comparison = card.comparison.map(({ columnRanges, ...entry }) => ({ ...entry, inputs: kindsWithin(columns, columnRanges) }));
+  return { ...card, comparison, activation, spreadScale, dimensions: envelope.dimensions, columns };
 }
 
 function deviceName(gpu) {
@@ -291,7 +298,7 @@ async function predictBatch(current, runners, cells, order, counted) {
     for (let f = 0; f < runners.networks; f++) models.set(chunk.subarray(f * size, (f + 1) * size), f * count + start);
     counted(size);
   });
-  return { cells: order, models, fields: ensembleStatistics(models, count), seconds: (performance.now() - started) / 1000 };
+  return { cells: order, models, fields: ensembleStatistics(models, count, runners.spreadScale), seconds: (performance.now() - started) / 1000 };
 }
 
 /** The contract's mesh fields only (the working mesh also carries `sourcePoint`). */
@@ -433,7 +440,7 @@ async function completeSurface(current, runners, post, job) {
   const remaining = order.filter((c) => !predicted.done[c]);
 
   await predictPoints(current, runners, cells, remaining, (start, size, chunk) => {
-    const fields = ensembleStatistics(chunk, size);
+    const fields = ensembleStatistics(chunk, size, runners.spreadScale);
     for (let i = 0; i < size; i++) {
       const c = remaining[start + i];
       predicted.cp[c] = fields.cp[i];
@@ -562,7 +569,7 @@ async function explain({ id, point, analysis, model, lookups, vertex }) {
     computeFeatures(context, site.position, site.normal, 0, 1, features);
     const models = new Float32Array(ensemble.folds.length);
     predictOnCpu(ensemble, features, 1, models);
-    const { cp, sigma } = ensembleStatistics(models, 1);
+    const { cp, sigma } = ensembleStatistics(models, 1, ensemble.spreadScale);
     const explanation = {
       ...site,
       position: Array.from(site.position),
