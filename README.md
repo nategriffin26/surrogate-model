@@ -20,7 +20,7 @@ uv run python -m surrogate.preprocess
 
 ### 2. Train 5-Fold Ensemble & Ablation Suite
 
-Fits a 5-fold cross-validated per-cell MLP ensemble (`176 -> 256 -> 256 -> 256 -> 1`, GELU, area-weighted Huber loss) strictly on the 10 assigned training vehicles, saves `artifacts/ensemble.pt` (3.5 MB), evaluates unseen holdout runs (`run_1`, `run_500`), and records controlled ablations in `artifacts/metrics.json`:
+Fits a 5-fold cross-validated per-cell MLP ensemble (`176 -> 256 -> 256 -> 256 -> 1`, GELU, mean squared error on area-weighted cell samples) strictly on the 10 assigned training vehicles, saves `artifacts/ensemble.pt` (3.5 MB), evaluates unseen holdout runs (`run_1`, `run_500`), and records controlled ablations in `artifacts/metrics.json`:
 
 ```bash
 uv run python -m surrogate.train
