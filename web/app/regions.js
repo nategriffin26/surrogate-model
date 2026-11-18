@@ -27,7 +27,7 @@ const OP_LABELS = { replace: 'Replace', add: 'Add', subtract: 'Subtract', inters
 /** How a step combines, beside it in the list of the selection's steps. */
 const OP_SIGNS = { replace: '', add: '+', subtract: '−', intersect: '∩' };
 const AXES = ['x', 'y', 'z'];
-const VALUE_FIELDS = ['cp', 'sigma'];
+const VALUE_FIELDS = ['cp', 'drag', 'sigma'];
 /** Regions may name regions; deeper than this is a loop. */
 const MAX_DEPTH = 8;
 /** Brush radius for painting, in CSS pixels at the first dab. */
@@ -86,6 +86,14 @@ class PatchGrid {
 	}
 }
 
+/** Each face's value of a field: Cp, the drag density −Cp·nₓ, or σ. */
+export function faceValues(cells, field) {
+	if (field !== 'drag') return cells[field];
+	const values = new Float32Array(cells.areas.length);
+	for (let c = 0; c < values.length; c++) values[c] = -cells.cp[c] * cells.normals[3 * c];
+	return values;
+}
+
 /** The faces of `cells` one rule picks, as 0 or 1 per face. */
 function ruleMask(cells, rule, regions, depth) {
 	const count = cells.areas.length;
@@ -99,7 +107,7 @@ function ruleMask(cells, rule, regions, depth) {
 			return mask;
 		}
 		case 'field': {
-			const values = cells[rule.field];
+			const values = faceValues(cells, rule.field);
 			const lo = rule.min ?? -Infinity, hi = rule.max ?? Infinity;
 			for (let c = 0; c < count; c++) mask[c] = values[c] >= lo && values[c] <= hi ? 1 : 0;
 			return mask;
@@ -187,7 +195,7 @@ export function describeRule(rule, regions) {
 		case 'facing':
 			return `${FACINGS[rule.facing].label}${rule.within_deg !== undefined && rule.within_deg !== 90 ? ` within ${rule.within_deg}°` : ''}`;
 		case 'field': {
-			const name = rule.field === 'cp' ? 'Cp' : 'σ';
+			const name = { cp: 'Cp', drag: '−Cp nₓ', sigma: 'σ' }[rule.field];
 			if (rule.min !== undefined && rule.max !== undefined) return `${name} from ${signed(rule.min, 2)} to ${signed(rule.max, 2)}`;
 			return rule.min !== undefined ? `${name} at least ${signed(rule.min, 2)}` : `${name} at most ${signed(rule.max, 2)}`;
 		}
@@ -206,7 +214,7 @@ export function describeRule(rule, regions) {
 
 const RULE_SCHEMA = {
 	type: 'object',
-	description: 'One rule. facing: faces whose outward normal points a way (forward = upstream, nₓ < 0), optionally within_deg of it (default 90, a hemisphere). field: faces whose Cp or σ lies between min and max (either may be left out). slab: faces whose centre lies between min_m and max_m along an axis. patch: faces within radius_m of any of points_m (painted or lassoed spots on the surface). region: a saved region by its id.',
+	description: 'One rule. facing: faces whose outward normal points a way (forward = upstream, nₓ < 0), optionally within_deg of it (default 90, a hemisphere). field: faces whose cp, drag (−Cp·nₓ) or sigma lies between min and max (either may be left out). slab: faces whose centre lies between min_m and max_m along an axis. patch: faces within radius_m of any of points_m (painted or lassoed spots on the surface). region: a saved region by its id.',
 	properties: {
 		kind: { type: 'string', enum: ['facing', 'field', 'slab', 'patch', 'region'] },
 		facing: { type: 'string', enum: Object.keys(FACINGS) },
@@ -404,16 +412,20 @@ export function createRegions({ session, engine, update }) {
 		},
 		run({ case_id, region_id, terms }) {
 			const c = withResult(case_id);
-			if (region_id !== undefined && terms !== undefined) throw new Error('Give region_id or terms, not both.');
-			let steps;
-			if (region_id !== undefined) steps = [{ op: 'replace', rule: checkRule({ kind: 'region', region_id }, 'region', session.regions) }];
-			else if (terms !== undefined) steps = checkTerms(terms, session.regions);
-			else if (view.selection) steps = view.selection.terms;
-			else throw new Error('Nothing is selected. Give region_id or terms, or select first with select_region.');
+			const steps = namedSteps(region_id, terms) ?? view.selection?.terms;
+			if (!steps) throw new Error('Nothing is selected. Give region_id or terms, or select first with select_region.');
 			const { part, whole } = readout(c, steps);
 			return { case_id: c.id, readout: report(part, whole), whole_car: report(whole), summed_over: summed(c) };
 		},
 	});
+
+	/** The steps an operation's arguments name: a saved region, or terms, checked; undefined when they name neither. */
+	function namedSteps(region_id, terms) {
+		if (region_id !== undefined && terms !== undefined) throw new Error('Give region_id or terms, not both.');
+		if (region_id !== undefined) return [{ op: 'replace', rule: checkRule({ kind: 'region', region_id }, 'region', session.regions) }];
+		if (terms !== undefined) return checkTerms(terms, session.regions);
+		return undefined;
+	}
 
 	defineOperation({
 		name: 'save_region',
@@ -481,7 +493,12 @@ export function createRegions({ session, engine, update }) {
 		},
 	});
 
-	return { selectionOn, tintOf, select, preview, describe: (rule) => describeRule(rule, session.regions) };
+	return {
+		selectionOn, tintOf, select, preview, cellsOf, namedSteps,
+		/** The faces of a case some steps pick, as 0 or 1 per working-mesh face. */
+		maskOf: (c, steps) => maskOf(cellsOf(c.result), steps, session.regions),
+		describe: (rule) => describeRule(rule, session.regions),
+	};
 }
 
 // ---- the dock's Regions tab, and painting and lassoing on the car ---------------------------------------------------

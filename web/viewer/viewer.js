@@ -9,10 +9,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
 import { FaceIndex, VertexGrid } from './picking.js';
-import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
+import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, MAX_KEPT, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 const SHADER_FIELD = { cp: 0, cfd: 1, error: 2, sigma: 3, drag: 4, none: 5 };
+/** Any other field a pane shows is the custom one, drawn from the `custom` attribute (setCustomField). */
+const CUSTOM_FIELD = 6;
 const INK = '#0d2233';
 const CLAY = '#e4e9ed';
 const ACCENT = '#0b6fbf';
@@ -65,6 +67,11 @@ export class Viewer extends EventTarget {
 		this.waiting = null;
 		/** The selection shown, per working-mesh vertex (setSelection), or null. */
 		this.selection = null;
+		/** A field the app supplies (setCustomField), and paint on the car (setPaint), per working-mesh vertex, or null. */
+		this.custom = null;
+		this.paint = null;
+		/** Objects the annotations draw with the car (setAnnotations), or null. */
+		this.annotations = null;
 		/** What the left button does on the car while a tool owns it (setTool), instead of turning the camera. */
 		this.tool = null;
 		this.lastUpload = 0;
@@ -142,7 +149,11 @@ export class Viewer extends EventTarget {
 			uViewDir: { value: new THREE.Vector3() },
 			uSection: { value: 0 },
 			uSelection: { value: 0 },
+			uPaint: { value: 0 },
 			uPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
+			uKept: { value: Array.from({ length: MAX_KEPT }, () => new THREE.Vector4()) },
+			uKeptColour: { value: Array.from({ length: MAX_KEPT }, () => new THREE.Color()) },
+			uKeptCount: { value: 0 },
 			uClip: { value: 0 },
 			uArrival: { value: new THREE.Vector4() },
 			uFade: { value: 1 },
@@ -271,8 +282,12 @@ export class Viewer extends EventTarget {
 		this.uniforms.uArrival.value.w = 0;
 		this.uniforms.uFade.value = 1;
 		this.endWait();
+		// What the app laid on the last car's working mesh belongs to that car.
 		this.selection = null;
+		this.custom = null;
+		this.paint = null;
 		this.uniforms.uSelection.value = 0;
+		this.uniforms.uPaint.value = 0;
 		this.requestRender();
 	}
 
@@ -333,7 +348,7 @@ export class Viewer extends EventTarget {
 		this.uniforms.uZmin.value = this.bounds[4];
 		this.ground.place(this.renderer, working.geometry, this.bounds);
 		this.placePlane();
-		this.attachSelection();
+		this.attachAllToWorking();
 		this.dispatchEvent(new CustomEvent('placed'));
 	}
 
@@ -359,9 +374,9 @@ export class Viewer extends EventTarget {
 		const full = s.full?.ready ? s.full : null;
 		// A new working mesh still on its way: the full mesh stands in, clay until its fields arrive.
 		if (!s.working.ready) return full ? 'full' : null;
-		// The full mesh shown as the preview is, until the result arrives, the working mesh too; and a selection is
-		// carried by the working mesh only.
-		if (!full || full === s.working || this.selection) return 'working';
+		// The full mesh shown as the preview is, until the result arrives, the working mesh too; and a selection, paint
+		// and a custom field are carried by the working mesh only.
+		if (!full || full === s.working || this.selection || this.paint) return 'working';
 		if (!this.panes.every((pane) => full.has(pane.field))) return 'working';
 		if (this.lod.layer !== full) this.resetLod(full);
 		if (moving && (s.fullFraction < 1 || !this.lod.fullWhileMoving)) return 'working';
@@ -406,6 +421,18 @@ export class Viewer extends EventTarget {
 		this.requestRender();
 	}
 
+	/** Sections kept beside the live one, drawn on the car while it shows: [{axis, offset, colour}], at most MAX_KEPT. */
+	setKeptSections(kept) {
+		const u = this.uniforms;
+		if (kept.length > MAX_KEPT) throw new Error(`At most ${MAX_KEPT} kept sections can be drawn; got ${kept.length}.`);
+		kept.forEach(({ axis, offset, colour }, i) => {
+			u.uKept.value[i].set(...[0, 1, 2].map((k) => (k === axis ? 1 : 0)), offset);
+			u.uKeptColour.value[i].set(colour);
+		});
+		u.uKeptCount.value = kept.length;
+		this.requestRender();
+	}
+
 	/** Whether a world point lies in the part of the car the section clips away. */
 	clipped(point) {
 		const s = this.section;
@@ -421,22 +448,60 @@ export class Viewer extends EventTarget {
 	setSelection(selected) {
 		this.selection = selected;
 		this.uniforms.uSelection.value = selected ? 1 : 0;
-		this.attachSelection();
+		this.attachToWorking('selected', selected);
 		this.requestRender();
 	}
 
-	/** Put the selection on the working mesh drawn now, as an attribute; it reaches the GPU with the next frame. */
-	attachSelection() {
+	/**
+	 * A field the app supplies, one value per working-mesh vertex, drawn by any pane whose field the viewer does not
+	 * know (with that pane's map); null for none. After changing the array in place, call again with it.
+	 */
+	setCustomField(values) {
+		this.custom = values;
+		this.attachToWorking('custom', values);
+		this.requestRender();
+	}
+
+	/**
+	 * Paint on the car: per working-mesh vertex an sRGB colour with its strength as alpha (`colour`, RGBA bytes) and
+	 * the share of the area around it covered (`cover`, bytes for 0 to 1); null for none. The working mesh is drawn
+	 * while paint shows. After changing the arrays in place, call again with them.
+	 */
+	setPaint(paint) {
+		this.paint = paint;
+		this.uniforms.uPaint.value = paint ? 1 : 0;
+		this.attachToWorking('paint', paint?.colour, 4, true);
+		this.attachToWorking('paintCover', paint?.cover, 1, true);
+		this.requestRender();
+	}
+
+	/** Put a per-vertex array on the working mesh as an attribute, or remove it for null; it reaches the GPU with the next frame. */
+	attachToWorking(name, array, size = 1, normalized = false) {
 		const geometry = this.surface?.working.geometry;
 		if (!geometry) return;
-		const selected = this.selection;
-		const attribute = geometry.getAttribute('selected');
-		if (!selected || selected.length !== geometry.getAttribute('position')?.count) {
-			if (attribute) geometry.deleteAttribute('selected');
+		const attribute = geometry.getAttribute(name);
+		if (!array || array.length !== geometry.getAttribute('position')?.count * size) {
+			if (attribute) geometry.deleteAttribute(name);
 			return;
 		}
-		if (attribute?.array === selected) attribute.needsUpdate = true;
-		else geometry.setAttribute('selected', new THREE.BufferAttribute(selected, 1));
+		if (attribute?.array === array) attribute.needsUpdate = true;
+		else geometry.setAttribute(name, new THREE.BufferAttribute(array, size, normalized));
+	}
+
+	/** Every per-vertex array the app supplies, on a working mesh just placed. */
+	attachAllToWorking() {
+		this.attachToWorking('selected', this.selection);
+		this.attachToWorking('custom', this.custom);
+		this.attachToWorking('paint', this.paint?.colour, 4, true);
+		this.attachToWorking('paintCover', this.paint?.cover, 1, true);
+	}
+
+	/** Objects the annotations draw with the car in world space, in every pane, or null. The caller owns and disposes them. */
+	setAnnotations(object) {
+		if (this.annotations) this.scene.remove(this.annotations);
+		this.annotations = object;
+		if (object) this.scene.add(object);
+		this.requestRender();
 	}
 
 	/** Objects drawn with the car in world space (the model view's stencil), or null. The caller owns and disposes them. */
@@ -1090,7 +1155,8 @@ export class Viewer extends EventTarget {
 		renderer.copyFramebufferToTexture(this.still.frame);
 		// The car's pixels change only with the view, the mesh and the section; a fading backdrop leaves them be.
 		const camera = this.camera;
-		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uClip.value, u.uSection.value].join();
+		const kept = u.uKept.value.slice(0, u.uKeptCount.value).flatMap((plane) => plane.toArray());
+		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uClip.value, u.uSection.value, ...kept].join();
 		if (this.still.key !== key) {
 			// Cleared to transparent black, so a pixel off the car reads 0 where the car's read 1.
 			renderer.setRenderTarget(this.still.info);
@@ -1174,7 +1240,7 @@ export class Viewer extends EventTarget {
 			const r = rects[i];
 			renderer.setViewport(r.x, 0, r.w, r.h);
 			renderer.setScissor(r.x, 0, r.w, r.h);
-			u.uField.value = SHADER_FIELD[pane.field];
+			u.uField.value = SHADER_FIELD[pane.field] ?? CUSTOM_FIELD;
 			if (pane.map) u.uMap.value.set(pane.map.lo, pane.map.hi, pane.map.bands, rampRow(pane.map.ramp));
 			renderer.render(this.scene, camera);
 		});

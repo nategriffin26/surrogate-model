@@ -17,6 +17,29 @@ export const FIELDS = {
 /** The fields the Result view offers, in toolbar order. */
 export const RESULT_FIELDS = ['cp', 'drag', 'sigma'];
 
+/** Fields added at run time, such as an annotation's array, by key, in the order added. */
+const ADDED = new Set();
+
+/**
+ * Add a field the app supplies: its FIELDS entry under `key` (label, title, symbol, tip) and its colour map
+ * {ramps, diverging, start}: the ramps offered, whether it diverges about zero, and the scale it starts at
+ * ({ramp, lo, hi, bands}), which resetting its scale returns to.
+ */
+export function addField(key, field, map) {
+	FIELDS[key] = { ...field, map: key };
+	MAPS[key] = map;
+	ADDED.add(key);
+}
+
+export function removeField(key) {
+	delete FIELDS[key];
+	delete MAPS[key];
+	ADDED.delete(key);
+}
+
+/** Every field the Result view can be coloured by: the model's, then those added. */
+export const offeredFields = () => [...RESULT_FIELDS, ...ADDED];
+
 export const MAPS = {
 	cp: { ramps: ['coolwarm', 'turbo', 'viridis'], diverging: true },
 	error: { ramps: ['coolwarm', 'purplegreen', 'brownteal'], diverging: true },

@@ -1,5 +1,5 @@
-"""The tool from Python: the open cases as numpy arrays, every operation of the tool, and the model's prediction on
-new geometry, so a study is a loop of deform, predict, measure, collect.
+"""The tool from Python: the open cases as numpy arrays, every operation of the tool, the model's prediction on
+new geometry, so a study is a loop of deform, predict, measure, collect, and drawing on the car to show what was found.
 
 The working directory is the tool's workspace. Files the engineer added are here to read (they cannot be changed in
 place: write a new file instead), and every file written here appears in the workspace. Calls that reach the tool are
@@ -20,6 +20,24 @@ coroutines; await them.
     await pressure.run("list_cases")         # any operation of the tool, with the arguments the assistant gives it
     await pressure.write_vtp("longer.vtp", longer.cells)
 
+Drawing on the car, like plotting: every array goes to the page whole, never as JSON, so thousands of marks are one
+call. A case is coloured by a field of its own or painted; marks are drawn through `pressure.view` (the case on
+screen) or `case.view`. Each call draws into a named layer (`layer=`, made if new, added to if it exists), which the
+engineer can hide, rename, recolour or remove in the Layers tab.
+
+    await car.show(w.spread / np.maximum(np.abs(w.cp), 0.05), name="Spread / |Cp|", cmap="viridis", range=(0, 1))
+    await car.paint(w.cp < -1, "orange", layer="Cp below -1")          # a mask per cell, or colours per cell
+    view = pressure.view
+    await view.label(w.centers[w.cp.argmin()], "Lowest Cp", layer="Extremes")
+    await view.arrows(w.centers[up], -(w.cp * w.areas)[up, None] * w.normals[up], layer="Force")
+    await view.line([[0, 0, 1.6], [4, 0, 1.6]], color="rose")
+    await view.box([-1, -1, -0.4], [0, 1, 0.6])
+    await view.clear()                       # every layer the assistant drew; view.clear("Force") one of them
+
+Points are (N, 3) arrays, or one [x, y, z], in metres. `color` is a name (ink, blue, orange, teal, rose, violet,
+green, grey, white) or "#rrggbb", and sets the layer's colour; for points and arrows it may also be one colour per
+item, (N, 3) or (N, 4) floats from 0 to 1 as a matplotlib colormap gives them. `width` is a line width in px.
+
 Frame: metres, x downstream, y to the car's right seen from the driver's seat, z up. Cp is the pressure coefficient,
 `spread` its uncertainty σ(Cp) from the model's five networks. Pressure only: there is no wall shear, so forces from
 these fields are pressure forces.
@@ -36,7 +54,7 @@ from pyodide.ffi import JsProxy, to_js
 
 from _page import request
 
-__all__ = ["Case", "Prediction", "Surface", "ToolError", "active", "cases", "predict", "run", "write_vtp"]
+__all__ = ["Case", "Prediction", "Surface", "ToolError", "View", "active", "cases", "predict", "run", "view", "write_vtp"]
 
 
 class ToolError(Exception):
@@ -173,6 +191,114 @@ class Case:
         cells = await _ask("file", {"case_id": self.id})
         return None if cells is None else _surface(cells)
 
+    @property
+    def view(self) -> View:
+        """Marks drawn on this case, whichever case is on screen."""
+        return View(self)
+
+    async def show(self, values, name: str, *, unit: str = "", cmap: str | None = None, range: tuple[float, float] | None = None) -> dict:
+        """Colour the car by `values`, one per cell (C,) or per point (P,) of the working mesh, as a field called `name`,
+        offered beside Pressure with its own legend, colour scale and probe readout. `cmap` is one of the tool's ramps
+        (coolwarm, turbo, viridis, purplegreen, brownteal, purples, inferno, tealorange): by default coolwarm for values
+        either side of zero, else viridis. `range` is (min, max), by default from the values. Showing a name again
+        replaces its values. Returns the values' min, max and area-weighted mean, and the scale."""
+        arguments = {"name": name, "values": _typed(np.asarray(values, dtype=np.float32).ravel()), "unit": unit, "ramp": cmap, "case_id": self.id}
+        if range is not None:
+            arguments["min"], arguments["max"] = (float(v) for v in range)
+        return await _operation("show_field", arguments)
+
+    async def paint(self, where, color="orange", *, layer: str | None = None, opacity: float | None = None) -> dict:
+        """Paint cells of the working mesh over the field shown: `where` is a boolean mask per cell (C,), painted in
+        `color`; or colours per cell, (C, 3) or (C, 4) floats from 0 to 1, alpha 0 leaving a cell unpainted. `opacity`
+        (0 to 1) lets the field show through. Painting adds to the layer's paint (default "Paint"). Returns the cells
+        painted, their area and their share of the car's area."""
+        where = np.asarray(where)
+        arguments = {"layer": layer, "case_id": self.id}
+        if where.ndim == 2:
+            arguments["colours"] = _colours(where, len(where))
+        else:
+            arguments |= {"mask": _typed(where.astype(np.uint8)), "colour": color, "opacity": opacity}
+        return await _operation("paint_faces", arguments)
+
+
+class View:
+    """Marks on a case, anchored in 3D so they stay put as the camera moves: labels, points, lines, arrows, region
+    outlines, boxes and planes. `pressure.view` draws on the case on screen at each call; `case.view` on that case.
+    Every method draws into `layer` (a default per kind when left out) and returns what it drew."""
+
+    def __init__(self, case: Case | None = None) -> None:
+        self._case = case
+
+    def __repr__(self) -> str:
+        return f"View({self._case!r})" if self._case else "View(the case on screen)"
+
+    def _id(self) -> int:
+        case = self._case or active
+        if case is None:
+            raise ToolError("No case is on screen. Open a file or an example first.")
+        return case.id
+
+    async def _draw(self, name: str, color=None, items: int = 0, **arguments) -> dict:
+        if color is not None and not isinstance(color, str):
+            arguments["colours"] = _colours(color, items)
+        else:
+            arguments["colour"] = color
+        return await _operation(name, {**arguments, "case_id": self._id()})
+
+    async def label(self, points, texts, *, layer: str | None = None, color: str | None = None, offset=None) -> dict:
+        """Label points with text: one point and a string, or (N, 3) points and N strings. Labels keep clear of each
+        other, with a leader when moved; `offset` [right, down] in px puts them there first."""
+        texts = [texts] if isinstance(texts, str) else [str(text) for text in texts]
+        return await self._draw("draw_labels", color, points=_points(points), texts=texts, layer=layer, offset_px=None if offset is None else [float(v) for v in offset])
+
+    async def points(self, points, *, size: float | None = None, layer: str | None = None, color=None) -> dict:
+        """Dots at points, `size` px across."""
+        points = _points(points)
+        return await self._draw("draw_points", color, points.length // 3, points=points, size_px=size, layer=layer)
+
+    async def line(self, points, *, closed: bool = False, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+        """One polyline through (N, 3) points."""
+        return await self.lines([points], closed=closed, layer=layer, color=color, width=width)
+
+    async def lines(self, polylines, *, closed: bool = False, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+        """Many polylines in one call, each (N, 3) points."""
+        return await self._draw("draw_lines", color, lines=[_points(line) for line in polylines], closed=closed, layer=layer, width_px=width)
+
+    async def arrows(self, points, vectors, *, scale: float | None = None, layer: str | None = None, color=None, width: float | None = None) -> dict:
+        """Arrows from (N, 3) points along (N, 3) vectors, `scale` metres per unit of vector; by default the longest is
+        drawn 6 % of the car's length. Returns the scale used."""
+        points = _points(points)
+        return await self._draw("draw_arrows", color, points.length // 3, points=points, vectors=_points(vectors), scale=None if scale is None else float(scale), layer=layer, width_px=width)
+
+    async def outline(self, region_id: int | None = None, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+        """The outline of a saved region (`list_regions`), or of the selection when none is given."""
+        return await self._draw("draw_outline", color, region_id=region_id, layer=layer, width_px=width)
+
+    async def box(self, lo, hi, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+        """A box along the axes from corner `lo` to corner `hi`, [x, y, z] each."""
+        return await self._draw("draw_box", color, min=[float(v) for v in lo], max=[float(v) for v in hi], layer=layer, width_px=width)
+
+    async def plane(self, point, normal, size=None, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+        """A rectangle of the plane through `point` square to `normal`, `size` (width, height) in metres."""
+        size = None if size is None else [float(v) for v in np.broadcast_to(size, 2)]
+        return await self._draw("draw_plane", color, point=[float(v) for v in point], normal=[float(v) for v in normal], size_m=size, layer=layer, width_px=width)
+
+    async def layers(self) -> list[dict]:
+        """The case's layers, in drawing order: name, kind, who made it, whether it shows, and what it holds."""
+        return (await _operation("list_layers", {"case_id": self._id()}))["layers"]
+
+    async def hide(self, layer: str) -> dict:
+        return await _operation("set_layer", {"layer": layer, "visible": False, "case_id": self._id()})
+
+    async def show(self, layer: str) -> dict:
+        """Show a hidden layer again; a field layer colours the car by its field."""
+        return await _operation("set_layer", {"layer": layer, "visible": True, "case_id": self._id()})
+
+    async def clear(self, layer: str | None = None) -> list[str]:
+        """Remove one layer, or every layer the assistant drew on the case. Removing the engineer's asks them first.
+        Returns the names removed."""
+        return (await _operation("remove_layer", {"layer": layer, "case_id": self._id()}))["removed"]
+
 
 class Prediction:
     """The model's prediction on a surface: `cells`, the surface with `cp` and `spread` per cell, and the numbers the
@@ -204,6 +330,9 @@ cases: dict[int, Case] = {}
 
 active: Case | None = None
 """The case on screen."""
+
+view = View()
+"""Marks drawn on the case on screen."""
 
 
 async def run(name: str, **arguments) -> dict:
@@ -253,6 +382,31 @@ async def _ask(kind: str, payload: dict):
     return reply.value
 
 
+async def _operation(name: str, arguments: dict) -> dict:
+    """Run an operation with its arrays sent as typed arrays, not JSON; arguments left as None are left out."""
+    return _json(await _ask("operation", {"name": name, "args": {key: value for key, value in arguments.items() if value is not None}}))
+
+
+def _points(points) -> JsProxy:
+    """(N, 3) points, or one [x, y, z], as a flat Float32Array."""
+    points = np.asarray(points, dtype=np.float32)
+    if points.shape[-1:] != (3,) or points.ndim > 2:
+        raise ValueError(f"Expected points of shape (N, 3) or (3,), got {points.shape}.")
+    return _typed(points.reshape(-1, 3))
+
+
+def _colours(colours, count: int) -> JsProxy:
+    """One colour per item, (N, 3) or (N, 4) floats from 0 to 1 (or bytes), as RGBA bytes."""
+    colours = np.asarray(colours)
+    if colours.ndim != 2 or colours.shape[1] not in (3, 4) or len(colours) != count:
+        raise ValueError(f"Expected one colour per item, shape ({count}, 3) or ({count}, 4); got {colours.shape}.")
+    if colours.dtype != np.uint8:
+        colours = np.clip(np.rint(255 * colours), 0, 255).astype(np.uint8)
+    if colours.shape[1] == 3:
+        colours = np.concatenate([colours, np.full((count, 1), 255, np.uint8)], axis=1)
+    return _typed(colours)
+
+
 def _geometry(surface: Surface) -> dict:
     return {
         "points": _typed(np.ascontiguousarray(surface.points, dtype=np.float32)),
@@ -261,7 +415,13 @@ def _geometry(surface: Surface) -> dict:
     }
 
 
-_TYPED = {np.dtype(np.float32): "Float32Array", np.dtype(np.float64): "Float64Array", np.dtype(np.uint32): "Uint32Array", np.dtype(np.int32): "Int32Array"}
+_TYPED = {
+    np.dtype(np.float32): "Float32Array",
+    np.dtype(np.float64): "Float64Array",
+    np.dtype(np.uint32): "Uint32Array",
+    np.dtype(np.int32): "Int32Array",
+    np.dtype(np.uint8): "Uint8Array",
+}
 
 
 def _typed(values: np.ndarray) -> JsProxy:

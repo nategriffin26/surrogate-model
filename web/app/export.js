@@ -28,8 +28,11 @@ export function defineExport(spec) {
 	EXPORTS.set(spec.name, spec);
 }
 
-/** The view as drawn, with the legend in its corner and the file's name in the other. */
-export function pictureOf(c, viewer, { field, map }) {
+/**
+ * The view as drawn, with the legend in its corner and the file's name in the other. `marks(ctx, scale)`, when given,
+ * paints what the page shows over the 3D view (labels on the car), `scale` image pixels to a CSS pixel.
+ */
+export function pictureOf(c, viewer, { field, map, marks }) {
 	const shot = viewer.snapshot();
 	const image = document.createElement('canvas');
 	image.width = shot.width;
@@ -43,6 +46,11 @@ export function pictureOf(c, viewer, { field, map }) {
 	ctx.fillRect(0, 0, image.width, image.height);
 	ctx.drawImage(shot, 0, 0);
 	const scale = image.width / viewer.host.clientWidth;
+	if (marks) {
+		ctx.save();
+		marks(ctx, scale);
+		ctx.restore();
+	}
 	ctx.textBaseline = 'top';
 	ctx.textAlign = 'right';
 	ctx.font = `600 ${13 * scale}px "Hanken Grotesk", system-ui, sans-serif`;

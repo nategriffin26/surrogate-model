@@ -15,7 +15,8 @@ const path = (points) => points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(
 
 /**
  * Draw a plot into an empty SVG of the given size. `x` and `y` are {domain: [lo, hi], label, invert?}; series are
- * lines {cls, points: [[x, y]]}. Returns the scales and the plotting box so a cursor can be drawn later.
+ * lines {cls, points: [[x, y]], colour?, dashed?}. Returns the scales and the plotting box so a cursor can be drawn
+ * later.
  */
 export function drawPlot(svg, { width, height, x, y, series }) {
 	const m = { l: 52, r: 16, t: 22, b: 30 };
@@ -44,18 +45,25 @@ export function drawPlot(svg, { width, height, x, y, series }) {
 	const body = s('g', { 'clip-path': `url(#${clip})` });
 	for (const item of series) {
 		if (item.points.length < 2) continue;
-		body.append(s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: `line ${item.cls}`, fill: 'none' }));
+		const line = s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: `line ${item.cls}`, fill: 'none' });
+		if (item.colour) line.style.stroke = item.colour;
+		if (item.dashed) line.setAttribute('stroke-dasharray', '5 3');
+		body.append(line);
 	}
 	svg.append(body);
 	return { svg, x: sx, y: sy, m, width, height };
 }
 
-/** A vertical cursor at data x with a dot on each value; null removes it. */
+/** A vertical cursor at data x with a dot on each value ({value, cls, colour?}); null removes it. */
 export function drawCursor(frame, at, dots = []) {
 	frame.svg.querySelector('.cursor')?.remove();
 	if (at === null) return;
 	const g = s('g', { class: 'cursor' }, s('line', { x1: frame.x(at), x2: frame.x(at), y1: frame.m.t, y2: frame.height - frame.m.b }));
-	for (const { value, cls } of dots) g.append(s('circle', { cx: frame.x(at), cy: frame.y(value), r: 3.5, class: cls }));
+	for (const { value, cls, colour } of dots) {
+		const dot = s('circle', { cx: frame.x(at), cy: frame.y(value), r: 3.5, class: cls });
+		if (colour) dot.style.stroke = colour;
+		g.append(dot);
+	}
 	frame.svg.append(g);
 }
 

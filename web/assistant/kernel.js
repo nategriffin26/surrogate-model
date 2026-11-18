@@ -57,7 +57,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 			// The kernel's isolation comes from the policy its script is served with; without it, it does not start.
 			const served = await fetch(WORKER, { method: 'HEAD', cache: 'no-store' });
 			if (!served.headers.get('Content-Security-Policy')) {
-				throw new Error('This server does not send the Python kernel its network policy, so the kernel is not started. Run the tool with uv run surrogate-app.');
+				throw new Error('This server does not send the Python kernel its network policy, so the kernel is not started. Run the tool with uv run surrogate app.');
 			}
 			const modules = Object.fromEntries(await Promise.all(MODULES.map(async (name) => [name, await (await fetch(new URL(`./${name}`, import.meta.url))).text()])));
 			await new Promise((resolve, reject) => {

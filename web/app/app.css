@@ -192,7 +192,7 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 	background: var(--heading); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center;
 }
 .cut-marker { position: absolute; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--link); }
-.cut-marker.b1 { border-color: var(--teal); }
+.cut-marker.lower { border-style: dotted; }
 
 /* ---- first screen ---- */
 .center { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; pointer-events: none; }
@@ -311,14 +311,18 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .plot-key:empty { display: none; }
 .key-item { display: inline-flex; align-items: center; gap: 5px; }
 .key-item i { display: inline-block; width: 16px; border-top: 2px solid var(--link); }
-.key-item.b1 i { border-top-color: var(--teal); }
+.key-item.unplotted { color: var(--faint); }
+/* A kept section's remove button shows on hover, the one control in the key that takes the pointer. */
+.key-remove { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--faint); opacity: 0; pointer-events: auto; transition: opacity 0.12s; }
+.key-item:hover .key-remove, .key-remove:focus-visible { opacity: 1; }
+.key-remove:hover { background: var(--tint); color: var(--heading); }
+.key-remove .icon { width: 10px; height: 10px; }
+.key-item:has(.key-remove) { pointer-events: auto; }
 .dock-body { position: relative; min-height: 0; overflow: hidden; }
 .plot { position: absolute; inset: 0; display: block; }
 .plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
 .plot-readout { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
 .plot-readout b { color: var(--heading); font-weight: 600; }
-.readout-b0 b { color: var(--link); }
-.readout-b1 b { color: var(--teal); }
 
 svg .axis text { font: 11px var(--body); fill: var(--faint); font-variant-numeric: tabular-nums; }
 svg .axis .unit { fill: var(--muted); font-weight: 500; }
@@ -326,11 +330,8 @@ svg .axis .grid { stroke: var(--hair); }
 svg .axis .zero { stroke: #b9cdd8; }
 svg .axis .tick { stroke: var(--rule); }
 svg .line { stroke-width: 1.5; stroke-linejoin: round; }
-svg .line.b0 { stroke: var(--link); }
-svg .line.b1 { stroke: var(--teal); }
 svg .cursor line { stroke: var(--heading); stroke-width: 1; }
 svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
-svg .cursor circle.b1 { stroke: var(--teal); }
 
 /* ---- result card ---- */
 .result-card {
@@ -387,6 +388,24 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 .probe-actions { display: flex; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
 .probe-actions .tool { height: 28px; }
 .probe-actions .icon { width: 14px; height: 14px; }
+.probe-set { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--heading); }
+.probe-table th.probe-label, .probe-table td.probe-label { text-align: left; }
+.menu-count { color: var(--faint); font-variant-numeric: tabular-nums; }
+.menu-field { padding: 4px 6px; }
+.menu-field .number { width: 100%; text-align: left; }
+.stations { display: grid; gap: 10px; padding: 6px; }
+.stations-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* ---- histogram ---- */
+.histogram { position: relative; height: 100%; min-height: 120px; }
+.histogram-plot { position: absolute; inset: 0; display: block; cursor: crosshair; touch-action: none; }
+.histogram-outline { fill: none; stroke: var(--muted); stroke-width: 1; stroke-linejoin: round; }
+.histogram-range { fill: rgba(11, 111, 191, 0.1); stroke: var(--link); stroke-width: 1; }
+.histogram-beyond text { font: 11px var(--body); fill: var(--faint); font-variant-numeric: tabular-nums; }
+.histogram-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
+.histogram-controls .tool { height: 28px; }
+.histogram-readout { margin-right: 10px; color: var(--heading); font-size: 12.5px; }
+.histogram-readout:empty { display: none; }
 
 /* ---- regions ---- */
 .regions-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }

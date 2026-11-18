@@ -1,0 +1,1032 @@
+// Annotations: what the assistant or the engineer lays on a car to show something. A field of their own colours the
+// car as Pressure does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines,
+// arrows, region outlines, boxes and planes mark places in 3D. Everything is drawn in named layers that belong to the
+// case, listed in the dock's Layers tab, where each can be hidden, renamed, recoloured or removed, and kept while
+// other cases are shown. Every action is an operation, so a call from the assistant, a line of Python and a control
+// do the same thing; Python sends its arrays as typed arrays, never as JSON.
+//
+// Faces are the working mesh's triangles (`engine.workingCells`); the viewer colours per vertex, so a value given per
+// face reaches it as the area-weighted mean of the faces around each vertex, as the model's own fields do.
+
+import { Annotations, rgbOf } from '../viewer/annotations.js';
+import { FaceIndex, VertexGrid } from '../viewer/picking.js';
+import { finite, oneOf, round, triple } from './checks.js';
+import { h, s } from './dom.js';
+import { FIELDS, MAPS, addField, removeField } from './fields.js';
+import { count, niceTicks } from './format.js';
+import { icon } from './icons.js';
+import { menu } from './menu.js';
+import { defineOperation } from './operations.js';
+import { RAMPS, rampCss } from './ramps.js';
+import { maskOf } from './regions.js';
+
+/** Colours by name: the theme's ink and accents, with orange bright enough to stand out on the car. */
+export const PALETTE = {
+	ink: '#0d2233',
+	blue: '#0b6fbf',
+	orange: '#e2741d',
+	teal: '#197b80',
+	rose: '#a83258',
+	violet: '#9a55e8',
+	green: '#237f50',
+	grey: '#58727f',
+	white: '#ffffff',
+};
+const RAMP_NAMES = Object.keys(RAMPS);
+/** Line width, CSS px, of a new layer; outlines start a little heavier. */
+const LINE_PX = 1.5;
+const OUTLINE_PX = 2;
+const POINT_PX = 7;
+/** A label's text is cut at this length: a label names a place, it does not explain it. */
+const LABEL_CHARS = 80;
+/** Arrows given no scale are drawn with the longest this share of the car's length. */
+const ARROW_SHARE = 0.06;
+/** A layer called by no name takes its kind's. */
+const DEFAULT_NAMES = { labels: 'Labels', points: 'Points', lines: 'Lines', arrows: 'Arrows', outline: 'Outline', box: 'Boxes', plane: 'Planes', paint: 'Paint' };
+const KIND_WORDS = { labels: ['label', 'labels'], points: ['point', 'points'], lines: ['line', 'lines'], arrows: ['arrow', 'arrows'], segments: ['outline', 'outlines'], box: ['box', 'boxes'], plane: ['plane', 'planes'] };
+
+/**
+ * @typedef {Object} Layer
+ * @property {string} name     unique on its case; how calls refer to it
+ * @property {'field' | 'drawing'} kind  a field of its own, or paint and marks
+ * @property {'engineer' | 'assistant'} by  who made it; the assistant asks before removing the engineer's
+ * @property {boolean} visible  a drawing layer drawn; a field layer is shown by choosing its field
+ * @property {string} colour   '#rrggbb': its marks', where they carry none of their own
+ * @property {number} width    line width, CSS px
+ * @property {import('../viewer/annotations.js').Mark[]} marks
+ * @property {Uint8Array | null} paint  RGBA per working-mesh face; alpha 0 leaves a face unpainted
+ * @property {{ key: string, unit: string, faces: Float32Array, vertices: Float32Array, source: string } | null} field
+ */
+
+/** Per case: its layers in drawing order, later on top, and a number that changes whenever they do. */
+const stores = new WeakMap();
+const storeOf = (c) => stores.get(c) ?? stores.set(c, { layers: [], version: 0, paint: null }).get(c);
+
+// ---- checking arguments -------------------------------------------------------------------------------------------------
+
+/** Points as a flat (N, 3) array: a typed array from Python, a list of [x, y, z], or one [x, y, z]. */
+function pointsOf(name, value) {
+	if (ArrayBuffer.isView(value)) {
+		if (value.length === 0 || value.length % 3) throw new Error(`${name} must hold three numbers per point; got ${value.length} numbers.`);
+		return Float32Array.from(value);
+	}
+	if (Array.isArray(value) && value.length === 3 && value.every((v) => typeof v === 'number')) return Float32Array.from(triple(name, value));
+	if (!Array.isArray(value) || value.length === 0) throw new Error(`${name} must be a list of points [x, y, z] in metres; got ${JSON.stringify(value)?.slice(0, 80)}.`);
+	const out = new Float32Array(3 * value.length);
+	value.forEach((p, i) => out.set(triple(`${name}[${i}]`, p), 3 * i));
+	return out;
+}
+
+function colourOf(name, value) {
+	if (typeof value === 'string') {
+		const named = PALETTE[value.trim().toLowerCase()];
+		if (named) return named;
+		if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
+		if (/^#[0-9a-f]{3}$/i.test(value)) return `#${[...value.slice(1)].map((d) => d + d).join('')}`.toLowerCase();
+	}
+	throw new Error(`${name} must be a colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; got ${JSON.stringify(value)}.`);
+}
+
+function widthOf(name, value) {
+	const width = finite(name, value);
+	if (width <= 0 || width > 12) throw new Error(`${name} must be above 0 and at most 12 px; got ${width}.`);
+	return width;
+}
+
+/** RGBA bytes per item, from Python: `count` items. */
+function itemColours(name, value, items) {
+	if (!(value instanceof Uint8Array) || value.length !== 4 * items) throw new Error(`${name} must be RGBA bytes, four per item (${4 * items}); got ${value?.length ?? JSON.stringify(value)}.`);
+	return value;
+}
+
+const nameOf = (value, fallback) => {
+	if (value === undefined) return fallback;
+	const name = String(value).trim();
+	if (!name) throw new Error('layer must not be empty.');
+	return name;
+};
+
+// ---- expressions over the faces -----------------------------------------------------------------------------------------
+
+/** The per-face arrays an expression may name, made from the working mesh's faces on first use. */
+const VARIABLES = {
+	cp: (cells) => cells.cp,
+	sigma: (cells) => cells.sigma,
+	cfd: (cells) => {
+		if (!cells.cfd) throw new Error('This case has no reference field, so cfd is not defined. Attach one, or leave cfd out.');
+		return cells.cfd;
+	},
+	drag: (cells) => cells.cp.map((cp, f) => -cp * cells.normals[3 * f]),
+	x: (cells) => component(cells.centers, 0),
+	y: (cells) => component(cells.centers, 1),
+	z: (cells) => component(cells.centers, 2),
+	nx: (cells) => component(cells.normals, 0),
+	ny: (cells) => component(cells.normals, 1),
+	nz: (cells) => component(cells.normals, 2),
+	area: (cells) => Float32Array.from(cells.areas),
+};
+const component = (array, k) => Float32Array.from({ length: array.length / 3 }, (_, f) => array[3 * f + k]);
+
+const FUNCTIONS = {
+	abs: [1, Math.abs], sqrt: [1, Math.sqrt], exp: [1, Math.exp], log: [1, Math.log], log10: [1, Math.log10], sign: [1, Math.sign],
+	min: [2, Math.min], max: [2, Math.max], clip: [3, (v, lo, hi) => Math.min(hi, Math.max(lo, v))],
+};
+const COMPARE = { '<': (a, b) => +(a < b), '<=': (a, b) => +(a <= b), '>': (a, b) => +(a > b), '>=': (a, b) => +(a >= b), '==': (a, b) => +(a === b), '!=': (a, b) => +(a !== b) };
+const ARITHMETIC = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b, '^': (a, b) => a ** b };
+
+/**
+ * An expression over the faces, evaluated for each: numbers, the names in VARIABLES, + − * / ^ (or **), comparisons
+ * (true is 1), and, or, not, parentheses and the functions in FUNCTIONS. Parsed here, never run as code.
+ */
+export function evaluate(text, cells) {
+	const tokens = [];
+	const pattern = /\s*(?:(\d+\.?\d*(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)|([A-Za-z_]\w*)|(\*\*|<=|>=|==|!=|[-+*/^()<>,]))/iy;
+	let at = 0;
+	const source = String(text);
+	while (at < source.length) {
+		if (/^\s*$/.test(source.slice(at))) break;
+		pattern.lastIndex = at;
+		const m = pattern.exec(source);
+		if (!m) throw new Error(`The expression cannot be read at "${source.slice(at).trim().slice(0, 20)}".`);
+		tokens.push(m[1] !== undefined ? { number: Number(m[1]) } : m[2] !== undefined ? { name: m[2] } : { op: m[3] === '**' ? '^' : m[3] });
+		at = pattern.lastIndex;
+	}
+	const faces = cells.areas.length;
+	const known = new Map();
+	let i = 0;
+	const peek = () => tokens[i];
+	const isOp = (op) => tokens[i]?.op === op;
+	const isWord = (word) => tokens[i]?.name === word;
+	const expect = (op) => {
+		if (!isOp(op)) throw new Error(`The expression needs "${op}" ${tokens[i] ? 'before' : 'at the end'}${tokens[i] ? ` "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}"` : ''}.`);
+		i++;
+	};
+	// Each node is a number or a Float32Array with one value per face.
+	const map = (f, ...args) => {
+		if (args.every((a) => typeof a === 'number')) return f(...args);
+		const out = new Float32Array(faces);
+		for (let k = 0; k < faces; k++) out[k] = f(...args.map((a) => (typeof a === 'number' ? a : a[k])));
+		return out;
+	};
+	const either = () => {
+		let left = both();
+		while (isWord('or')) i++, (left = map((a, b) => +(a !== 0 || b !== 0), left, both()));
+		return left;
+	};
+	const both = () => {
+		let left = negation();
+		while (isWord('and')) i++, (left = map((a, b) => +(a !== 0 && b !== 0), left, negation()));
+		return left;
+	};
+	const negation = () => (isWord('not') ? (i++, map((a) => +(a === 0), negation())) : comparison());
+	const comparison = () => {
+		const left = sum();
+		const op = peek()?.op;
+		if (!COMPARE[op]) return left;
+		i++;
+		return map(COMPARE[op], left, sum());
+	};
+	const sum = () => {
+		let left = product();
+		while (isOp('+') || isOp('-')) left = map(ARITHMETIC[tokens[i++].op], left, product());
+		return left;
+	};
+	const product = () => {
+		let left = unary();
+		while (isOp('*') || isOp('/')) left = map(ARITHMETIC[tokens[i++].op], left, unary());
+		return left;
+	};
+	const unary = () => (isOp('-') ? (i++, map((a) => -a, unary())) : isOp('+') ? (i++, unary()) : power());
+	const power = () => {
+		const base = atom();
+		return isOp('^') ? (i++, map(ARITHMETIC['^'], base, unary())) : base;
+	};
+	const atom = () => {
+		const token = tokens[i++];
+		if (!token) throw new Error('The expression ends too soon.');
+		if (token.number !== undefined) return token.number;
+		if (token.op === '(') {
+			const inside = either();
+			expect(')');
+			return inside;
+		}
+		if (token.name !== undefined) {
+			const name = token.name.toLowerCase();
+			if (FUNCTIONS[name]) {
+				const [arity, f] = FUNCTIONS[name];
+				expect('(');
+				const args = [either()];
+				while (isOp(',')) i++, args.push(either());
+				expect(')');
+				if (args.length !== arity) throw new Error(`${name} takes ${arity} argument${arity > 1 ? 's' : ''}; got ${args.length}.`);
+				return map(f, ...args);
+			}
+			if (VARIABLES[name]) {
+				if (!known.has(name)) known.set(name, VARIABLES[name](cells));
+				return known.get(name);
+			}
+			throw new Error(`The expression names "${token.name}", which is not known. Names: ${Object.keys(VARIABLES).join(', ')}; functions: ${Object.keys(FUNCTIONS).join(', ')}.`);
+		}
+		throw new Error(`The expression has "${token.op}" where a value should be.`);
+	};
+	const value = either();
+	if (i < tokens.length) throw new Error(`The expression has more after its end, from "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}".`);
+	return typeof value === 'number' ? new Float32Array(faces).fill(value) : value;
+}
+
+// ---- per face and per vertex ----------------------------------------------------------------------------------------------
+
+/** Per vertex, the area-weighted mean of a value over the faces around it. */
+function toVertices(mesh, cells, faces) {
+	const { indices } = mesh;
+	const vertices = new Float32Array(mesh.positions.length / 3);
+	const around = new Float32Array(vertices.length);
+	for (let f = 0; f < faces.length; f++) {
+		const a = cells.areas[f];
+		for (let k = 0; k < 3; k++) {
+			const v = indices[3 * f + k];
+			vertices[v] += a * faces[f];
+			around[v] += a;
+		}
+	}
+	for (let v = 0; v < vertices.length; v++) vertices[v] = around[v] > 0 ? vertices[v] / around[v] : 0;
+	return vertices;
+}
+
+/** Per face, the mean of its corners: the value the viewer draws at its centre. */
+function toFaces(mesh, vertices) {
+	const { indices } = mesh;
+	const faces = new Float32Array(indices.length / 3);
+	for (let f = 0; f < faces.length; f++) faces[f] = (vertices[indices[3 * f]] + vertices[indices[3 * f + 1]] + vertices[indices[3 * f + 2]]) / 3;
+	return faces;
+}
+
+/**
+ * The paint of a case's visible layers, per vertex as the viewer takes it: each face the colour of the topmost layer
+ * that paints it; each vertex the area-weighted colour and strength of the painted faces around it, and the share of
+ * its area they cover.
+ */
+function paintOn(mesh, cells, layers) {
+	const faces = cells.areas.length;
+	const top = new Int32Array(faces).fill(-1);
+	layers.forEach((layer, l) => {
+		if (!layer.visible || !layer.paint) return;
+		for (let f = 0; f < faces; f++) if (layer.paint[4 * f + 3] > 0) top[f] = l;
+	});
+	if (top.every((l) => l < 0)) return null;
+	const vertices = mesh.positions.length / 3;
+	const sums = new Float32Array(5 * vertices);
+	const around = new Float32Array(vertices);
+	for (let f = 0; f < faces; f++) {
+		const area = cells.areas[f];
+		const paint = top[f] >= 0 ? layers[top[f]].paint : null;
+		for (let k = 0; k < 3; k++) {
+			const v = mesh.indices[3 * f + k];
+			around[v] += area;
+			if (!paint) continue;
+			for (let c = 0; c < 4; c++) sums[5 * v + c] += area * paint[4 * f + c];
+			sums[5 * v + 4] += area;
+		}
+	}
+	const colour = new Uint8Array(4 * vertices);
+	const cover = new Uint8Array(vertices);
+	for (let v = 0; v < vertices; v++) {
+		const painted = sums[5 * v + 4];
+		if (painted === 0) continue;
+		for (let c = 0; c < 4; c++) colour[4 * v + c] = Math.round(sums[5 * v + c] / painted);
+		cover[v] = Math.round((255 * painted) / around[v]);
+	}
+	return { colour, cover };
+}
+
+/** Each edge of the masked faces that borders an unmasked face or none: the region's outline, as segments. */
+function outlineOf(mesh, mask) {
+	const { indices, positions } = mesh;
+	const vertices = positions.length / 3;
+	const uses = new Map();
+	for (let f = 0; f < mask.length; f++) {
+		if (!mask[f]) continue;
+		for (let k = 0; k < 3; k++) {
+			const u = indices[3 * f + k], v = indices[3 * f + ((k + 1) % 3)];
+			const key = Math.min(u, v) * vertices + Math.max(u, v);
+			uses.set(key, (uses.get(key) ?? 0) + 1);
+		}
+	}
+	const edges = [...uses].filter(([, n]) => n === 1).map(([key]) => key);
+	const a = new Float32Array(3 * edges.length);
+	const b = new Float32Array(3 * edges.length);
+	edges.forEach((key, i) => {
+		const u = Math.floor(key / vertices), v = key % vertices;
+		a.set(positions.subarray(3 * u, 3 * u + 3), 3 * i);
+		b.set(positions.subarray(3 * v, 3 * v + 3), 3 * i);
+	});
+	return { a, b };
+}
+
+/** A starting scale for values: symmetric about zero when they straddle it, else their 1st to 99th percentile. */
+function scaleFor(values) {
+	const step = Math.max(1, Math.floor(values.length / 20000));
+	const sample = new Float32Array(Math.ceil(values.length / step));
+	for (let i = 0, k = 0; i < values.length; i += step) sample[k++] = values[i];
+	sample.sort();
+	const lo = sample[Math.floor(0.01 * (sample.length - 1))];
+	const hi = sample[Math.floor(0.99 * (sample.length - 1))];
+	const round = (x, up) => {
+		const { step: tick } = niceTicks(0, Math.abs(x) || 1, 4);
+		return (up ? Math.ceil(x / tick - 1e-9) : Math.floor(x / tick + 1e-9)) * tick;
+	};
+	if (lo < 0 && hi > 0 && Math.min(-lo, hi) > 0.2 * Math.max(-lo, hi)) {
+		const m = round(Math.max(-lo, hi), true);
+		return { lo: -m, hi: m, diverging: true };
+	}
+	if (hi <= lo) return { lo: lo - 1, hi: hi + 1, diverging: false };
+	return { lo: round(lo, false), hi: round(hi, true), diverging: false };
+}
+
+/** Area-weighted mean, lowest and highest of per-face values. */
+function statistics(values, areas) {
+	let sum = 0, area = 0, lo = Infinity, hi = -Infinity;
+	for (let f = 0; f < values.length; f++) {
+		sum += values[f] * areas[f];
+		area += areas[f];
+		if (values[f] < lo) lo = values[f];
+		if (values[f] > hi) hi = values[f];
+	}
+	return { min: round(lo, 6), max: round(hi, 6), mean: round(sum / area, 6) };
+}
+
+// ---- the annotations as the app holds them ---------------------------------------------------------------------------------
+
+/**
+ * app: { session, engine, viewer, view, overlay, update, run }. Defines the annotation operations and returns what
+ * the rest of the app reads: `apply(c)` lays case c's annotations on the viewer, `fields(c)` its fields' keys,
+ * `customValue(c, field, site)` a field's value at a probe site, `paintLabels(ctx, scale)` the labels for the
+ * picture, and `panel`, the dock's Layers tab.
+ */
+export function createAnnotations({ session, engine, viewer, view, overlay, update, run }) {
+	const drawing = new Annotations(viewer, overlay);
+	const cellsKept = new WeakMap();
+	const cellsOf = (result) => cellsKept.get(result) ?? cellsKept.set(result, engine.workingCells(result)).get(result);
+	const lookups = new WeakMap();
+	/** What was last handed to the viewer, so an update that changes nothing hands it nothing. */
+	let pushed = {};
+
+	const caseFor = (case_id) => {
+		const c = case_id === undefined ? session.active : session.byId(case_id);
+		if (!c?.result) throw new Error(case_id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${case_id} has no result yet (${c.status}).`);
+		return c;
+	};
+	const layerOn = (store, name) => store.layers.find((layer) => layer.name === name);
+	const needLayer = (c, name) => {
+		const layer = layerOn(storeOf(c), name);
+		if (!layer) throw new Error(`Case ${c.id} has no layer "${name}". Its layers: ${storeOf(c).layers.map((l) => `"${l.name}"`).join(', ') || 'none'}.`);
+		return layer;
+	};
+	const fieldLayer = (c, key) => storeOf(c).layers.find((layer) => layer.field?.key === key) ?? null;
+	const casesWith = (key) => session.cases.filter((c) => stores.has(c) && fieldLayer(c, key));
+
+	/** Something on case c changed: the viewer, the field list and the dock catch up. */
+	function changed(c, ...parts) {
+		const store = storeOf(c);
+		store.version++;
+		store.paint = null;
+		if (c === session.active) update('viewer', 'dock', ...parts);
+	}
+
+	/** The drawing layer called `name` on case c, made now if there is none (`width` px wide), restyled by `style`. */
+	function drawingLayer(c, name, by, style, width = LINE_PX) {
+		const store = storeOf(c);
+		let layer = layerOn(store, name);
+		if (layer?.kind === 'field') throw new Error(`"${name}" is a field layer on case ${c.id}; draw in a layer of another name.`);
+		if (!layer) {
+			layer = { name, kind: 'drawing', by, visible: true, colour: PALETTE.ink, width, marks: [], paint: null, field: null };
+			store.layers.push(layer);
+		}
+		if (style.colour !== undefined) layer.colour = colourOf('colour', style.colour);
+		if (style.width_px !== undefined) layer.width = widthOf('width_px', style.width_px);
+		return layer;
+	}
+
+	/** Add a mark to a layer of case c and show it; a new layer starts `width` px wide. */
+	function draw(c, args, by, kind, mark, width) {
+		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES[kind]), by, { colour: args.colour, width_px: args.width_px }, width);
+		layer.marks.push(mark);
+		layer.visible = true;
+		changed(c);
+		return layer;
+	}
+
+	// ---- the field shown, through its key ----
+
+	const keyOf = (name) => `custom:${name}`;
+
+	/** Make sure the field `key` is offered while any case has it, at the scale given. */
+	function offerField(key, name, unit, source, start, diverging) {
+		addField(key, { label: name, title: unit ? `${name} (${unit})` : name, symbol: name, tip: source }, { ramps: [start.ramp, ...RAMP_NAMES.filter((r) => r !== start.ramp)], diverging, start });
+		view.maps ??= {};
+		view.maps[key] = { ...start };
+	}
+
+	/** A field no case has any longer stops being offered; a case showing it goes back to pressure. */
+	function withdrawField(key) {
+		if (casesWith(key).length) return;
+		removeField(key);
+		if (view.maps) delete view.maps[key];
+		if (view.field === key) view.field = 'cp';
+	}
+
+	function showField(c, { name, expression, values, unit = '', ramp, min, max }, by) {
+		const label = nameOf(name, undefined);
+		if (label === undefined) throw new Error('name is needed: the field\'s name, as the toolbar shows it.');
+		if ((expression === undefined) === (values === undefined)) throw new Error('Give expression or values, one of them.');
+		const mesh = c.result.mesh;
+		const cells = cellsOf(c.result);
+		const faceCount = cells.areas.length, vertexCount = mesh.positions.length / 3;
+		let faces, vertices;
+		if (expression !== undefined) {
+			faces = evaluate(expression, cells);
+			vertices = toVertices(mesh, cells, faces);
+		} else {
+			if (!ArrayBuffer.isView(values) && !Array.isArray(values)) throw new Error('values must be an array with one number per face or per vertex of the working mesh.');
+			const given = Float32Array.from(values);
+			if (given.length === faceCount) [faces, vertices] = [given, toVertices(mesh, cells, given)];
+			else if (given.length === vertexCount) [faces, vertices] = [toFaces(mesh, given), given];
+			else throw new Error(`values must hold one number per face (${faceCount}) or per vertex (${vertexCount}) of case ${c.id}'s working mesh; got ${given.length}.`);
+		}
+		const bad = faces.reduce((n, v) => n + !Number.isFinite(v), 0);
+		if (bad) throw new Error(`${count(bad)} of ${count(faceCount)} faces have no finite value (a division by zero, a log of a negative). Guard the expression or fill those values.`);
+		const auto = scaleFor(faces);
+		const lo = min === undefined ? auto.lo : finite('min', min);
+		const hi = max === undefined ? auto.hi : finite('max', max);
+		if (!(lo < hi)) throw new Error(`min must be below max; got ${lo} and ${hi}.`);
+		const diverging = lo < 0 && hi > 0;
+		const chosen = ramp === undefined ? (diverging ? 'coolwarm' : 'viridis') : oneOf('ramp', ramp, RAMP_NAMES);
+		const store = storeOf(c);
+		const key = keyOf(label);
+		let layer = layerOn(store, label);
+		if (layer && layer.kind !== 'field') throw new Error(`"${label}" is a drawing layer on case ${c.id}; give the field another name.`);
+		if (!layer) {
+			layer = { name: label, kind: 'field', by, visible: true, colour: PALETTE.ink, width: LINE_PX, marks: [], paint: null, field: null };
+			store.layers.push(layer);
+		}
+		const source = expression !== undefined ? String(expression) : 'From Python';
+		layer.field = { key, unit: String(unit), faces, vertices, source };
+		offerField(key, label, layer.field.unit, source, { ramp: chosen, lo, hi, bands: 0 }, diverging);
+		view.field = key;
+		changed(c, 'toolbar', 'legend', 'markers');
+		return { layer: label, field: key, faces: faceCount, values: statistics(faces, cells.areas), scale: { min: lo, max: hi, ramp: chosen } };
+	}
+
+	// ---- paint ----
+
+	function paintFaces(c, args, by) {
+		const { where, region_id, selection, mask, colours } = args;
+		const sources = [where, region_id, selection || undefined, mask, colours].filter((v) => v !== undefined).length;
+		if (sources !== 1) throw new Error('Say which faces with exactly one of where, region_id, selection, mask or colours.');
+		const cells = cellsOf(c.result);
+		const faces = cells.areas.length;
+		const rgba = new Uint8Array(4 * faces);
+		if (colours !== undefined) {
+			rgba.set(itemColours('colours', colours, faces));
+		} else {
+			let picked;
+			if (where !== undefined) picked = evaluate(where, cells);
+			else if (region_id !== undefined) picked = maskOf(cells, [{ op: 'replace', rule: { kind: 'region', region_id } }], session.regions);
+			else if (selection) {
+				if (!view.selection) throw new Error('Nothing is selected. Select faces first, or give where or region_id.');
+				picked = maskOf(cells, view.selection.terms, session.regions);
+			} else {
+				if (!ArrayBuffer.isView(mask) || mask.length !== faces) throw new Error(`mask must hold one value per face of the working mesh (${faces}); got ${mask?.length ?? JSON.stringify(mask)}.`);
+				picked = mask;
+			}
+			const [r, g, b] = rgbOf(colourOf('colour', args.colour ?? 'orange'));
+			const opacity = args.opacity === undefined ? 1 : finite('opacity', args.opacity);
+			if (opacity <= 0 || opacity > 1) throw new Error(`opacity must be above 0 and at most 1; got ${opacity}.`);
+			for (let f = 0; f < faces; f++) if (picked[f]) rgba.set([r, g, b, Math.round(255 * opacity)], 4 * f);
+		}
+		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES.paint), by, {});
+		if (!layer.paint) layer.paint = rgba;
+		else for (let f = 0; f < faces; f++) if (rgba[4 * f + 3]) layer.paint.set(rgba.subarray(4 * f, 4 * f + 4), 4 * f);
+		layer.visible = true;
+		let painted = 0, area = 0, whole = 0;
+		for (let f = 0; f < faces; f++) {
+			whole += cells.areas[f];
+			if (!rgba[4 * f + 3]) continue;
+			painted++;
+			area += cells.areas[f];
+		}
+		changed(c);
+		return { layer: layer.name, faces: painted, area_m2: round(area, 5), share_of_area: round(area / whole, 5), summed_over: `the ${count(faces)} faces of the working mesh` };
+	}
+
+	// ---- what the viewer draws ----
+
+	function paintOf(c) {
+		const store = storeOf(c);
+		store.paint ??= { value: paintOn(c.result.mesh, cellsOf(c.result), store.layers) };
+		return store.paint.value;
+	}
+
+	/** Lay case c's annotations on the viewer, or none for null; called whenever the view is brought up to date. */
+	function apply(c) {
+		const shown = c?.result ? c : null;
+		const store = shown && stores.get(shown);
+		if (pushed.surface !== viewer.surface) pushed = { surface: viewer.surface };
+		const custom = store ? fieldLayer(shown, view.field)?.field.vertices ?? null : null;
+		if (custom !== pushed.custom) viewer.setCustomField((pushed.custom = custom));
+		const paint = store ? paintOf(shown) : null;
+		if (paint !== pushed.paint) viewer.setPaint((pushed.paint = paint));
+		const marks = store ? `${shown.id}:${store.version}` : null;
+		if (marks !== pushed.marks) {
+			pushed.marks = marks;
+			const layers = store ? store.layers.filter((layer) => layer.kind === 'drawing' && layer.visible) : [];
+			drawing.show(layers.map(({ colour, width, marks }) => ({ colour, width, marks })), shown?.result.mesh ?? null);
+		}
+	}
+
+	/** A field's value on case c at a probe site: that of the working-mesh face nearest the site's point. */
+	function customValue(c, field, site) {
+		const layer = c?.result ? fieldLayer(c, field) : null;
+		if (!layer) return null;
+		const mesh = c.result.mesh;
+		let lookup = lookups.get(mesh);
+		if (!lookup) lookups.set(mesh, (lookup = { grid: new VertexGrid(mesh.positions), faces: new FaceIndex(mesh) }));
+		return layer.field.faces[lookup.faces.faceAt(site.point, lookup.grid.nearest(site.point))];
+	}
+
+	// ---- operations ----
+
+	const caseId = { type: 'integer', description: 'Default the case on screen.' };
+	const layerArg = (kind) => ({ type: 'string', description: `Layer to draw in: made if new, added to if it exists. Default "${DEFAULT_NAMES[kind]}".` });
+	const colourArg = { type: 'string', description: `A colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb". Sets the layer's colour.` };
+	const widthArg = { type: 'number', description: `Line width in px (default ${LINE_PX}). Sets the layer's.` };
+	const pointsArg = (what) => ({ type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 }, description: `${what}, each [x, y, z] in metres.` });
+	const fromPython = (what) => ({ description: `${what}, sent from Python as a typed array (pressure.py); not for typing out.` });
+	const layerSummary = (layer) => {
+		const counts = {};
+		for (const mark of layer.marks) {
+			const n = mark.kind === 'lines' ? mark.starts.length - 1 : mark.kind === 'segments' ? 1 : mark.kind === 'box' || mark.kind === 'plane' ? 1 : mark.points.length / 3;
+			counts[mark.kind] = (counts[mark.kind] ?? 0) + n;
+		}
+		const painted = layer.paint ? layer.paint.reduce((n, v, i) => n + (i % 4 === 3 && v > 0), 0) : 0;
+		return {
+			name: layer.name,
+			kind: layer.kind,
+			made_by: layer.by,
+			visible: layer.kind === 'field' ? view.field === layer.field.key : layer.visible,
+			...(layer.kind === 'field' ? { field: layer.field.key, unit: layer.field.unit, source: layer.field.source } : { colour: layer.colour, width_px: layer.width, marks: counts, ...(painted ? { painted_faces: painted } : {}) }),
+		};
+	};
+
+	defineOperation({
+		name: 'show_field',
+		description: 'Colour the car by a field of your own, shown and offered beside Pressure, Drag and Spread with its own legend, colour scale and probe readout; computed from an expression over the faces of the working mesh, or from an array sent from Python (case.show). Names: cp, sigma, cfd (the reference field), drag (−Cp·nx), x, y, z (face centre, m), nx, ny, nz (outward unit normal), area (m²); functions abs, sqrt, exp, log, log10, sign, min, max, clip; comparisons give 1 or 0. A field of the same name on another car shares its colour scale. Returns its key, the values\' lowest, highest and area-weighted mean, and the scale.',
+		parameters: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', description: 'Short name, as the toolbar and legend show it, e.g. "Spread / |Cp|".' },
+				expression: { type: 'string', description: 'Per face, e.g. "sigma / max(abs(cp), 0.05)".' },
+				values: { type: 'array', items: { type: 'number' }, ...fromPython('One number per face or per vertex of the working mesh') },
+				unit: { type: 'string', description: 'Unit shown in the legend title; empty for none.' },
+				ramp: { type: 'string', enum: RAMP_NAMES, description: 'Colour ramp; default coolwarm for values either side of zero, else viridis.' },
+				min: { type: 'number', description: 'Value at the low end of the scale; default from the values (1st percentile, or symmetric about zero).' },
+				max: { type: 'number', description: 'Value at the high end of the scale.' },
+				case_id: caseId,
+			},
+			required: ['name'],
+			additionalProperties: false,
+		},
+		run: (args, { by }) => showField(caseFor(args.case_id), args, by),
+	});
+
+	defineOperation({
+		name: 'paint_faces',
+		description: 'Paint faces of the working mesh in a colour over the field shown: those where an expression is true (show_field\'s names), a saved region, the selection, or a mask or colours per face sent from Python (case.paint). Painting adds to a layer\'s paint. Returns the faces painted, their area and their share of the car\'s area.',
+		parameters: {
+			type: 'object',
+			properties: {
+				where: { type: 'string', description: 'Faces where this is true, e.g. "cp < -1".' },
+				region_id: { type: 'integer', description: 'A saved region (list_regions).' },
+				selection: { type: 'boolean', description: 'The current selection.' },
+				mask: fromPython('One 0 or 1 per face'),
+				colours: fromPython('RGBA bytes per face; alpha 0 leaves a face unpainted'),
+				colour: { type: 'string', description: `Colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; default orange.` },
+				opacity: { type: 'number', description: 'How strongly the colour covers the field, above 0 to 1 (default 1).' },
+				layer: layerArg('paint'),
+				case_id: caseId,
+			},
+			additionalProperties: false,
+		},
+		run: (args, { by }) => paintFaces(caseFor(args.case_id), args, by),
+	});
+
+	defineOperation({
+		name: 'draw_labels',
+		description: 'Label places on the car: text in a small box beside a dot at each point, kept in place as the camera moves, moved clear of other labels with a leader where needed, and faded where the car hides the point. Batches: many points and texts in one call. Returns the layer and the count.',
+		parameters: {
+			type: 'object',
+			properties: {
+				points: pointsArg('Where each label points'),
+				texts: { type: 'array', items: { type: 'string' }, description: `One text per point, at most ${LABEL_CHARS} characters, e.g. "Cp −2.73".` },
+				offset_px: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Where to put the boxes first, [right, down] in px from their points, with a leader; default beside them.' },
+				layer: layerArg('labels'),
+				colour: colourArg,
+				case_id: caseId,
+			},
+			required: ['points', 'texts'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const points = pointsOf('points', args.points);
+			if (!Array.isArray(args.texts) || args.texts.length !== points.length / 3) throw new Error(`texts must hold one text per point (${points.length / 3}); got ${Array.isArray(args.texts) ? args.texts.length : JSON.stringify(args.texts)}.`);
+			const texts = args.texts.map((t) => String(t).slice(0, LABEL_CHARS));
+			const offset = args.offset_px === undefined ? null : [finite('offset_px[0]', args.offset_px[0]), finite('offset_px[1]', args.offset_px[1])];
+			const layer = draw(c, args, by, 'labels', { kind: 'labels', points, texts, offset });
+			return { layer: layer.name, labels: texts.length };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_points',
+		description: 'Mark points on or around the car with dots, in batches of any size. Returns the layer and the count.',
+		parameters: {
+			type: 'object',
+			properties: {
+				points: pointsArg('The points'),
+				size_px: { type: 'number', description: `Dot diameter in px (default ${POINT_PX}).` },
+				colours: fromPython('RGBA bytes per point'),
+				layer: layerArg('points'),
+				colour: colourArg,
+				case_id: caseId,
+			},
+			required: ['points'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const points = pointsOf('points', args.points);
+			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
+			const layer = draw(c, args, by, 'points', { kind: 'points', points, size: args.size_px === undefined ? POINT_PX : widthOf('size_px', args.size_px), colours });
+			return { layer: layer.name, points: points.length / 3 };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_lines',
+		description: 'Draw lines through points, on or off the surface: one polyline or many in one call, straight between consecutive points. Returns the layer and the count.',
+		parameters: {
+			type: 'object',
+			properties: {
+				lines: { type: 'array', items: pointsArg('A polyline\'s points'), description: 'Polylines, each a list of [x, y, z] in metres (from Python, each may be a typed array).' },
+				closed: { type: 'boolean', description: 'Join each polyline\'s last point to its first.' },
+				layer: layerArg('lines'),
+				colour: colourArg,
+				width_px: widthArg,
+				case_id: caseId,
+			},
+			required: ['lines'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			if (!Array.isArray(args.lines) || args.lines.length === 0) throw new Error('lines must be a list of polylines, each a list of points [x, y, z].');
+			const polylines = args.lines.map((line, i) => pointsOf(`lines[${i}]`, line));
+			const starts = new Uint32Array(polylines.length + 1);
+			polylines.forEach((line, i) => (starts[i + 1] = starts[i] + line.length / 3));
+			const points = new Float32Array(3 * starts.at(-1));
+			polylines.forEach((line, i) => points.set(line, 3 * starts[i]));
+			const layer = draw(c, args, by, 'lines', { kind: 'lines', points, starts, closed: Boolean(args.closed) });
+			return { layer: layer.name, lines: polylines.length };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_arrows',
+		description: 'Draw arrows from points along vectors, vector × scale long in metres: a vector plot of thousands in one call. With no scale the longest arrow is drawn 6 % of the car\'s length. Returns the layer, the count, the scale used and the longest arrow in metres.',
+		parameters: {
+			type: 'object',
+			properties: {
+				points: pointsArg('Where each arrow starts'),
+				vectors: pointsArg('Each arrow\'s direction and size'),
+				scale: { type: 'number', description: 'Metres drawn per unit of vector.' },
+				colours: fromPython('RGBA bytes per arrow'),
+				layer: layerArg('arrows'),
+				colour: colourArg,
+				width_px: widthArg,
+				case_id: caseId,
+			},
+			required: ['points', 'vectors'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const points = pointsOf('points', args.points);
+			const vectors = pointsOf('vectors', args.vectors);
+			if (vectors.length !== points.length) throw new Error(`vectors must hold one vector per point (${points.length / 3}); got ${vectors.length / 3}.`);
+			let longest = 0;
+			for (let i = 0; i < vectors.length; i += 3) longest = Math.max(longest, Math.hypot(vectors[i], vectors[i + 1], vectors[i + 2]));
+			if (!(longest > 0)) throw new Error('Every vector is zero; there is nothing to draw.');
+			const scale = args.scale === undefined ? (ARROW_SHARE * c.result.geometry.length) / longest : finite('scale', args.scale);
+			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
+			const layer = draw(c, args, by, 'arrows', { kind: 'arrows', points, vectors: vectors.map((v) => v * scale), colours });
+			return { layer: layer.name, arrows: points.length / 3, scale: round(scale, 8), longest_m: round(longest * scale, 4) };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_outline',
+		description: 'Outline a saved region, or the current selection, on the car: the edges where its faces meet the rest. Returns the layer, the region\'s face count and area.',
+		parameters: {
+			type: 'object',
+			properties: { region_id: { type: 'integer', description: 'A saved region (list_regions); default the selection.' }, layer: layerArg('outline'), colour: colourArg, width_px: widthArg, case_id: caseId },
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const cells = cellsOf(c.result);
+			let terms;
+			if (args.region_id !== undefined) terms = [{ op: 'replace', rule: { kind: 'region', region_id: args.region_id } }];
+			else if (view.selection) terms = view.selection.terms;
+			else throw new Error('Nothing is selected. Give region_id, or select faces first.');
+			const mask = maskOf(cells, terms, session.regions);
+			let faces = 0, area = 0;
+			for (let f = 0; f < mask.length; f++) if (mask[f]) faces++, (area += cells.areas[f]);
+			if (faces === 0) throw new Error('The region picks no faces of this car; there is no outline.');
+			const { a, b } = outlineOf(c.result.mesh, mask);
+			const layer = draw(c, args, by, 'outline', { kind: 'segments', a, b }, OUTLINE_PX);
+			return { layer: layer.name, faces, area_m2: round(area, 5), edges: a.length / 3 };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_box',
+		description: 'Draw a box with its edges along the axes, from its lowest to its highest corner, faces lightly washed: for a reference volume or a part of the car. Returns the layer.',
+		parameters: {
+			type: 'object',
+			properties: { min: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Lowest corner [x, y, z] in metres.' }, max: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Highest corner [x, y, z] in metres.' }, layer: layerArg('box'), colour: colourArg, width_px: widthArg, case_id: caseId },
+			required: ['min', 'max'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const lo = triple('min', args.min), hi = triple('max', args.max);
+			if (!lo.every((v, k) => v < hi[k])) throw new Error(`min must be below max on every axis; got ${JSON.stringify(lo)} and ${JSON.stringify(hi)}.`);
+			return { layer: draw(c, args, by, 'box', { kind: 'box', min: [...lo], max: [...hi] }).name };
+		},
+	});
+
+	defineOperation({
+		name: 'draw_plane',
+		description: 'Draw a rectangle of a plane through a point, square to a normal, lightly washed: for a reference plane, a cut, a ground line. Returns the layer.',
+		parameters: {
+			type: 'object',
+			properties: {
+				point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Its centre [x, y, z] in metres.' },
+				normal: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Its normal [x, y, z].' },
+				size_m: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Its sides in metres, the first along the frame\'s axis the normal points least along; default the car\'s length both ways.' },
+				layer: layerArg('plane'), colour: colourArg, width_px: widthArg, case_id: caseId,
+			},
+			required: ['point', 'normal'],
+			additionalProperties: false,
+		},
+		run(args, { by }) {
+			const c = caseFor(args.case_id);
+			const normal = triple('normal', args.normal);
+			if (Math.hypot(...normal) === 0) throw new Error('normal must not be zero.');
+			const length = c.result.geometry.length;
+			const size = args.size_m === undefined ? [length, length] : [finite('size_m[0]', args.size_m[0]), finite('size_m[1]', args.size_m[1])];
+			return { layer: draw(c, args, by, 'plane', { kind: 'plane', point: [...triple('point', args.point)], normal: [...normal], size }).name };
+		},
+	});
+
+	defineOperation({
+		name: 'list_layers',
+		description: 'The layers on a car, in drawing order: each one\'s name, kind (field or drawing), who made it, whether it shows, and its colour, width, marks and painted faces or its field.',
+		parameters: { type: 'object', properties: { case_id: caseId }, additionalProperties: false },
+		run({ case_id }) {
+			const c = caseFor(case_id);
+			return { case_id: c.id, layers: storeOf(c).layers.map(layerSummary) };
+		},
+	});
+
+	defineOperation({
+		name: 'set_layer',
+		description: 'Show, hide, rename or restyle a layer. Showing a field layer colours the car by its field; hiding it goes back to pressure.',
+		parameters: {
+			type: 'object',
+			properties: {
+				layer: { type: 'string', description: 'The layer\'s name.' },
+				visible: { type: 'boolean' },
+				name: { type: 'string', description: 'A new name.' },
+				colour: colourArg,
+				width_px: widthArg,
+				case_id: caseId,
+			},
+			required: ['layer'],
+			additionalProperties: false,
+		},
+		run({ layer: name, visible, name: rename, colour, width_px, case_id }) {
+			const c = caseFor(case_id);
+			const layer = needLayer(c, nameOf(name));
+			const store = storeOf(c);
+			if (rename !== undefined) {
+				const next = nameOf(rename);
+				if (next !== layer.name && layerOn(store, next)) throw new Error(`Case ${c.id} already has a layer "${next}".`);
+				if (layer.kind === 'field' && next !== layer.name) {
+					const old = layer.field.key;
+					const key = keyOf(next);
+					const map = view.maps?.[old];
+					layer.name = next;
+					layer.field.key = key;
+					offerField(key, next, layer.field.unit, layer.field.source, MAPS[old].start, MAPS[old].diverging);
+					if (map) view.maps[key] = map;
+					if (view.field === old) view.field = key;
+					withdrawField(old);
+				}
+				layer.name = next;
+			}
+			if (colour !== undefined || width_px !== undefined) {
+				if (layer.kind === 'field') throw new Error(`"${layer.name}" is a field; change its colours with set_colour_scale.`);
+				if (colour !== undefined) layer.colour = colourOf('colour', colour);
+				if (width_px !== undefined) layer.width = widthOf('width_px', width_px);
+			}
+			if (visible !== undefined) {
+				if (layer.kind === 'field') {
+					if (visible) view.field = layer.field.key;
+					else if (view.field === layer.field.key) view.field = 'cp';
+				} else {
+					layer.visible = Boolean(visible);
+				}
+			}
+			changed(c, 'toolbar', 'legend', 'markers');
+			return layerSummary(layer);
+		},
+	});
+
+	/** The layers a removal takes: the one named, or with none named every layer the assistant made. */
+	const removing = (c, name) => {
+		const layers = storeOf(c).layers;
+		return name === undefined ? layers.filter((layer) => layer.by === 'assistant') : layers.filter((layer) => layer.name === name);
+	};
+
+	defineOperation({
+		name: 'remove_layer',
+		description: 'Remove a layer from a car, or with no layer named every layer the assistant made on it. Removing a layer the engineer made asks them first. Returns the names removed.',
+		parameters: { type: 'object', properties: { layer: { type: 'string', description: 'The layer\'s name; default every layer the assistant made.' }, case_id: caseId }, additionalProperties: false },
+		confirm({ layer, case_id }, { session: s }) {
+			const c = case_id === undefined ? s.active : s.cases.find((each) => each.id === case_id);
+			return Boolean(c && stores.has(c) && removing(c, layer).some((each) => each.by === 'engineer'));
+		},
+		run({ layer: name, case_id }) {
+			const c = caseFor(case_id);
+			if (name !== undefined) needLayer(c, nameOf(name));
+			const gone = removing(c, name);
+			const store = storeOf(c);
+			store.layers = store.layers.filter((layer) => !gone.includes(layer));
+			for (const layer of gone) if (layer.kind === 'field') withdrawField(layer.field.key);
+			changed(c, 'toolbar', 'legend', 'markers');
+			return { case_id: c.id, removed: gone.map((layer) => layer.name) };
+		},
+	});
+
+	const panel = createLayersPanel({ session, viewer, view, overlay, run, storeOf, stores, layerSummary });
+
+	return {
+		apply,
+		fields: (c) => (c && stores.has(c) ? storeOf(c).layers.filter((layer) => layer.kind === 'field').map((layer) => layer.field.key) : []),
+		customValue,
+		paintLabels: (ctx, scale) => drawing.paintLabels(ctx, scale),
+		panel,
+	};
+}
+
+// ---- the dock's Layers tab -----------------------------------------------------------------------------------------------
+
+const EYE = 'M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8zM8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 1 0 0-3.6';
+const EYE_SHUT = `${EYE}M2.5 13.5 13.5 2.5`;
+const LABEL = 'M2 4h7.5l4.5 4-4.5 4H2zM5 8h.01';
+const glyph = (d) => s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d }));
+
+/**
+ * The Layers tab: each layer of the case shown with its visibility, colour, name, what it holds and who made it, and
+ * a Label tool with which the engineer clicks the car and types a label.
+ */
+function createLayersPanel({ session, viewer, view, overlay, run, storeOf, stores, layerSummary }) {
+	const el = h('div', { class: 'layers' });
+	const labelTool = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', title: 'Click the car to label a place', onclick: () => setLabelling(!labelling) }, glyph(LABEL), 'Label');
+	const clear = h('button', { type: 'button', class: 'tool', title: 'Remove every layer on this car', onclick: () => clearAll() }, icon('close'), 'Clear');
+	const controls = h('div', { class: 'layers-controls' }, labelTool, clear);
+	const entry = h('input', { class: 'layer-entry', type: 'text', maxlength: LABEL_CHARS, placeholder: 'Label', 'aria-label': 'Label text', spellcheck: 'false', hidden: true });
+	overlay.append(entry);
+	let labelling = false;
+	/** Where the label being typed points. */
+	let pending = null;
+
+	const active = () => (session.active?.result ? session.active : null);
+	const layersOf = (c) => (c && stores.has(c) ? storeOf(c).layers : []);
+
+	function setLabelling(on) {
+		labelling = on;
+		labelTool.setAttribute('aria-pressed', String(on));
+		viewer.setTool(on ? { down() {}, move() {}, up: (at) => place(at) } : null);
+		if (!on) closeEntry();
+	}
+
+	async function place({ clientX, clientY }) {
+		const hit = await viewer.pick(clientX, clientY);
+		if (!hit || !labelling) return;
+		const r = overlay.getBoundingClientRect();
+		pending = { point: hit.point, c: active() };
+		entry.value = '';
+		entry.hidden = false;
+		entry.style.transform = `translate(${Math.round(clientX - r.left + 10)}px, ${Math.round(clientY - r.top - 12)}px)`;
+		entry.focus();
+	}
+
+	function closeEntry() {
+		pending = null;
+		entry.hidden = true;
+	}
+
+	entry.addEventListener('keydown', (e) => {
+		if (e.key === 'Escape') return closeEntry();
+		if (e.key !== 'Enter') return;
+		const text = entry.value.trim();
+		const at = pending;
+		closeEntry();
+		if (text && at?.c === active()) run('draw_labels', { case_id: at.c.id, layer: 'Notes', points: [at.point.map((v) => round(v, 5))], texts: [text] });
+	});
+	entry.addEventListener('blur', closeEntry);
+
+	function clearAll() {
+		const c = active();
+		for (const layer of [...layersOf(c)]) run('remove_layer', { case_id: c.id, layer: layer.name });
+	}
+
+	function rename(c, layer, cell) {
+		const input = h('input', { class: 'layer-rename', value: layer.name, 'aria-label': `Rename ${layer.name}`, spellcheck: 'false' });
+		const done = (keep) => {
+			const next = input.value.trim();
+			if (keep && next && next !== layer.name) run('set_layer', { case_id: c.id, layer: layer.name, name: next }).catch(() => render());
+			else render();
+		};
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') done(true);
+			if (e.key === 'Escape') done(false);
+		});
+		input.addEventListener('blur', () => done(true));
+		cell.replaceChildren(input);
+		input.select();
+	}
+
+	function swatch(c, layer) {
+		if (layer.kind === 'field') {
+			const map = view.maps?.[layer.field.key];
+			return h('span', { class: 'layer-swatch', style: map ? `background:${rampCss(map.ramp)}` : null });
+		}
+		const button = h('button', { type: 'button', class: 'layer-swatch', title: 'Colour', style: `background:${layer.colour}` });
+		const choices = h('div', { class: 'layer-colours' }, Object.entries(PALETTE).map(([name, hex]) => h('button', {
+			type: 'button', class: 'layer-colour', title: name, style: `background:${hex}`, 'aria-pressed': String(hex === layer.colour),
+			onclick: () => {
+				colours.close();
+				run('set_layer', { case_id: c.id, layer: layer.name, colour: name });
+			},
+		})));
+		const colours = menu(button, choices);
+		return colours.el;
+	}
+
+	/** What a layer holds, in a few words. */
+	function holds(layer) {
+		if (layer.kind === 'field') return layer.field.unit ? `Field, ${layer.field.unit}` : 'Field';
+		const { marks = {}, painted_faces: painted } = layerSummary(layer);
+		const parts = Object.entries(marks).map(([kind, n]) => `${count(n)} ${KIND_WORDS[kind][n === 1 ? 0 : 1]}`);
+		if (painted) parts.unshift(`${count(painted)} faces painted`);
+		return parts.join(' · ');
+	}
+
+	function render() {
+		const c = active();
+		const layers = layersOf(c);
+		clear.disabled = layers.length === 0;
+		if (!c || layers.length === 0) {
+			el.replaceChildren(h('p', { class: 'plot-empty' }, 'No layers'));
+			return;
+		}
+		el.replaceChildren(h('table', { class: 'layers-table' }, h('tbody', {}, layers.map((layer) => {
+			const shown = layer.kind === 'field' ? view.field === layer.field.key : layer.visible;
+			const name = h('td', { class: 'layer-name', title: 'Double-click to rename' }, layer.name);
+			name.addEventListener('dblclick', () => rename(c, layer, name));
+			return h('tr', { 'data-layer': layer.name },
+				h('td', {}, h('button', { type: 'button', class: 'icon-button layer-eye', 'aria-pressed': String(shown), title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`, onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }) }, glyph(shown ? EYE : EYE_SHUT))),
+				h('td', {}, swatch(c, layer)),
+				name,
+				h('td', { class: 'layer-holds' }, holds(layer)),
+				h('td', { class: 'layer-by' }, layer.by === 'assistant' ? h('span', { title: 'Made by the assistant' }, icon('assistant')) : null),
+				h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove ${layer.name}`, onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }) }, icon('close'))));
+		}))));
+	}
+
+	return { el, controls, render, count: () => layersOf(active()).length, stop: () => labelling && setLabelling(false) };
+}

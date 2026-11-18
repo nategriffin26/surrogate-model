@@ -35,14 +35,19 @@ export class Session extends EventTarget {
 			field: 'cp',
 			maps: null,
 			display: { edges: false, ground: true },
-			section: { on: true, axis: 1, offset: 0, clip: 0 },
+			/** The live section; the sections kept in the plot beside it; the plot against metres or a fraction of the car; the car shown or all. */
+			section: { on: true, axis: 1, offset: 0, clip: 0, kept: [], abscissa: 'metres', cars: 'shown' },
 			dock: 'section',
 			dockCollapsed: false,
 			/** The faces picked out, as rules ({terms}: see regions.js), so every car shown picks the same part; or null. */
 			selection: null,
+			/** The probe set in use: the one clicks add to and the probe table shows; or null. */
+			probeSet: null,
 		};
 		/** Saved regions, {id, name, terms}, which any car can be measured on. */
 		this.regions = [];
+		/** Probe sets, {id, name, probes: [{n, point, label?}], next}, which every car reads at its own cells. */
+		this.probeSets = [];
 		engine.device.then((device) => {
 			this.device = device;
 			this.notify(null, 'device');
@@ -89,13 +94,12 @@ export class Session extends EventTarget {
 			result: null,
 			surface: null,
 			full: null,
-			/** Probes pinned on this car, numbered from 1. */
-			probes: [],
-			nextProbe: 1,
+			/** Each probe's site on this car, by probe, cached by the probes. */
+			sites: null,
 			/** Whether its field has made its entrance. */
 			arrived: false,
-			/** The section cut through its working mesh, cached by the section tool. */
-			cut: null,
+			/** Section cuts through its working mesh, by plane, cached by the section tool. */
+			cuts: null,
 			abort: new AbortController(),
 		};
 	}

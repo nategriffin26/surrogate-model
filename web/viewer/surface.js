@@ -66,9 +66,9 @@ class Layer {
 		}
 	}
 
-	/** Whether every array the field needs is on the GPU. */
+	/** Whether every array the field needs is on the GPU; a field the viewer does not know is drawn from `custom`. */
 	has(field) {
-		return NEEDS[field].every((name) => this.geometry.getAttribute(name));
+		return (NEEDS[field] ?? ['custom']).every((name) => this.geometry.getAttribute(name));
 	}
 
 	/** Queue an array for an attribute (or the index); a newer array replaces one still on its way and keeps its buffer. */

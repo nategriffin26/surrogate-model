@@ -3,7 +3,7 @@
 
 import { VIEWS } from '../viewer/viewer.js';
 import { finite, oneOf, round, triple } from './checks.js';
-import { FIELDS, MAPS, RESULT_FIELDS, defaultMaps } from './fields.js';
+import { FIELDS, MAPS, defaultMaps, offeredFields } from './fields.js';
 import { bandCount } from './legend.js';
 import { defineOperation } from './operations.js';
 
@@ -30,16 +30,19 @@ export function defineDisplayOperations({ session, viewer, update }) {
 
 	defineOperation({
 		name: 'set_field',
-		description: 'Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model\'s networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model\'s calibration. Section plots and probe readouts follow the field. Returns the field and its colour scale.',
-		parameters: {
-			type: 'object',
-			properties: { field: { type: 'string', enum: RESULT_FIELDS, description: 'Field to colour the car by.' } },
-			required: ['field'],
-			additionalProperties: false,
+		description: 'Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model\'s networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model\'s calibration. Any other field is one added to the car (an annotation\'s array). Section plots and probe readouts follow the field. Returns the field and its colour scale.',
+		// The enum follows the fields added at run time.
+		get parameters() {
+			return {
+				type: 'object',
+				properties: { field: { type: 'string', enum: offeredFields(), description: 'Field to colour the car by.' } },
+				required: ['field'],
+				additionalProperties: false,
+			};
 		},
 		run({ field }) {
 			shown(session);
-			view.field = oneOf('field', field, RESULT_FIELDS);
+			view.field = oneOf('field', field, offeredFields());
 			update('toolbar', 'legend', 'viewer', 'dock', 'markers');
 			return mapResult(field, view.maps[FIELDS[field].map]);
 		},
@@ -48,30 +51,33 @@ export function defineDisplayOperations({ session, viewer, update }) {
 	defineOperation({
 		name: 'set_colour_scale',
 		description: 'Change the colour scale of a field: its range, its colour ramp, whether it is split into discrete bands, or reset it to the default range. Pressure starts at a fixed −0.9 to 0.9 so cars compare on one scale; the other fields start at 98 % of the surface\'s values. Every open case is drawn on the same scale. Returns the scale as it now is.',
-		parameters: {
-			type: 'object',
-			properties: {
-				field: { type: 'string', enum: RESULT_FIELDS, description: 'Field whose scale to change; default the field shown.' },
-				min: { type: 'number', description: 'Value at the low end of the ramp, in the field\'s units (Cp is dimensionless).' },
-				max: { type: 'number', description: 'Value at the high end of the ramp.' },
-				ramp: { type: 'string', description: 'Colour ramp: for cp coolwarm, turbo or viridis; for drag tealorange, coolwarm or brownteal; for sigma purples, viridis or inferno.' },
-				banded: { type: 'boolean', description: 'Split the ramp into discrete bands at round values.' },
-				reset: { type: 'boolean', description: 'Back to the default range, before min and max are applied.' },
-			},
-			additionalProperties: false,
+		get parameters() {
+			return {
+				type: 'object',
+				properties: {
+					field: { type: 'string', enum: offeredFields(), description: 'Field whose scale to change; default the field shown.' },
+					min: { type: 'number', description: 'Value at the low end of the ramp, in the field\'s units (Cp is dimensionless).' },
+					max: { type: 'number', description: 'Value at the high end of the ramp.' },
+					ramp: { type: 'string', description: 'Colour ramp: for cp coolwarm, turbo or viridis; for drag tealorange, coolwarm or brownteal; for sigma purples, viridis or inferno; for an added field, the ones it was added with.' },
+					banded: { type: 'boolean', description: 'Split the ramp into discrete bands at round values.' },
+					reset: { type: 'boolean', description: 'Back to the default range, before min and max are applied.' },
+				},
+				additionalProperties: false,
+			};
 		},
 		run({ field = view.field, min, max, ramp, banded, reset }) {
 			const c = shown(session);
-			oneOf('field', field, RESULT_FIELDS);
+			oneOf('field', field, offeredFields());
 			const name = FIELDS[field].map;
-			if (reset) view.maps[name] = { ...defaultMaps(c.result.mesh)[name], ramp: view.maps[name].ramp, banded: view.maps[name].banded };
+			// An added field starts at the scale it was added with; the model's start from the surface's values.
+			if (reset) view.maps[name] = { ...(MAPS[name].start ?? defaultMaps(c.result.mesh)[name]), ramp: view.maps[name].ramp, banded: view.maps[name].banded };
 			const map = view.maps[name];
 			const lo = min === undefined ? map.lo : finite('min', min);
 			const hi = max === undefined ? map.hi : finite('max', max);
 			if (!(lo < hi)) throw new Error(`min must be below max; got min ${lo} and max ${hi}.`);
 			if (ramp !== undefined) oneOf('ramp', ramp, MAPS[name].ramps);
 			Object.assign(map, { lo, hi }, ramp === undefined ? {} : { ramp }, banded === undefined ? {} : { banded: Boolean(banded) });
-			update('legend', 'toolbar', 'viewer');
+			update('legend', 'toolbar', 'viewer', 'dock');
 			return mapResult(field, map);
 		},
 	});

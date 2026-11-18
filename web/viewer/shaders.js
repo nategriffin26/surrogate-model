@@ -1,5 +1,8 @@
 // GLSL for the car, its mesh edges, picking and the ground. Fields are per-vertex attributes; every colour
-// mapping, the section line, clipping and the arrival of a field are uniforms, so none of them touches a buffer.
+// mapping, the section lines, clipping and the arrival of a field are uniforms, so none of them touches a buffer.
+
+/** Sections kept in the plot beside the live one, each drawn on the car in its plot colour. */
+export const MAX_KEPT = 6;
 
 /** Shared by the car and the picking pass: clip against the section plane. */
 const CLIP = /* glsl */ `
@@ -14,10 +17,16 @@ attribute float cp;
 attribute float sigma;
 attribute float cfd;
 attribute float selected;    // share of the area around the vertex inside the selection (working mesh only)
+attribute float custom;      // a field the app supplies, such as an annotation's array (working mesh only)
+attribute vec4 paint;        // a colour painted on the car, alpha its strength (working mesh only)
+attribute float paintCover;  // share of the area around the vertex the paint covers (working mesh only)
 varying float vCp;
 varying float vSigma;
 varying float vCfd;
 varying float vSelected;
+varying float vCustom;
+varying vec4 vPaint;
+varying float vPaintCover;
 varying vec3 vWorld;
 varying vec3 vNormal;
 void main() {
@@ -25,6 +34,9 @@ void main() {
 	vSigma = sigma;
 	vCfd = cfd;
 	vSelected = selected;
+	vCustom = custom;
+	vPaint = paint;
+	vPaintCover = paintCover;
 	vec4 world = modelMatrix * vec4(position, 1.0);
 	vWorld = world.xyz;
 	vNormal = normal;
@@ -47,7 +59,7 @@ vec3 waitingClay(float x) {
 /** Uniforms, inputs and functions of the car's fragment shaders: the colour of a field, and its shading. */
 const CAR_COMMON = /* glsl */ `
 uniform sampler2D uRamp;
-uniform int uField;          // 0 cp, 1 cfd, 2 cp - cfd, 3 sigma, 4 -cp nx, 5 none
+uniform int uField;          // 0 cp, 1 cfd, 2 cp - cfd, 3 sigma, 4 -cp nx, 5 none, 6 the custom field
 uniform vec4 uMap;           // lo, hi, bands (0 = continuous), ramp row
 uniform vec3 uClay;
 uniform vec3 uInk;
@@ -58,8 +70,13 @@ uniform float uGloss;
 uniform float uZmin;
 uniform float uOrtho;
 uniform vec3 uViewDir;
-uniform float uSection;      // 1 draws the section line
+uniform float uSection;      // 1 draws the section line, and the kept sections' lines
+#define MAX_KEPT ${MAX_KEPT}
+uniform vec4 uKept[MAX_KEPT];        // kept sections: unit normal, offset
+uniform vec3 uKeptColour[MAX_KEPT];
+uniform int uKeptCount;
 uniform float uSelection;    // 1 shows the selection: faces outside it fade toward clay, its edge drawn in the accent
+uniform float uPaint;        // 1 shows paint on the car
 uniform vec4 uArrival;       // x of the front, front width, streak depth, 1 while the field is arriving
 uniform float uFade;         // 0..1 fade from clay, used instead of the front under reduced motion
 uniform vec4 uWait;          // while the networks predict: x of the predicted share's front, x of the nose, car length, 1
@@ -70,6 +87,9 @@ varying float vCp;
 varying float vSigma;
 varying float vCfd;
 varying float vSelected;
+varying float vCustom;
+varying vec4 vPaint;
+varying float vPaintCover;
 varying vec3 vWorld;
 varying vec3 vNormal;
 
@@ -78,6 +98,7 @@ float fieldValue() {
 	if (uField == 1) return vCfd;
 	if (uField == 2) return vCp - vCfd;
 	if (uField == 3) return vSigma;
+	if (uField == 6) return vCustom;
 	return -vCp * vNormal.x;
 }
 
@@ -131,7 +152,13 @@ vec3 shaded(vec3 base) {
 	colour += uGloss * 0.35 * pow(max(dot(N, H), 0.0), 80.0);
 	// The inside of the shell, seen through a clip, reads darker than the outside.
 	if (!gl_FrontFacing) colour *= 0.62;
-	if (uSection > 0.5) colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
+	if (uSection > 0.5) {
+		colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
+		for (int i = 0; i < MAX_KEPT; i++) {
+			if (i >= uKeptCount) break;
+			colour = mix(colour, uKeptColour[i], 0.9 * lineAt(dot(vWorld, uKept[i].xyz) - uKept[i].w, 2.0));
+		}
+	}
 	return colour;
 }`;
 
@@ -148,6 +175,8 @@ void main() {
 		base = mix(clay, base, behind) + 0.12 * crest * (1.0 - behind * 0.5);
 	}
 	if (uFade < 1.0) base = mix(clay, base, uFade);
+	// Paint arrives as sRGB bytes, like the theme's colours; the car is shaded in linear light.
+	if (uPaint > 0.5) base = mix(base, sRGBTransferEOTF(vec4(vPaint.rgb, 1.0)).rgb, vPaint.a * smoothstep(0.3, 0.7, vPaintCover));
 	if (uSelection > 0.5) {
 		base = mix(mix(base, uClay, 0.8), base, smoothstep(0.3, 0.7, vSelected));
 		base = mix(base, uAccent, 0.9 * lineAt(vSelected - 0.5, 1.5));

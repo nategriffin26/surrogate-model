@@ -34,11 +34,11 @@ const PYTHON_TOOL = {
 
 /**
  * @param {HTMLElement} host  The panel's element; mounted once, kept while hidden.
- * @param {{ session: import('../app/session.js').Session, engine: import('../engine/result.js').Engine,
+ * @param {{ session: import('../app/session.js').Session, engine: import('../engine/result.js').Engine, viewer: object,
  *   operations: Map<string, import('../app/operations.js').Operation>, runOperation: (name: string, args: object) => Promise<object>,
  *   onOperation: Function, workspace: import('../app/workspace.js').Workspace, close: () => void }} tool
  */
-export async function mountAssistant(host, { session, engine, operations, runOperation, onOperation, workspace, close }) {
+export async function mountAssistant(host, { session, engine, viewer, operations, runOperation, onOperation, workspace, close }) {
 	await stylesheet();
 
 	/** 'checking' | 'unavailable' | 'unreachable' | 'idle' | 'running' */
@@ -98,7 +98,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		if (next === 'unavailable') {
 			put(log, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant is not available in this copy.'),
-				h('p', {}, 'To use it here, set ', h('code', {}, 'OPENROUTER_API_KEY'), ' in ', h('code', {}, 'local/secrets/assistant.env'), ' and restart ', h('code', {}, 'uv run surrogate-app'), '.')));
+				h('p', {}, 'To use it here, set ', h('code', {}, 'OPENROUTER_API_KEY'), ' in ', h('code', {}, 'local/secrets/assistant.env'), ' and restart ', h('code', {}, 'uv run surrogate app'), '.')));
 		} else if (next === 'unreachable') {
 			put(log, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
@@ -208,7 +208,8 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		const operation = operations.get(name);
 		if (!operation) return { error: `There is no operation named ${name}.` };
 		const sub = within?.sub(name, args);
-		if (operation.confirm && !(await approve(`${sentence(name)}${subject(args)}?`, sentence(name)))) {
+		const asks = typeof operation.confirm === 'function' ? operation.confirm(args, { session, viewer, engine, by: 'assistant' }) : operation.confirm;
+		if (asks && !(await approve(`${sentence(name)}${subject(args)}?`, sentence(name)))) {
 			sub?.finish('Declined');
 			return { error: 'The engineer declined.' };
 		}
@@ -392,7 +393,7 @@ const sentence = (name) => name.charAt(0).toUpperCase() + name.slice(1).replaceA
 
 /** The thing an operation acts on, for its approval question. */
 function subject(args) {
-	const value = args.path ?? args.from ?? args.export ?? args.example ?? (args.case_id != null ? `case ${args.case_id}` : null);
+	const value = args.path ?? args.from ?? args.export ?? args.example ?? args.layer ?? (args.case_id != null ? `case ${args.case_id}` : null);
 	return value != null ? ` ${value}` : '';
 }
 
@@ -417,6 +418,8 @@ function summary(args, schema = {}) {
 
 function rounded(value) {
 	if (typeof value === 'number') return String(Math.round(value * 1000) / 1000);
+	// Arrays sent from Python arrive whole; their size says enough in one line.
+	if (ArrayBuffer.isView(value)) return `${value.length.toLocaleString('en')} values`;
 	if (Array.isArray(value)) return `[${value.map(rounded).join(', ')}]`;
 	if (value !== null && typeof value === 'object') return `{${Object.entries(value).map(([key, part]) => `${key} ${rounded(part)}`).join(', ')}}`;
 	return String(value);

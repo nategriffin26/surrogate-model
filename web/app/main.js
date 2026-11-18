@@ -9,6 +9,7 @@
 import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
 import { VIEWS, Viewer } from '../viewer/viewer.js';
+import { createAnnotations } from './annotations.js';
 import { defineCaseOperations } from './cases.js';
 import { createSectionTool, defineSectionOperations } from './cut.js';
 import { defineDisplayOperations } from './display.js';
@@ -17,6 +18,7 @@ import { h } from './dom.js';
 import { EXPORTS, baseName, defineExport, defineExportOperations, pictureOf } from './export.js';
 import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
 import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
+import { createHistogramPanel, defineHistogramOperations } from './histogram.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
 import { menu } from './menu.js';
@@ -69,9 +71,12 @@ function mapFor(field) {
 	return { ...map, bands: bandCount(map) };
 }
 
+/** The field the car shows: the view's, when the case on screen has it, else pressure. */
+const shownField = () => (RESULT_FIELDS.includes(view.field) || annotations.fields(active()).includes(view.field) ? view.field : 'cp');
+
 /** The panes the car is drawn in: the shared field, once the case on screen has one. */
 function panes() {
-	const field = active()?.result ? view.field : 'none';
+	const field = active()?.result ? shownField() : 'none';
 	return [{ field, map: mapFor(field) }];
 }
 
@@ -86,6 +91,8 @@ defineCaseOperations(tool);
 defineSectionOperations(tool);
 defineProbeOperations(tool);
 const regions = createRegions(tool);
+const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
+defineHistogramOperations({ session, regions });
 defineExportOperations(tool);
 const files = defineFileOperations(tool);
 
@@ -95,8 +102,8 @@ defineExport({
 	format: 'PNG',
 	title: 'The view as drawn, with the colour legend',
 	unavailable: () => null,
-	make: (c) => pictureOf(c, viewer, { field: view.field, map: view.maps[FIELDS[view.field].map] }),
-	fileName: (c) => `${baseName(c)}-${view.field}.png`,
+	make: (c) => pictureOf(c, viewer, { field: shownField(), map: view.maps[FIELDS[shownField()].map], marks: (ctx, scale) => annotations.paintLabels(ctx, scale) }),
+	fileName: (c) => `${baseName(c)}-${shownField().replace(/^custom:/, '')}.png`,
 });
 defineExport({
 	name: 'surface',
@@ -147,20 +154,26 @@ const legend = createLegend({
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, engine, viewer, active, view, run });
-const section = createSectionTool({ host: overlay, viewport, viewer, active, view, run });
+const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, customValue: (c, field, site) => annotations.customValue(c, field, site) });
+const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
 const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
+/** The dock's panel tabs; each one's `stop` undoes what it shows on the car when another tab is chosen. */
+const panels = [
+	{ name: 'regions', label: 'Regions', ...regionsPanel },
+	{ name: 'histogram', label: 'Histogram', ...createHistogramPanel({ session, regions, active: described, run }) },
+	{ name: 'layers', label: 'Layers', ...annotations.panel },
+];
 
 const dock = createDock({
 	section,
 	probes,
-	regions: regionsPanel,
+	panels,
 	active: described,
 	view,
 	actions: {
 		tab: (name) => {
-			// Painting or lassoing belongs to the Regions tab; leaving it gives the left button back to the camera.
-			if (name !== 'regions') regionsPanel.stop();
+			// Painting, a lasso or a brushed range belongs to its tab; leaving it gives the car back.
+			for (const panel of panels) if (panel.name !== name) panel.stop();
 			if (name === 'section') return run('set_section', { on: true });
 			view.dock = name;
 			view.dockCollapsed = false;
@@ -355,8 +368,8 @@ function renderToolbar() {
 	const c = active();
 	const enabled = Boolean(c?.result);
 	toolbar.render({
-		fields: RESULT_FIELDS,
-		field: view.field,
+		fields: [...RESULT_FIELDS, ...annotations.fields(c)],
+		field: shownField(),
 		maps: view.maps,
 		enabled,
 		projection: viewer.projection,
@@ -379,10 +392,12 @@ function applyViewer() {
 	paneLabels.replaceChildren(...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
 	const s = view.section;
 	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
+	viewer.setKeptSections(c?.result && s.on ? section.keptLines() : []);
 	viewer.setDisplay(view.display);
 	// The selection's tint, on the car it was worked out for; a new array only when the selection or the car changes.
 	const tint = ready() ? regions.tintOf(c) : null;
 	if (tint !== viewer.selection) viewer.setSelection(tint);
+	annotations.apply(c);
 }
 
 const RENDER = {
@@ -427,8 +442,8 @@ function present(c) {
 	const arriving = Boolean(c?.result && !c.arrived);
 	if (arriving) {
 		c.arrived = true;
-		// Every car opens on its centreline section.
-		view.section = { on: true, axis: 1, offset: 0, clip: 0 };
+		// Every car opens on its centreline section; the sections kept in the plot and how it is drawn stay.
+		Object.assign(view.section, { on: true, axis: 1, offset: 0, clip: 0 });
 		view.dock = 'section';
 		view.dockCollapsed = false;
 	}
@@ -451,14 +466,15 @@ function present(c) {
 
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
 	switch (what) {
+		// The section plot can show every open car, and its All cars control needs two of them.
 		case 'cases':
-			update('tabs');
+			update('tabs', 'dock');
 			return;
 		case 'active':
 			present(c);
 			return;
 		case 'status':
-			update('tabs');
+			update('tabs', 'dock');
 			if (c === active()) present(c);
 			return;
 		case 'stage':

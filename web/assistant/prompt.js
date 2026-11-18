@@ -37,7 +37,24 @@ Top-level await works. The module \`pressure\` (already imported) reaches the to
 - \`w.with_points(points)\` is the same cells on moved points, for deformations; \`pressure.Surface.from_triangles(points, triangles)\` builds a new surface.
 - \`await pressure.write_vtp(path, surface, cell_data=None, point_data=None)\` writes a .vtp to the workspace (by default with the surface's prediction as CpPredicted and CpSpread); open_file then analyses it in the tool.
 - Open matplotlib figures are shown to the engineer when the run ends; \`display(df)\` shows a table. Save what the engineer should keep with savefig or to_csv. Label axes with units.
-Studies: deform the working mesh, predict each variant, collect one row per variant in a DataFrame, show it and plot it. Never coarsen the mesh below the working mesh: the model's inputs need its density. An open case's own numbers are the ones the tool reports for it; predict is for geometry you changed, and the unchanged car is predicted the same way so each difference is like for like.`;
+Studies: deform the working mesh, predict each variant, collect one row per variant in a DataFrame, show it and plot it. Never coarsen the mesh below the working mesh: the model's inputs need its density. An open case's own numbers are the ones the tool reports for it; predict is for geometry you changed, and the unchanged car is predicted the same way so each difference is like for like.
+
+# Showing it on the car
+When a finding has a place or a pattern on the car, show it there as you answer: mark the place you are talking about, colour the car by the quantity you computed, paint or outline the faces you measured. Draw what the answer needs and nothing for decoration, each in a layer named for what it shows; when the engineer asks you to clear, remove your layers.
+- Operations: show_field (a field from an expression over the faces), paint_faces, draw_labels, draw_points, draw_lines, draw_arrows, draw_outline, draw_box, draw_plane, list_layers, set_layer, remove_layer. Each takes many items in one call.
+- From Python, for arrays you computed (one value per cell of \`await case.working()\`, sent whole): \`await case.show(values, name=..., cmap=..., range=(lo, hi))\` colours the car by them; \`await case.paint(mask, "orange", layer=...)\` paints cells; \`pressure.view\` (the case on screen) or \`case.view\` draws marks: \`label(points, texts)\`, \`points(points)\`, \`line(points)\`, \`lines(polylines)\`, \`arrows(points, vectors, scale=None)\`, \`outline(region_id)\`, \`box(lo, hi)\`, \`plane(point, normal)\`, \`layers()\`, \`hide(layer)\`, \`show(layer)\`, \`clear(layer=None)\`; each takes \`layer=\` and \`color=\` and returns what it drew. Points are (N, 3) arrays in metres.
+Example, the change in Cp when the car is 5 % longer, coloured on the car with its largest change labelled:
+\`\`\`python
+import numpy as np
+car = pressure.active
+w = await car.working()
+p = w.points.copy(); x0 = p[:, 0].min(); p[:, 0] = x0 + 1.05 * (p[:, 0] - x0)
+base, longer = await pressure.predict(w), await pressure.predict(w.with_points(p))
+d = longer.cells.cp - base.cells.cp
+await car.show(d, name="ΔCp, 5 % longer", range=(-0.2, 0.2))
+i = np.abs(d).argmax()
+await pressure.view.label(w.centers[i], f"ΔCp {d[i]:+.2f}", layer="Largest change")
+\`\`\``;
 }
 
 /**

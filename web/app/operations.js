@@ -7,7 +7,10 @@
  * @property {string} name         snake_case, verb first, as the assistant will call it: `cut_section`, `measure_region`.
  * @property {string} description  For the assistant: what it does, when to use it, what it returns. One to three sentences.
  * @property {object} parameters   JSON Schema (type "object") of the arguments, each property with a description and unit.
- * @property {boolean} [confirm]   True when it opens, writes, downloads or deletes something: the assistant asks first.
+ * @property {boolean | ((args: object, context: OperationContext) => boolean)} [confirm]
+ *   Whether the assistant asks the engineer before `run`, for calls by the assistant only: true when it opens,
+ *   writes, downloads or deletes something; a function of the arguments and the context when that depends on what
+ *   it acts on (removing a layer asks only for a layer the engineer made).
  * @property {(args: object, context: OperationContext) => object | Promise<object>} run
  *   Does it and returns a small JSON-serialisable result: the numbers asked for, with units in the key names
  *   (`area_m2`, `mean_cp`), and the ids of anything it created (`section_id`, `case_id`). Never whole arrays:
