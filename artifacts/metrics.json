@@ -12,6 +12,7 @@
     445,
     474
   ],
+  "samples_per_car": 120000,
   "holdout_runs": [
     1,
     500

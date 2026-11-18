@@ -577,6 +577,7 @@ def train_and_evaluate(
     report = {
         "device": str(device),
         "allowed_train_runs": list(ALLOWED_TRAIN_RUNS),
+        "samples_per_car": int(meta_by_run[ALLOWED_TRAIN_RUNS[0]]["n_samples"]),
         "holdout_runs": list(holdout_runs),
         "epochs": epochs,
         "feature_dim": FEATURE_COLUMNS.total_dim,
