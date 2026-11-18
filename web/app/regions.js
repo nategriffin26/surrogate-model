@@ -4,8 +4,11 @@
 // region. Rules rather than lists of faces, so a region picked on one car picks the same part of another.
 //
 // The selection is part of the shared view: tinted on the car and read out on the result card. Saved regions belong
-// to the session. Readouts sum the case's working mesh (`engine.workingCells`), whose faces carry the field as drawn.
+// to the session. Readouts sum a dropped file's own polygons (`engine.fileCells`), so they agree with the whole car's
+// totals; a bundled example carries only its simplified working mesh (`engine.workingCells`), and is summed on that.
+// The tint and the histogram run on the working mesh, as drawn.
 
+import { caseSummary } from './cases.js';
 import { finite, oneOf, round, triple } from './checks.js';
 import { h } from './dom.js';
 import { signed } from './format.js';
@@ -294,12 +297,15 @@ export function createRegions({ session, engine, update }) {
 	view.selection ??= null;
 	session.regions ??= [];
 	let nextId = 1;
-	/** Per result: its working mesh's faces, and the selection's mask and readout on them while the selection holds. */
+	/**
+	 * Per result: its working mesh's faces (`cells`), which masks for the tint and the histogram run over; the file's
+	 * own polygons for sums (`file`), once fetched; and the selection's mask and readout while the selection holds.
+	 */
 	const perResult = new WeakMap();
 	/** Steps tinted in place of the selection while a patch is being painted (preview), or null. */
 	let previewTerms = null;
 
-	const known = (result) => perResult.get(result) ?? perResult.set(result, { cells: engine.workingCells(result) }).get(result);
+	const known = (result) => perResult.get(result) ?? perResult.set(result, { cells: engine.workingCells(result), file: null }).get(result);
 	const cellsOf = (result) => known(result).cells;
 	const withResult = (case_id) => {
 		const c = case_id === undefined ? session.active : session.byId(case_id);
@@ -307,19 +313,76 @@ export function createRegions({ session, engine, update }) {
 		return c;
 	};
 
-	/** The readout of some terms on a case, with the whole car summed over the same faces for shares. */
-	function readout(c, terms) {
-		const cells = cellsOf(c.result);
-		const area = c.result.geometry.frontalArea;
-		const mask = terms ? maskOf(cells, terms, session.regions) : null;
-		return { cells, mask, part: measure(cells, mask, area), whole: measure(cells, null, area) };
+	/**
+	 * The cells a case's sums run over, and what operations call them: a dropped file's own polygons, fetched from the
+	 * engine the first time they are wanted once every polygon is predicted (and again when a reference is attached),
+	 * and kept with the result; until then, and for a bundled example, which carries only the working mesh, that
+	 * mesh's faces.
+	 */
+	function sumBasis(c) {
+		const held = known(c.result);
+		const { reference } = c.result;
+		if (held.file?.cells && held.file.reference === reference) return held.file;
+		if (c.kind === 'file' && held.file?.reference !== reference && engine.canExportVtp(c.result)) {
+			held.file = { cells: null, reference };
+			engine.fileCells(c.result).then((set) => {
+				if (!set || held.file.reference !== reference) return;
+				// Only what sums read is kept: the points and polygons themselves would double the memory.
+				const { centers, normals, areas, cp, sigma, cfd } = set;
+				held.file = { cells: { centers, normals, areas, cp, sigma, cfd }, over: `every polygon of the file (${areas.length})`, exact: true, reference };
+				update('card', 'dock');
+			});
+		}
+		return { cells: held.cells, over: `${held.cells.areas.length} faces of the simplified working mesh (Cp at each face the mean of its corners, as drawn)`, exact: false };
 	}
 
-	/** The current selection on a case: mask and readout, kept until the selection or the case's result changes. */
+	/** Masks and sums per set of cells, by the terms they were made for (a terms array is never changed in place). */
+	const masks = new WeakMap();
+	const sums = new WeakMap();
+	const WHOLE = [];
+	const kept = (cache, cells, key, make) => {
+		const byKey = cache.get(cells) ?? cache.set(cells, new WeakMap()).get(cells);
+		if (!byKey.has(key)) byKey.set(key, make());
+		return byKey.get(key);
+	};
+	/** The reference field's cells in place of the prediction's, for summing the CFD over the same polygons. */
+	const referenceViews = new WeakMap();
+	const reference = (cells) => referenceViews.get(cells) ?? referenceViews.set(cells, { ...cells, cp: cells.cfd }).get(cells);
+
+	/** The faces some terms pick on the cells a case's sums run over, as 0 or 1 each. */
+	function maskOn(c, terms) {
+		const { cells } = sumBasis(c);
+		return kept(masks, cells, terms, () => maskOf(cells, terms, session.regions));
+	}
+
+	/**
+	 * Sums over the faces some terms pick on a case (every face for null), on its sum basis, of its prediction or,
+	 * with `cfd`, of its reference field: {part, over, exact}.
+	 */
+	function measureOn(c, terms, { cfd = false } = {}) {
+		const basis = sumBasis(c);
+		const mask = terms ? maskOn(c, terms) : null;
+		const cells = cfd ? reference(basis.cells) : basis.cells;
+		return { part: kept(sums, cells, terms ?? WHOLE, () => measure(cells, mask, c.result.geometry.frontalArea)), over: basis.over, exact: basis.exact };
+	}
+
+	/** The readout of some terms on a case, with the whole car summed over the same cells for shares. */
+	function readout(c, terms) {
+		const { part, over } = measureOn(c, terms);
+		return { part, whole: measureOn(c, null).part, over };
+	}
+
+	/**
+	 * The current selection on a case: its mask on the working mesh, for the tint, and its readout, kept until the
+	 * selection, the case's result or the cells summed over change.
+	 */
 	function selectionOn(c) {
 		if (!view.selection || !c?.result) return null;
 		const held = known(c.result);
-		if (held.terms !== view.selection.terms) Object.assign(held, readout(c, view.selection.terms), { terms: view.selection.terms, shares: null });
+		const basis = sumBasis(c);
+		if (held.terms !== view.selection.terms || held.over !== basis.over) {
+			Object.assign(held, readout(c, view.selection.terms), { terms: view.selection.terms, mask: maskOf(held.cells, view.selection.terms, session.regions), shares: null });
+		}
 		return held;
 	}
 
@@ -346,7 +409,11 @@ export function createRegions({ session, engine, update }) {
 		cp_min: m.cpMin && { value: round(m.cpMin.value, 4), center_m: m.cpMin.center.map((v) => round(v, 4)) },
 		cp_max: m.cpMax && { value: round(m.cpMax.value, 4), center_m: m.cpMax.center.map((v) => round(v, 4)) },
 	});
-	const summed = (c) => `${c.result.mesh.indices.length / 3} faces of the working mesh (Cp at each face the mean of its corners, as drawn)`;
+	/** The whole car as the result card gives it: the Result's totals, and what they were summed over. */
+	const wholeCar = (c) => {
+		const s = caseSummary(c, null);
+		return { area_m2: s.area_m2, mean_cp: s.mean_cp, cx: s.cx, cy: s.cy, cz: s.cz, summed_over: s.totals_over };
+	};
 	/** Steps as an operation returns them: each labelled, a patch by its point count rather than its points. */
 	const stepsOut = (terms) => terms.map(({ op, rule }) => ({
 		op,
@@ -388,7 +455,7 @@ export function createRegions({ session, engine, update }) {
 			select(checkTerms(terms, session.regions), mode);
 			const c = session.active;
 			const s = selectionOn(c);
-			return { selection: stepsOut(view.selection?.terms ?? []), ...(s ? { readout: report(s.part, s.whole), summed_over: summed(c) } : {}) };
+			return { selection: stepsOut(view.selection?.terms ?? []), ...(s ? { readout: report(s.part, s.whole), summed_over: s.over } : {}) };
 		},
 	});
 
@@ -404,7 +471,7 @@ export function createRegions({ session, engine, update }) {
 
 	defineOperation({
 		name: 'measure_region',
-		description: 'Read out faces of a case without changing the selection: a saved region (region_id), steps of rules (terms, as select_region takes), or the current selection (neither). Gives area, mean Cp, Cx, Cy, Cz, their share of the whole car summed over the same faces, and the lowest and highest Cp with where they are.',
+		description: 'Read out faces of a case without changing the selection: a saved region (region_id), steps of rules (terms, as select_region takes), or the current selection (neither). Gives area, mean Cp, Cx, Cy, Cz, their share of the whole car summed over the same polygons (summed_over names them: a dropped file\'s own polygons, or a bundled example\'s simplified mesh), the lowest and highest Cp with where they are, and the whole car as the result card gives it.',
 		parameters: {
 			type: 'object',
 			properties: { case_id: { type: 'integer', description: 'Default the case on screen.' }, region_id: { type: 'integer' }, terms: TERMS_SCHEMA },
@@ -414,8 +481,8 @@ export function createRegions({ session, engine, update }) {
 			const c = withResult(case_id);
 			const steps = namedSteps(region_id, terms) ?? view.selection?.terms;
 			if (!steps) throw new Error('Nothing is selected. Give region_id or terms, or select first with select_region.');
-			const { part, whole } = readout(c, steps);
-			return { case_id: c.id, readout: report(part, whole), whole_car: report(whole), summed_over: summed(c) };
+			const { part, whole, over } = readout(c, steps);
+			return { case_id: c.id, readout: report(part, whole), summed_over: over, whole_car: wholeCar(c) };
 		},
 	});
 
@@ -494,7 +561,7 @@ export function createRegions({ session, engine, update }) {
 	});
 
 	return {
-		selectionOn, tintOf, select, preview, cellsOf, namedSteps,
+		selectionOn, tintOf, select, preview, cellsOf, namedSteps, measureOn, maskOn, sumBasis,
 		/** The faces of a case some steps pick, as 0 or 1 per working-mesh face. */
 		maskOf: (c, steps) => maskOf(cellsOf(c.result), steps, session.regions),
 		describe: (rule) => describeRule(rule, session.regions),

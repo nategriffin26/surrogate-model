@@ -198,7 +198,7 @@ $('[data-dock]').append(dock.el);
 
 // ---- top bar: files, case tabs, modes, export, assistant -------------------------------------------------------------
 
-const filesPanel = createFilesPanel({ session, workspace, run, progress: (c) => progress.fraction(c) });
+const filesPanel = createFilesPanel({ session, workspace, engine, run, progress: (c) => progress.fraction(c) });
 $('.work').prepend(filesPanel.el);
 $('.brand').after(filesPanel.toggle);
 

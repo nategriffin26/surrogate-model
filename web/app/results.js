@@ -5,7 +5,8 @@
 // across the networks and one line about the run.
 //
 // The whole car's numbers are the Result's totals, summed over every polygon of the file. A selection's are summed
-// over the working mesh's faces it picks (regions.js), and its shares over the same faces, so their bias cancels.
+// over the file's own polygons it picks, or on a bundled example over its simplified mesh's faces (regions.js), with
+// its shares over the same faces.
 
 import { h, s } from './dom.js';
 import { millions, percent, seconds, signed } from './format.js';

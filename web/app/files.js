@@ -50,8 +50,8 @@ function settled(session, c) {
 /** The engine reads a File; a workspace blob becomes one named for its path, without copying its bytes. */
 const fileFor = (path, blob) => (blob instanceof File && blob.name === baseOf(path) ? blob : new File([blob], baseOf(path)));
 
-/** app: { session, workspace }. Returns `openPath(path)`, which analyses a geometry or shows its case. */
-export function defineFileOperations({ session, workspace }) {
+/** app: { session, workspace, engine, update }. Returns `openPath(path)`, which analyses a geometry or shows its case. */
+export function defineFileOperations({ session, workspace, engine, update }) {
 	const fileAt = (path) => {
 		const file = workspace.file(normalPath(path));
 		if (!file) {
@@ -140,6 +140,33 @@ export function defineFileOperations({ session, workspace }) {
 	});
 
 	defineOperation({
+		name: 'attach_reference',
+		description: 'Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car\'s polygons. The car can then be compared with it (set_comparison with "cfd"), and its result reports the CFD\'s Cx. The file must describe the same surface, its polygons within 5 mm of the car\'s: the CFD of another car is refused. Only the file analysed last can take one, once every polygon is predicted. Reading a DrivAerML file takes a few seconds.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: pathParameter,
+				case_id: { type: 'integer', description: 'The car to give it to; default the case on screen.' },
+				array: { type: 'string', description: 'The cell array to read; default CpMeanTrim.' },
+			},
+			required: ['path'],
+			additionalProperties: false,
+		},
+		async run({ path, case_id, array }) {
+			const c = case_id === undefined ? session.active : session.byId(case_id);
+			if (c?.kind !== 'file' || !c.result) throw new Error('A reference is attached to a dropped file\'s result. Open the geometry first.');
+			const file = fileAt(path);
+			if (!isGeometry(file.path)) throw new Error(`${file.path} is not a .vtp file.`);
+			const { cfd, fullCfd } = await engine.attachReference(c.result, fileFor(file.path, file.blob), { array });
+			// The surface drawn takes the field too, for the views that draw CFD from the GPU.
+			c.surface.working.setFields({ cfd });
+			if (fullCfd && c.surface.full) c.surface.full.setFields({ cfd: fullCfd });
+			update('card', 'toolbar', 'dock', 'viewer');
+			return { case_id: c.id, reference: c.result.reference, cx_cfd: c.result.forces.cdPCfd, cx_predicted: c.result.forces.cdP };
+		},
+	});
+
+	defineOperation({
 		name: 'move_file',
 		description: 'Rename or move a file or folder in the workspace: from one path to another, e.g. "boundary_1.vtp" to "baseline/boundary_1.vtp". Fails if the destination exists. An open case keeps showing a moved geometry.',
 		parameters: {
@@ -200,8 +227,11 @@ export function addFiles(files, { workspace, run }) {
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-/** app: { session, workspace, run, progress }; progress(c) is the share of a case's analysis done. */
-export function createFilesPanel({ session, workspace, run, progress }) {
+/**
+ * app: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. The engine
+ * says which car can take another file's CFD: the one analysed last, once every polygon is predicted.
+ */
+export function createFilesPanel({ session, workspace, engine, run, progress }) {
 	const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
 		addFiles([...input.files], { workspace, run });
 		input.value = '';
@@ -221,6 +251,8 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 	const folded = new Set();
 	/** The file being renamed or moved in place: { path, mode: 'rename' | 'move' }; the list holds still around it. */
 	let editing = null;
+	/** The file whose CFD is being read onto a car, or null. */
+	let attaching = null;
 
 	/** Whether the panel is open: its column opens beside the stage, which narrows to make room. */
 	let open = false;
@@ -270,6 +302,12 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 		else window.open(URL.createObjectURL(kindOf(file.path).text && !/\.html?$/i.test(file.path) ? new Blob([file.blob], { type: 'text/plain' }) : file.blob), '_blank', 'noopener');
 	}
 
+	/** The car a geometry's CFD can go to: the car analysed last, once every polygon is predicted, when it is another file. */
+	function referenceTaker(path) {
+		if (!isGeometry(path)) return null;
+		return session.cases.find((c) => c.kind === 'file' && c.result && c.path !== path && engine.canExportVtp(c.result)) ?? null;
+	}
+
 	function rowMenu(file) {
 		let m = null;
 		const item = (label, onclick, cls = 'menu-item') => h('button', { type: 'button', class: cls, onclick }, h('span', {}, label));
@@ -293,6 +331,15 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 			m.close();
 			act('delete_file', { path: file.path });
 		}, 'menu-item danger');
+		const taker = referenceTaker(file.path);
+		const attach = taker && item(`Use as CFD for ${taker.name}`, async () => {
+			m.close();
+			attaching = file.path;
+			render();
+			await act('attach_reference', { path: file.path, case_id: taker.id });
+			attaching = null;
+			render();
+		});
 		const items = h('div', { class: 'menu-list', role: 'menu' },
 			item('Download', () => {
 				m.close();
@@ -300,6 +347,7 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 			}),
 			item('Rename', edit('rename')),
 			item('Move to folder', edit('move')),
+			attach,
 			h('hr', { class: 'menu-rule' }),
 			remove);
 		m = menu(h('button', { type: 'button', class: 'icon-button file-more', title: `More for ${baseOf(file.path)}` }, icon('more')), items, { align: 'right' });
@@ -335,7 +383,9 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 		const shown = geometry?.c && geometry.c === session.active;
 		const meta = [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)].join(' · ');
 		const name = editing?.path === file.path ? editor(file) : h('span', { class: 'file-name' }, baseOf(file.path));
-		const state = geometry?.label ? h('span', { class: `file-state${geometry.ready ? ' ready' : ''}${geometry.failed ? ' failed' : ''}` }, geometry.label) : null;
+		const state = attaching === file.path
+			? h('span', { class: 'file-state' }, 'Reading CFD')
+			: geometry?.label ? h('span', { class: `file-state${geometry.ready ? ' ready' : ''}${geometry.failed ? ' failed' : ''}` }, geometry.label) : null;
 		const action = isGeometry(file.path) && !geometry.busy && !shown
 			? h('button', { type: 'button', class: 'file-action', title: geometry.c ? `Show the result of ${baseOf(file.path)}` : `Run the model on ${baseOf(file.path)}`, onclick: (e) => {
 				e.stopPropagation();
@@ -444,7 +494,8 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 			const c = session.cases.find((x) => x.id === file.caseId);
 			const key = `file:${file.path}`;
 			used.add(key);
-			const signature = [file.size, file.by, file.modified, file.caseId, c?.status, c === session.active, editing?.path === file.path && editing.mode].join('|');
+			const signature = [file.size, file.by, file.modified, file.caseId, c?.status, c === session.active, editing?.path === file.path && editing.mode,
+				referenceTaker(file.path)?.id, attaching === file.path].join('|');
 			rows.push(keyed(key, signature, () => fileRow(file, parts.length - 1)));
 		}
 		for (const key of built.keys()) if (!used.has(key)) built.delete(key);
@@ -490,10 +541,11 @@ export function createFilesPanel({ session, workspace, run, progress }) {
 	}
 
 	workspace.onChange(() => render());
-	// The list shows which cases exist, their status and which is on screen; an analysis's progress moves only its row's state.
+	// The list shows which cases exist, their status and which is on screen, and once a car's every polygon is predicted
+	// (`numbers`) which can take another file's CFD; an analysis's progress moves only its row's state.
 	session.addEventListener('change', ({ detail: { what } }) => {
 		if (what === 'stage') refreshStates();
-		else if (what === 'cases' || what === 'status' || what === 'active') render();
+		else if (what === 'cases' || what === 'status' || what === 'active' || what === 'numbers') render();
 	});
 
 	return { el, toggle, setOpen, render };

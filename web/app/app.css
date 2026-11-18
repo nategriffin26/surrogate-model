@@ -242,6 +242,9 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .progress { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; }
 .progress-panel { position: absolute; inset: 0; z-index: -1; border-radius: 10px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .center > .progress { width: min(420px, calc(100vw - 32px)); padding: 18px 20px; }
+/* The steps only report; the car under them can be turned while they show. Cancel stays a button. */
+.center > .progress, .strip { pointer-events: none; }
+.progress-cancel { pointer-events: auto; }
 .center .progress-panel { background: rgba(255, 255, 255, 0.86); border: 1px solid var(--hair); }
 .progress-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .progress-file { font-family: var(--head); font-size: 17px; font-weight: 600; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -413,6 +416,8 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .compare-controls .tool { height: 28px; }
 .compare-controls .tool[aria-pressed="true"] { color: var(--link); background: var(--tint); }
 .compare-empty { display: flex; align-items: center; gap: 4px; padding: 10px 0; font-size: 13px; color: var(--muted); }
+.compare-note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.compare-note:empty { display: none; }
 .compare-empty span { margin-right: 6px; }
 .compare-table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .compare-table th { position: sticky; background: #fff; text-align: right; font-weight: 500; color: var(--muted); padding: 6px 8px; white-space: nowrap; }
