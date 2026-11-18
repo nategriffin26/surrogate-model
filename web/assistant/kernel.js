@@ -36,7 +36,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 	/** Settles once the kernel is ready to run code, or could not start. */
 	let ready = null;
 	let starting = null;
-	/** The run in progress: { id, onOutput, clock, phase: 'computing' | 'deciding', finish }. */
+	/** The run in progress: { id, onOutput, clock, signal, phase: 'computing' | 'deciding', finish }. */
 	let current = null;
 	let nextRun = 1;
 	/** True while the workspace is told of files the kernel already holds, so they are not sent back to it. */
@@ -114,7 +114,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 		const id = nextRun++;
 		return new Promise((resolve) => {
 			const clock = pausableClock(RUN_LIMIT * 1000, () => end('timed out'));
-			current = { id, onOutput, clock, phase: 'computing' };
+			current = { id, onOutput, clock, signal, phase: 'computing' };
 			current.finish = (fields) => {
 				clock.stop();
 				current = null;
@@ -168,8 +168,9 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				} finally {
 					fromKernel = false;
 				}
+				// A stop declines the question on screen and every one after it, unasked.
 				const decided = [];
-				for (const change of requests) decided.push({ kind: change.kind, path: change.path, to: change.to, approved: await decide(change) });
+				for (const change of requests) decided.push({ kind: change.kind, path: change.path, to: change.to, approved: !run.signal.aborted && (await decide(change)) });
 				run.finish({
 					status: message.error ? 'failed' : 'finished',
 					error: message.error,

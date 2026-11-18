@@ -183,25 +183,26 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	async function send(text) {
 		text = text.trim();
 		if (status !== 'idle' || !text) return;
-		if (messages.length === 0) {
-			messages = [{ role: 'system', content: systemPrompt(await engine.model) }];
-			thread.replaceChildren();
-		}
+		if (messages.length === 0) thread.replaceChildren();
 		input.value = '';
 		fitInput();
 		// Only the latest failed turn can be tried again.
 		for (const retry of thread.querySelectorAll('.reply-retry')) retry.remove();
-		// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
-		const { cases } = await runOperation('list_cases', {});
-		const before = messages.length;
-		const extents = session.cases.filter((c) => c.result).map((c) => ({ case_id: c.id, bounds_m: c.result.geometry.bounds.map((v) => Math.round(v * 1000) / 1000) }));
-		messages.push({ role: 'user', content: `${describeState({ cases, extents, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
-		actions.clear();
 		following = true;
 		turn = createTurn(text);
-		setStatus('running');
 		controller = new AbortController();
+		// Running before anything is awaited, so a second Enter or tap meanwhile sends nothing.
+		setStatus('running');
+		/** How long the conversation was before this message, for Try again. */
+		let before = 0;
 		try {
+			if (messages.length === 0) messages = [{ role: 'system', content: systemPrompt(await engine.model) }];
+			before = messages.length;
+			// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
+			const { cases } = await runOperation('list_cases', {});
+			const extents = session.cases.filter((c) => c.result).map((c) => ({ case_id: c.id, bounds_m: c.result.geometry.bounds.map((v) => Math.round(v * 1000) / 1000) }));
+			messages.push({ role: 'user', content: `${describeState({ cases, extents, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
+			actions.clear();
 			await respond(messages, {
 				tools: toolList,
 				execute: (call) => execute(call, turn),
