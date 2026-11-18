@@ -10,8 +10,8 @@
 
 import { VertexGrid, FaceIndex } from '../viewer/picking.js';
 import { oneOf, round, triple } from './checks.js';
-import { CUT_AXES } from './section.js';
-import { sectionStations } from './cut.js';
+import { CUT_AXES } from './mesh-cut.js';
+import { sectionStations } from './section.js';
 import { failureNote, h, put, s } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
