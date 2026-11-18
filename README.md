@@ -1,6 +1,6 @@
 # Surface pressure surrogate for DrivAerML
 
-A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and a browser tool for working with the prediction on a dropped `.vtp` file. It is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On the two cars kept out of training (runs 1 and 500) it explains 95% of the variance of the CFD pressure (area-weighted $R^2$ `0.9502`).
+A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and a browser tool for working with the prediction on a dropped `.vtp` file. It is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On the two cars kept out of training (runs 1 and 500) it explains 96% of the variance of the CFD pressure (area-weighted $R^2$ `0.9558`).
 
 ## Setup
 
@@ -19,7 +19,7 @@ uv run surrogate fetch holdout     # runs 1 and 500, 1.3 GB -> data/raw/holdout/
 uv run surrogate predict data/raw/holdout/run_1/boundary_1.vtp --output run_1_prediction.vtp
 ```
 
-`predict` takes any `.vtp` surface, with or without `CpMeanTrim`, and asks the model at every cell (31 s for run 1's 8.8M cells on an Apple M5 Pro). It prints the car's size against the training cars', its coverage, the pressure drag and lift with each network's drag, and the spread; when the file carries CFD pressure, also the CFD drag and lift and the area-weighted $R^2$ against them. `--output` writes the file back with the cell arrays `CpPredicted` and `CpSpread`, as the tool's export does, and `--json` writes the summary for scripts. The same from Python:
+`predict` takes any `.vtp` surface, with or without `CpMeanTrim`, and asks the model at every cell (95 s for run 1's 8.8M cells on an Apple M5 Pro). It prints the car's size against the training cars', its coverage, the pressure drag and lift with each network's drag, and the spread; when the file carries CFD pressure, also the CFD drag and lift and the area-weighted $R^2$ against them. `--output` writes the file back with the cell arrays `CpPredicted` and `CpSpread`, as the tool's export does, and `--json` writes the summary for scripts. The same from Python:
 
 ```python
 from surrogate import SurrogateEnsemble, run_vtp_inference
@@ -72,9 +72,9 @@ The model predicts one cell at a time. Ten cars are ten examples for a model tha
 | Nearby surface | 48 | The surface around the cell blurred at 3, 10, 25 and 75 cm: its mean normal and how much of it there is, and the same for the part upstream of the cell and the part downstream. |
 | Slices across the car | 52 | Thirteen slices across the car, at the cell and 5, 10, 20, 40, 80 and 160 cm ahead and behind. From each: its area, how far it reaches outboard of the cell at the cell's height, and how far it reaches above and below the cell at the cell's distance from the centre plane. |
 
-The nearby surface is the area and the area times the normal of every cell, spread onto a grid in metres, blurred and read back at the cell, so it does not depend on how finely the file is meshed. The slices are read from a 2 cm raster of the car filled from the cell centres, so they need cells smaller than 2 cm; DrivAerML's are 1.1 cm at the 99th percentile. The car's two sides are kept apart in every lookup, so a part that exists on one side only is read on that side only. The lookups are built from every cell of the file.
+The lookups are built from the whole surface of the file, cut where its polygons are large into pieces no more than 1 cm across, so a coarse mesh fills them as a fine one does. The nearby surface is the area and the area times the normal of the surface, spread onto a grid whose step is a third of the size (1 cm for the 3 cm size), blurred, and read back at the cell, so it does not depend on how finely the file is meshed. The slices are read from a 2 cm raster of the car. Every lookup is placed in the car's own frame, from its nose, centre plane and lowest point, so moving the whole car changes no input. Every read interpolates smoothly between grid nodes and raster bins, so the inputs do not step as a cell moves across them, which would draw contour rings on the map of a change. The car's two sides are kept apart in every lookup, so a part that exists on one side only is read on that side only.
 
-A network of three hidden layers (`107 -> 256 -> 256 -> 256 -> 1`, GELU) is trained on 120,000 cells per car, drawn in proportion to area. Five such networks are trained, each with two whole cars held out; no fold splits a car's cells. The prediction is their mean. Their standard deviation, multiplied by a factor fitted on the training cars (`2.18`), is reported as the spread.
+A network of three hidden layers (`107 -> 256 -> 256 -> 256 -> 1`, GELU) is trained on 120,000 cells per car, drawn in proportion to area. Five such networks are trained, each with two whole cars held out; no fold splits a car's cells. The prediction is their mean. Their standard deviation, multiplied by a factor fitted on the training cars (`2.13`), is reported as the spread.
 
 ## Reproducing the model
 
@@ -87,12 +87,12 @@ uv run surrogate reproduce   # each step below whose output is not current, then
 
 | Step | Writes | Time on an Apple M5 Pro |
 | :--- | :--- | :--- |
-| `uv run surrogate preprocess` | `data/processed/`: 120,000 cells of each car, drawn by area, and their inputs | 4 min |
-| `uv run surrogate train` | `artifacts/`: the five networks and their spread factor (`ensemble.pt`, 3.2 MB), the ablations, and `metrics.json`, which holds the numbers in the results table | 8 min on the GPU, 34 min on the CPU |
+| `uv run surrogate preprocess` | `data/processed/`: 120,000 cells of each car, drawn by area, and their inputs | 8 min |
+| `uv run surrogate train` | `artifacts/`: the five networks and their spread factor (`ensemble.pt`, 3.2 MB), and `metrics.json`, which holds the numbers in the results table, the ablations and the learning curve | 16 min on the GPU, 87 min on the CPU |
 | `uv run surrogate export` | `web/model/`: the networks for the browser, and the training cars the Model page draws | seconds |
 | `uv run surrogate examples` | `web/examples/`: runs 1 and 500, analysed by the browser engine in headless Chrome | 40 s |
 
-`reproduce` skips a step whose output was made from the current output of the step before, and stops before it starts when a surface file or Chrome is missing; after a change to the inputs' code, run `preprocess` first. `train` runs on the GPU when there is one. `--device cpu` trains without it: one network takes 58 s there against 9 s on the GPU, and the result agrees within the seed-to-seed spread (cross-validation $R^2$ `0.9409` on the GPU, `0.9412` on the CPU). `--skip-ablations` trains only the shipped networks (2.5 min on the GPU, 16 min on the CPU).
+`reproduce` skips a step whose output was made from the current output of the step before, and stops before it starts when a surface file or Chrome is missing; after a change to the inputs' code, run `preprocess` first. `train` runs on the GPU when there is one. `--device cpu` trains without it: one network takes 58 s there against 9 s on the GPU, and the result agrees within the seed-to-seed spread (cross-validation $R^2$ `0.9458` on the GPU, `0.9454` on the CPU). `--skip-ablations` trains only the shipped networks (2.5 min on the GPU, 16 min on the CPU).
 
 The tests:
 
@@ -109,19 +109,33 @@ Evaluated on 120,000 area-weighted cells per car. Cross-validation holds out two
 
 | Model and inputs | CV $R^2$ | Worst-car CV $R^2$ | CV MAE ($C_p$) | CV $C_{d,p}$ MAE | Holdout $R^2$ | Holdout $C_{d,p}$ MAE |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Constant (fold mean $C_p$ and $C_{d,p}$) | 0.0000 | 0.0000 | 0.1661 | 0.0173 | 0.0000 | 0.0332 |
+| Constant (fold mean $C_p$ and $C_{d,p}$) | 0.0000 | 0.0000 | 0.1661 | **0.0173** | 0.0000 | 0.0332 |
 | PointNet whole-car vector (64) + position and facing | 0.5634 | 0.5021 | 0.0976 | 0.0321 | 0.5798 | 0.0311 |
 | Position and facing only (7) | 0.6486 | 0.2510 | 0.0820 | 0.0822 | 0.7375 | 0.1143 |
-| + nearby surface (55) | 0.9330 | 0.8243 | 0.0393 | 0.0212 | **0.9524** | 0.0163 |
-| LightGBM, 400 trees, all inputs (107) | 0.9216 | 0.9035 | 0.0449 | 0.0185 | 0.9370 | **0.0113** |
-| **Shipped: five networks, all inputs (107)** | **0.9409** | **0.9301** | **0.0370** | **0.0163** | 0.9502 | 0.0140 |
+| + nearby surface (55) | 0.9364 | 0.8159 | 0.0381 | 0.0213 | **0.9579** | 0.0165 |
+| LightGBM, 400 trees, all inputs (107) | 0.9273 | 0.9115 | 0.0435 | **0.0173** | 0.9473 | **0.0095** |
+| **Shipped: five networks, all inputs (107)** | **0.9458** | **0.9293** | **0.0356** | 0.0196 | 0.9558 | 0.0128 |
 
 - **A learned whole-car vector does worse than no shape description at all.** With eight training cars per fold, the PointNet vector scores `0.5634` on unseen cars against `0.6486` for position and facing alone.
-- **The nearby surface carries the most.** Added to position and facing, its 48 inputs raise CV $R^2$ from `0.6486` to `0.9330` and cut the drag error from `0.0822` to `0.0212`. The slices add least on average (`0.9409`) and most to the worst car (`0.8243` to `0.9301`) and to drag (`0.0212` to `0.0163`).
+- **The nearby surface carries the most.** Added to position and facing, its 48 inputs raise CV $R^2$ from `0.6486` to `0.9364` and cut the drag error from `0.0822` to `0.0213`. The slices add least on average (`0.9458`) and most to the worst car (`0.8159` to `0.9293`).
 - **Distances are ladders.** Nearby shape matters in detail and distant shape only in bulk, so the surface scales grow about threefold per step and the slices' distances double.
-- **Differences under the seed-to-seed spread are not findings.** Retraining with three seeds moves CV $R^2$ by about `0.003` and CV $C_{d,p}$ MAE by about `0.004`.
-- **Integrated drag does not tell these cars apart.** On the holdout cars' sampled cells the ensemble gives `0.256` for run 1 against CFD `0.268`, and `0.263` for run 500 against `0.279`. In cross-validation the drag error (`0.0163`) is about the error of predicting every car at the training cars' mean drag (`0.0173`).
-- **The spread ranks the error.** The five networks train on overlapping cars and share blind spots, so their raw standard deviation ranks the error well but understates it; the factor is fitted on the training cars only, by repeating the fold structure one level down. On the holdout cars `58%` of the surface is within one spread of CFD and `85%` within two, and across the spread's quintiles the realized RMSE rises `0.022`, `0.029`, `0.036`, `0.050`, `0.109`. The five networks' drag values are reported individually; on the holdout cars they span `0.052` (run 1) and `0.031` (run 500), two to four times the drag error of their mean.
+- **Differences under the seed-to-seed spread are not findings.** Retraining with three seeds moves CV $R^2$ by about `0.003` and CV $C_{d,p}$ MAE by up to `0.007`.
+- **Integrated drag does not tell these cars apart.** On the holdout cars' sampled cells the ensemble gives `0.254` for run 1 against CFD `0.268`, and `0.268` for run 500 against `0.279`. In cross-validation the drag error (`0.0196`) is no smaller than the error of predicting every car at the training cars' mean drag (`0.0173`).
+- **Integrated lift is closer.** In cross-validation the lift error is `0.0397` against `0.0613` for the training cars' mean lift, and on the holdout cars the ensemble gives `0.064` for run 1 against CFD `0.063`, and `0.118` for run 500 against `0.092`.
+- **A variant's map carries some discretisation.** Moving the whole car changes no input. A variant that moves the body against what holds the car's nose and ground changes the prediction with no change in the flow: on run 1, moved 7 mm with every lookup held where the unmoved car put it, by under `0.02` in $C_p$ (99th percentile) for a ride-height change and under `0.035` for a shift along the car, as a stretch does (`test_a_variant_moved_against_the_lookups_changes_the_prediction_by_less_than_the_stated_bound`). Most of the shift's share is the slices' 2 cm columns along the car. Differences smaller than that on a variant's map are not findings.
+- **The spread ranks the error.** The five networks train on overlapping cars and share blind spots, so their raw standard deviation ranks the error well but understates it; the factor is fitted on the training cars only, by repeating the fold structure one level down. On the holdout cars `57%` of the surface is within one spread of CFD and `84%` within two, and across the spread's quintiles the realized RMSE rises `0.020`, `0.028`, `0.035`, `0.048`, `0.101`. The five networks' drag values are reported individually; on the holdout cars they span `0.051` (run 1) and `0.034` (run 500), about three times the drag error of their mean.
+
+## Limitations
+
+- **Ten cars.** Accuracy is still rising with the number of training cars. Single networks trained on 2, 4, 6 and 8 cars score `0.838`, `0.897`, `0.927` and `0.946` on cars they did not see, with drag errors of 39, 39, 23 and 19 counts (`learning_curve` in `artifacts/metrics.json`). More CFD runs are the first improvement, and DrivAerML holds several hundred more.
+- **Pressure only.** The model predicts mean $C_p$. Drag and lift are integrated from pressure alone and leave out wall shear stress, so they are not the car's total coefficients.
+- **One flow condition.** The DrivAerML runs share one speed at zero yaw, and no input describes the flow. The model cannot answer another speed, yaw angle or ground condition.
+- **One family of shapes.** The training cars are variants of one notchback body, in DrivAerML's axes and in metres. `predict` reports when a car's size, slice-area curve or spread falls outside the training cars'; a prediction there is unchecked.
+- **Variants are not validated.** No CFD run exists for a transformed car, so a variant's map has the discretisation bound under [Results](#results) and no measured error.
+- **Coarse meshes are little tested.** The tests and examples use DrivAerML's full files. Run 1 decimated to 150,000 triangles scores the same $R^2$ in Python as the full file, and the browser's quick prediction on that mesh scored about `0.04` lower; both were measured once and neither is covered by the tests.
+- **One machine.** The tool was run in Chrome on an Apple M5 Pro. A full DrivAerML file peaks near 4.9 GB of memory there, and without WebGPU the result takes about 48 s against about 5 s with it. Safari, Firefox, Linux and Windows are untested.
+
+With a few hundred cars two things become worth trying that lose or do not exist here: a learned encoder of the whole surface in place of the hand-built inputs, and a model of the wall shear stress, which would give total drag.
 
 ## Repository layout
 
@@ -167,7 +181,7 @@ How the tool is presented to a customer: an aerodynamics team that has a geometr
 2. **Their file, in seconds.** The customer's `.vtp` is dropped on the page. The pressure field is on the car about five seconds later, computed in the browser; the file is not uploaded.
 3. **Worked as an engineer would.** A region is selected and its force, area and mean pressure read off; a section is cut and kept; a probe is placed.
 4. **A study, handed to the assistant.** "Raise the car 20 mm and show me where the pressure changes most." The assistant makes the variant with the same operations the engineer has, predicts it in about a second, colours the car by the change and marks where it is largest.
-5. **Checked.** On a car that has CFD: prediction and CFD side by side, the difference map, and the spread where the five networks disagree. On cars outside training the model explains 95% of the variance of the CFD pressure. Integrated drag is not yet a ranking number: its error in cross-validation is 16 counts, against 17 for guessing the average car.
+5. **Checked.** On a car that has CFD: prediction and CFD side by side, the difference map, and the spread where the five networks disagree. On cars outside training the model explains 96% of the variance of the CFD pressure. Integrated drag is not yet a ranking number: its error in cross-validation is 20 counts, against 17 for guessing the average car.
 6. **What it takes.** Everything the model is told is a description of the car's shape; it learns the flow from ten CFD runs, and that is enough to carry the pressure field to a new car. Telling close designs apart by drag needs more runs, so the loop is: look at every variant with the surrogate, confirm the ones that matter with CFD, retrain on the new runs.
 
 ## Data
