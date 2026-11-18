@@ -874,6 +874,7 @@
    445,
    474
   ],
+  "samplesPerCar": 120000,
   "spreadCoverage": 0.6583,
   "networks": [
    {

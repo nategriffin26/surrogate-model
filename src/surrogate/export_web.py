@@ -13,7 +13,8 @@ is fixed in the browser's code:
 - `envelope`: the training cars' dimensions, section areas and cross-validation spread, which
   coverage is measured against;
 - `card`: the facts the model view shows, from `metrics.json` and the checkpoint: `dataset` (the
-  training data, `DATASET` below); `trainRuns`; `networks` (per network `trainRuns`,
+  training data, `DATASET` below); `trainRuns`; `samplesPerCar` (the area-weighted cells each
+  training car gave); `networks` (per network `trainRuns`,
   `validationRuns`, `parameters`, `layers`, its widths from input to output); `crossValidation`
   (`meanR2`, `worstCarR2`, `mae`, `relativeL2`, `dragMae`); `outsideRuns` (per run `run`, `r2`, `mae`,
   `dragMae`); `spreadCoverage` (the share of the outside runs' surface whose error is within the
@@ -94,6 +95,7 @@ def model_card(payload: dict, metrics: dict) -> dict:
     return {
         "dataset": DATASET,
         "trainRuns": [int(run) for run in metrics["allowed_train_runs"]],
+        "samplesPerCar": int(metrics["samples_per_car"]),
         "spreadCoverage": metrics["uncertainty_coverage_holdout"]["within_1_std"],
         "networks": [
             {

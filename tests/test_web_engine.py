@@ -25,8 +25,9 @@ from vtkmodules.vtkIOXML import vtkXMLPolyDataReader, vtkXMLPolyDataWriter
 from surrogate import features as feature_module
 from surrogate.export_web import export_web_model, feature_definition
 from surrogate.features import FeatureColumns, SurfaceContext, extract_query_features
-from surrogate.model import SurrogateEnsemble
-from surrogate.surface import read_vtp_surface
+from surrogate.inference import run_vtp_inference
+from surrogate.model import Z_CLIP, SurrogateEnsemble
+from surrogate.surface import SurfaceMesh, read_vtp_surface
 
 REPO = Path(__file__).resolve().parents[1]
 CHECKPOINT = REPO / "artifacts/ensemble.pt"
@@ -209,8 +210,8 @@ def test_reader_names_what_is_wrong_with_a_file_it_refuses(car: pv.PolyData, tmp
 
 @requires_runtime
 def test_engine_geometry_features_and_networks_match_python(car: pv.PolyData, model_dir: Path, tmp_path: Path) -> None:
-    """Catches a browser feature column, network weight, spread scale or polygon measure that drifts
-    from the Python pipeline the networks were trained with."""
+    """Catches a browser feature column, network weight, spread scale, layer shown by `explain` or
+    polygon measure that drifts from the Python pipeline the networks were trained with."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     out = tmp_path / "out"
     outcome = _run_engine("engine", path, out, model_dir)
@@ -234,6 +235,25 @@ def test_engine_geometry_features_and_networks_match_python(car: pv.PolyData, mo
     # An example pack keeps the lookups exactly, so `explain` on an example sees the same inputs.
     np.testing.assert_array_equal(_array(out, "features_from_example.f32"), _array(out, "features.f32"))
 
+    # `explain` gives the same Cp to the bit, and each network's layers as PyTorch computes them.
+    browser_models = _array(out, "models.f32").reshape(expected.cp_per_fold.shape)
+    np.testing.assert_array_equal(_array(out, "explained_models.f32"), browser_models[:, 0])
+    np.testing.assert_allclose(_array(out, "activations.f32"), _layers(ensemble, browser_features[0]), atol=1e-5)
+
+
+def _layers(ensemble: SurrogateEnsemble, features: np.ndarray) -> np.ndarray:
+    """Each network's standardized, clipped input and its hidden layers after GELU, back to back."""
+    layers = []
+    with torch.no_grad():
+        for fold in ensemble.folds:
+            x = torch.from_numpy((features - fold.x_mean) / fold.x_std).clamp(-Z_CLIP, Z_CLIP)
+            layers.append(x)
+            for module in fold.model.net:
+                x = module(x)
+                if isinstance(module, torch.nn.GELU):
+                    layers.append(x)
+    return torch.cat(layers).numpy()
+
 
 @requires_runtime
 def test_a_second_analysis_waits_for_the_first_to_end(car: pv.PolyData, tmp_path: Path) -> None:
@@ -248,6 +268,43 @@ def test_a_second_analysis_waits_for_the_first_to_end(car: pv.PolyData, tmp_path
         assert own[-1] == {"car": name, "event": "fullFields", "fraction": 1}, f"the {name} car's last event: {own[-1]}"
     cars = [event["car"] for event in events]
     assert cars == sorted(cars), "the two analyses' events interleave: one ran before the other had ended"
+
+
+def _drag_by_facing(surface: SurfaceMesh, cp: np.ndarray, frontal_area: float) -> dict[str, float]:
+    """`forces.byFacing` as result.js defines it, from Cp at every polygon."""
+    nx = surface.normals[:, 0].astype(np.float64)
+    drag = -np.asarray(cp, dtype=np.float64) * nx * surface.areas / frontal_area
+    return {"forward": drag[nx < 0].sum(), "rearward": drag[nx >= 0].sum()}
+
+
+def _assert_drag_by_facing(forces: dict, expected: dict[str, float]) -> None:
+    # Exact against exact: the engine's Cp at each polygon is within about 2e-6 of Python's.
+    assert forces["byFacing"]["forward"] == pytest.approx(expected["forward"], abs=2e-5)
+    assert forces["byFacing"]["rearward"] == pytest.approx(expected["rearward"], abs=2e-5)
+    assert forces["byFacing"]["forward"] + forces["byFacing"]["rearward"] == pytest.approx(forces["cdP"], abs=1e-12)
+
+
+@requires_runtime
+def test_drag_by_facing_follows_its_definition(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches a drag split that sums the wrong polygons, weights or field."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    outcome = _run_engine("analysis", path, tmp_path / "out")
+    reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    expected = _drag_by_facing(read_vtp_surface(path), reference.cp_mean, outcome["geometry"]["frontalArea"])
+    _assert_drag_by_facing(outcome["exact"]["forces"], expected)
+
+
+RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"
+
+
+@pytest.mark.skipif(not RUN_1.is_file(), reason="needs DrivAerML run 1 in data/raw")
+def test_bundled_run_1_drag_split_matches_the_reference() -> None:
+    """Catches the bundled run 1 example's drag split drifting from the Python reference prediction
+    on every polygon of the real file."""
+    summary = json.loads((REPO / "web/examples/run_1.json").read_text())
+    reference = run_vtp_inference(RUN_1, SurrogateEnsemble.load(CHECKPOINT))
+    expected = _drag_by_facing(read_vtp_surface(RUN_1), reference.cp_mean, summary["geometry"]["frontalArea"])
+    _assert_drag_by_facing(summary["forces"], expected)
 
 
 def _read_without_complaint(path: Path) -> pv.PolyData:

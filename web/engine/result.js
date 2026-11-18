@@ -15,9 +15,12 @@
  * @property {{ bounds: number[], length: number, width: number, height: number,
  *              surfaceArea: number, frontalArea: number }} geometry
  *   `bounds` is [xmin, xmax, ymin, ymax, zmin, zmax]. `frontalArea` is the reference area for coefficients.
- * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null }} forces
+ * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null,
+ *              byFacing: { forward: number, rearward: number } }} forces
  *   Pressure drag coefficient: mean of the ensemble's networks, their standard deviation, each
  *   network's value, and the CFD value integrated over the file's polygons when it has CFD.
+ *   `byFacing` splits the networks' mean between polygons facing forward (outward n_x < 0) and the
+ *   rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
  * @property {{ r2: number, mae: number, rmse: number, bias: number } | null} accuracy
  *   Area-weighted agreement with CFD over the surface. Null when the file has no CFD.
  * @property {Coverage} coverage
@@ -125,12 +128,16 @@
  * @property {number[]} cpModels        each network's Cp
  * @property {number} cp                their mean
  * @property {number} sigma             spread σ(Cp): their standard deviation × `ModelCard.spreadScale`
+ * @property {Float32Array[][]} activations  per network, what it computed on the way to its Cp:
+ *   [input, hidden 1, hidden 2, hidden 3]. `input` is `features` standardized and clipped by that
+ *   network's own scaling (what its first layer reads); each hidden layer is its output after GELU.
  *
  * @typedef {Object} ModelCard  What the model is and how it scored, from training (`export_web.py`).
  * @property {{ name: string, family: string, freestreamSpeed: number, yawDegrees: number, wheels: string,
  *              source: string }} dataset  the training data: its name, car family, freestream speed in
  *   m/s, yaw angle in degrees, the wheels' state, and where it is published
  * @property {number[]} trainRuns  the DrivAerML runs the ensemble was trained on
+ * @property {number} samplesPerCar  the area-weighted surface cells each training car gave the networks
  * @property {{ trainRuns: number[], validationRuns: number[], parameters: number, layers: number[] }[]} networks
  *   per network: the runs it was fitted on, the runs held out to validate it, its parameter count, and
  *   its widths from input to output, e.g. [191, 256, 256, 256, 1]

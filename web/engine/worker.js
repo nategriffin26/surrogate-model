@@ -23,7 +23,7 @@
 import { addCellArrays, readSurface } from './vtp.js';
 import { measureCells, frontalArea } from './geometry.js';
 import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
-import { ensembleStatistics, loadEnsemble, predictOnCpu } from './network.js';
+import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint } from './meshes.js';
@@ -604,17 +604,17 @@ async function explain({ id, point, analysis, model, lookups, vertex }) {
     }
     const features = new Float32Array(layout.count);
     computeFeatures(context, site.position, site.normal, 0, 1, features);
-    const models = new Float32Array(ensemble.folds.length);
-    predictOnCpu(ensemble, features, 1, models);
-    const { cp, sigma } = ensembleStatistics(models, 1, ensemble.spreadScale);
+    const { cpModels, activations } = networkActivations(ensemble, features);
+    const { cp, sigma } = ensembleStatistics(cpModels, 1, ensemble.spreadScale);
     const explanation = {
       ...site,
       position: Array.from(site.position),
       normal: Array.from(site.normal),
       features,
-      cpModels: Array.from(models),
+      cpModels: Array.from(cpModels),
       cp: cp[0],
       sigma: sigma[0],
+      activations,
     };
     self.postMessage({ type: 'explanation', id, explanation });
   } catch (error) {

@@ -37,14 +37,16 @@ export function evenPicks(areas, count) {
 
 /**
  * Area-weighted sums over polygons, added one polygon (or one pick) at a time: each network's drag,
- * the drag build-up, the agreement with CFD and the spread σ(Cp).
+ * split by the way the polygon faces, the drag build-up, the agreement with CFD and the spread σ(Cp).
  */
 export class SurfaceTally {
   constructor(networks, frontalArea, bounds) {
     this.networks = networks;
     this.frontalArea = frontalArea;
     this.bounds = bounds;
-    this.drag = new Float64Array(networks);
+    /** Each network's drag from polygons facing forward (n_x < 0) and from the rest. */
+    this.dragForward = new Float64Array(networks);
+    this.dragRearward = new Float64Array(networks);
     this.bins = new Float64Array(BUILDUP_STATIONS);
     this.area = 0;
     this.spreadSum = 0;
@@ -66,7 +68,8 @@ export class SurfaceTally {
    * @param {number} [cfd]   the CFD Cp, when the file carried it
    */
   add(weight, x, nx, models, at, count, cp, sigma, cfd) {
-    for (let f = 0; f < this.networks; f++) this.drag[f] -= models[f * count + at] * nx * weight;
+    const drag = nx < 0 ? this.dragForward : this.dragRearward;
+    for (let f = 0; f < this.networks; f++) drag[f] -= models[f * count + at] * nx * weight;
     this.bins[station(x, this.bounds)] -= cp * nx * weight;
     this.area += weight;
     this.spreadSum += sigma * weight;
@@ -82,10 +85,11 @@ export class SurfaceTally {
   }
 
   forces(cdPCfd) {
-    const cdPModels = Array.from(this.drag, (value) => value / this.frontalArea);
+    const mean = (drag) => drag.reduce((sum, value) => sum + value, 0) / this.networks / this.frontalArea;
+    const cdPModels = Array.from(this.dragForward, (value, f) => (value + this.dragRearward[f]) / this.frontalArea);
     const cdP = cdPModels.reduce((sum, value) => sum + value, 0) / this.networks;
     const cdPStd = Math.sqrt(cdPModels.reduce((sum, value) => sum + (value - cdP) ** 2, 0) / this.networks);
-    return { cdP, cdPStd, cdPModels, cdPCfd };
+    return { cdP, cdPStd, cdPModels, cdPCfd, byFacing: { forward: mean(this.dragForward), rearward: mean(this.dragRearward) } };
   }
 
   /** Pressure drag accumulated from the nose to the end of each station. */

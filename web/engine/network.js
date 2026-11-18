@@ -134,14 +134,53 @@ function dense(input, { inputs, outputs, weight, bias }, output) {
       output[y] = gelu(a30 + b0); output[y + 1] = gelu(a31 + b1); output[y + 2] = gelu(a32 + b2); output[y + 3] = gelu(a33 + b3);
     }
   }
-  // A layer whose width is not a multiple of four: the last few neurons one at a time.
+  // A layer whose width is not a multiple of four: the last few neurons one at a time, summed in the
+  // same order as above.
   for (let o = whole; o < outputs; o++) {
     for (let r = 0; r < BLOCK; r++) {
-      let sum = bias[o];
-      for (let i = 0; i < inputs; i++) sum += weight[o * inputs + i] * input[r * inputs + i];
-      output[r * outputs + o] = gelu(sum);
+      let sum = 0;
+      for (let i = 0; i < inputs; i++) sum += input[r * inputs + i] * weight[o * inputs + i];
+      output[r * outputs + o] = gelu(sum + bias[o]);
     }
   }
+}
+
+/**
+ * Each network at one point, layer by layer: what its first layer reads (the features standardized
+ * and clipped by its own scaling), each hidden layer's output after GELU, and its Cp. The arithmetic
+ * is `predictOnCpu`'s in the same order, so each Cp is the same to the bit.
+ * @param {Ensemble} ensemble
+ * @param {Float32Array} features (inputs)
+ * @returns {{ cpModels: Float32Array, activations: Float32Array[][] }}
+ */
+export function networkActivations(ensemble, features) {
+  const { zClip } = ensemble;
+  const cpModels = new Float32Array(ensemble.folds.length);
+  const activations = ensemble.folds.map((fold, f) => {
+    const input = new Float32Array(features.length);
+    for (let i = 0; i < input.length; i++) {
+      const value = Math.fround((features[i] - fold.xMean[i]) / fold.xStd[i]);
+      input[i] = value < -zClip ? -zClip : value > zClip ? zClip : value;
+    }
+    const layers = [input];
+    for (const { inputs, outputs, weight, bias } of fold.layers.slice(0, -1)) {
+      const source = layers.at(-1);
+      const output = new Float32Array(outputs);
+      for (let o = 0; o < outputs; o++) {
+        let sum = 0;
+        for (let i = 0; i < inputs; i++) sum += source[i] * weight[o * inputs + i];
+        output[o] = gelu(sum + bias[o]);
+      }
+      layers.push(output);
+    }
+    const { inputs, weight, bias } = fold.layers.at(-1);
+    const source = layers.at(-1);
+    let sum = bias[0];
+    for (let i = 0; i < inputs; i++) sum += weight[i] * source[i];
+    cpModels[f] = Math.fround(sum) * fold.yStd + fold.yMean;
+    return layers;
+  });
+  return { cpModels, activations };
 }
 
 /**

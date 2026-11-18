@@ -6,6 +6,7 @@
 //   bun tests/web_engine_outputs.mjs features <surface.vtp> <out dir> <feature definition.json>
 //   bun tests/web_engine_outputs.mjs sequence <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
+//   bun tests/web_engine_outputs.mjs analysis <surface.vtp> <out dir>
 //
 // `parse` writes the parsed surface; `engine` adds the polygon geometry, the features at every
 // polygon centre, each network's Cp there, and the features again from the lookups as an example
@@ -14,7 +15,8 @@
 // `sequence` runs the whole engine (`createEngine`, with `web/model`) on the file twice, asking for
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
 // `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
-// predicted, as exported.vtp.
+// predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
+// forces, and the `exact` numbers.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -23,7 +25,7 @@ import { pathToFileURL } from 'node:url';
 import { readSurface } from '../web/engine/vtp.js';
 import { measureCells } from '../web/engine/geometry.js';
 import { buildContext, computeFeatures, featureLayout } from '../web/engine/features.js';
-import { ensembleStatistics, loadEnsemble, predictOnCpu } from '../web/engine/network.js';
+import { ensembleStatistics, loadEnsemble, networkActivations, predictOnCpu } from '../web/engine/network.js';
 import { packResult, unpackResult } from '../web/engine/result.js';
 import { createEngine } from '../web/engine/engine.js';
 
@@ -74,6 +76,15 @@ if (mode === 'export') {
   process.exit(0);
 }
 
+if (mode === 'analysis') {
+  const engine = createEngine();
+  let exact;
+  const everyPolygon = new Promise((resolve) => { exact = resolve; });
+  const result = await engine.analyze(new File([readFileSync(path)], basename(path)), { exact });
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ geometry: result.geometry, sampled: { forces: result.forces }, exact: await everyPolygon }));
+  process.exit(0);
+}
+
 let surface;
 try {
   surface = await readSurface(new File([readFileSync(path)], basename(path)));
@@ -106,6 +117,11 @@ if (mode === 'engine' || mode === 'features') {
     write('models.f32', models);
     write('sigma.f32', ensembleStatistics(models, count, ensemble.spreadScale).sigma);
     outcome.networks = ensemble.folds.length;
+
+    // What `explain` gives at the first polygon: each network's layers, back to back, and its Cp.
+    const { cpModels, activations } = networkActivations(ensemble, features.subarray(0, layout.count));
+    write('explained_models.f32', cpModels);
+    write('activations.f32', Float32Array.from(activations.flat().flatMap((layer) => Array.from(layer))));
 
     const triangle = { sourceTriangles: 1, positions: cells.centers.slice(0, 9), normals: cells.normals.slice(0, 9), indices: Uint32Array.of(0, 1, 2) };
     const { json, block } = await packResult({ mesh: triangle, lookups: { definition: ensemble.features, ...context } });
