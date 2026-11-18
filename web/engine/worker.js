@@ -26,7 +26,7 @@
 
 import { addCellArrays, CFD_ARRAY, cellArrayNames, readSurface, writeVtp } from './vtp.js';
 import { boundsOf, checkSurface, measureCells, frontalArea } from './geometry.js';
-import { computeFeatures, describeColumns, featureLayout, flowAt, kindsWithin } from './features.js';
+import { computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { buildLookups } from './lookups.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
@@ -63,9 +63,9 @@ const SURFACE_SAMPLES = 4096;
 
 const engine = prepare();
 engine.then(
-  ({ device, ensemble }) => {
+  ({ device, model }) => {
     self.postMessage({ type: 'device', device });
-    self.postMessage({ type: 'model', model: modelCard(ensemble) });
+    self.postMessage({ type: 'model', model });
   },
   (error) => self.postMessage({ type: 'unavailable', message: error.message }),
 );
@@ -73,10 +73,11 @@ engine.then(
 async function prepare() {
   const ensemble = await loadEnsemble(new URL('../model/', import.meta.url));
   const layout = featureLayout(ensemble.features);
+  const model = modelCard(ensemble);
   const gpu = await createGpuNetworks(ensemble);
   const pool = createPool(HELPERS, ensemble);
   const runners = { gpu, grids: gpu && createGridOperations(gpu.device), pool, networks: ensemble.folds.length, spreadScale: ensemble.spreadScale };
-  return { ensemble, layout, runners, device: deviceName(gpu) };
+  return { ensemble, layout, runners, model, device: deviceName(gpu) };
 }
 
 /** A GPU the browser took away, replaced before the next car, with the grid operations on the new device. */
@@ -86,11 +87,20 @@ async function replaceLostGpu(runners, ensemble) {
   runners.grids = runners.gpu && createGridOperations(runners.gpu.device);
 }
 
-/** @returns {import('./result.js').ModelCard} */
+/**
+ * The model file's card with what each input is; each input's range over the training cells moves
+ * from the card onto its column.
+ * @returns {import('./result.js').ModelCard}
+ */
 function modelCard({ card, activation, spreadScale, features }) {
-  const columns = describeColumns(features);
-  const comparison = card.comparison.map(({ columnRanges, ...entry }) => ({ ...entry, inputs: kindsWithin(columns, columnRanges) }));
-  return { ...card, comparison, activation, spreadScale, columns };
+  const { inputRanges, ...facts } = card;
+  const described = describeColumns(features);
+  if (inputRanges?.length !== described.length) {
+    throw new Error(`The model file gives training ranges for ${inputRanges?.length ?? 0} inputs; its networks take ${described.length}.`);
+  }
+  const columns = described.map((column, i) => ({ ...column, range: inputRanges[i] }));
+  const comparison = facts.comparison.map(({ columnRanges, ...entry }) => ({ ...entry, inputs: kindsWithin(columns, columnRanges) }));
+  return { ...facts, comparison, activation, spreadScale, columns };
 }
 
 function deviceName(gpu) {
@@ -136,9 +146,6 @@ self.onmessage = ({ data }) => {
       break;
     case 'polygonAt':
       answerPolygonAt(data);
-      break;
-    case 'flowOnMesh':
-      answerFlowOnMesh(data);
       break;
     case 'export':
       exportVtp(data);
@@ -772,20 +779,6 @@ async function explain({ id, point, normal, analysis, model, lookups, vertex }) 
       activations,
     };
     self.postMessage({ type: 'answer', id, answer: explanation });
-  } catch (error) {
-    self.postMessage({ type: 'answerFailed', id, message: error.message });
-  }
-}
-
-/** The flow inputs at a result's mesh vertices (`Engine.flowOnMesh`), from the result's lookups. */
-async function answerFlowOnMesh({ id, lookups, positions, normals }) {
-  try {
-    const { ensemble, layout } = await engine;
-    if (JSON.stringify(lookups.definition) !== JSON.stringify(ensemble.features)) {
-      throw new Error('This result was computed with different model inputs than this page uses, so its flow cannot be shown.');
-    }
-    const flow = flowAt({ ...lookups, layout }, positions, normals);
-    self.postMessage({ type: 'answer', id, answer: flow }, [flow.induced.buffer, flow.speedSquared.buffer]);
   } catch (error) {
     self.postMessage({ type: 'answerFailed', id, message: error.message });
   }

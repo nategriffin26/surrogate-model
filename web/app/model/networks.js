@@ -86,10 +86,9 @@ function drawNetwork(canvas, { card, groups, layers, cp }) {
 }
 
 /**
- * @param {{ card: import('../../engine/result.js').ModelCard, groups: import('./groups.js').InputGroup[],
- *   setNetwork: (k: number) => void }} options
+ * @param {{ card: import('../../engine/result.js').ModelCard, groups: import('./groups.js').InputGroup[] }} options
  */
-export function createNetworks({ card, groups, setNetwork }) {
+export function createNetworks({ card, groups }) {
 	const canvas = h('canvas', { class: 'network-canvas', role: 'img', 'aria-label': 'One network working on the point' });
 	const state = { network: 0, point: null };
 	const runs = card.trainRuns;
@@ -142,7 +141,6 @@ export function createNetworks({ card, groups, setNetwork }) {
 	function choose(k) {
 		state.network = k;
 		foldRows.forEach((row, i) => row.setAttribute('aria-checked', String(i === k)));
-		setNetwork(k);
 		draw();
 	}
 

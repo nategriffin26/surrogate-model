@@ -2,7 +2,7 @@
 
 .model-page { --page-width: 1180px; max-width: var(--page-width); margin: 0 auto; padding: 36px 48px 120px; color: var(--ink); font-size: 13.5px; }
 .model-page .definitions { position: absolute; }
-.model-page :is(#model-arrow, #model-flow-arrow) path { fill: var(--heading); }
+.model-page #model-arrow path { fill: var(--heading); }
 .model-page h1 { margin: 0; font: 600 28px/1.2 var(--head); color: var(--heading); letter-spacing: -0.01em; }
 .model-page h2 { margin: 0 0 6px; font: 600 22px/1.25 var(--head); color: var(--heading); letter-spacing: -0.005em; }
 .model-page h3 { display: flex; align-items: center; gap: 8px; margin: 0; font: 600 15px/1.3 var(--head); color: var(--heading); }
@@ -129,8 +129,6 @@
 .model-page .swatch { width: 11px; height: 11px; flex: none; border-radius: 3px; background: var(--group); }
 .model-page .group-count { margin-left: 2px; color: var(--muted); font-family: var(--body); font-size: 12.5px; font-weight: 500; }
 .model-page .group-reason { margin: 8px 0 12px; color: var(--ink); font-size: 13px; line-height: 1.5; }
-.model-page .group-values { display: flex; gap: 1px; height: 14px; margin-bottom: 14px; }
-.model-page .group-values i { flex: 1 1 0; min-width: 1px; border-radius: 1px; background: #fff; box-shadow: inset 0 0 0 0.5px rgba(13, 34, 51, 0.1); }
 .model-page .group-step { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 10px; align-items: center; }
 .model-page .step-track { position: relative; height: 10px; border-radius: 5px; background: var(--hair); }
 .model-page .step-before, .model-page .step-gain { position: absolute; top: 0; bottom: 0; }
@@ -139,34 +137,26 @@
 .model-page .step-value { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .model-page .step-value b { color: var(--group); font-size: 14px; }
 
-/* Flat drawings of a group's inputs. */
+/* A group's numbers on their ranges, and the cells of its inputs. */
 .model-page .drawing { display: block; max-width: 100%; height: auto; overflow: visible; }
 .model-page .drawing text { fill: var(--muted); font: 500 10.5px var(--body); }
-.model-page .silhouette { fill: #eef3f6; stroke: #b9cad4; stroke-width: 1; }
+.model-page .drawing .read-value { fill: var(--heading); font: 600 12.5px var(--body); }
+.model-page .drawing .read-part { fill: var(--heading); }
+.model-page .drawing :is(.range-end, .grid-label) { font-size: 9.5px; }
+.model-page .range-track { stroke: #dbe4ea; stroke-width: 4; stroke-linecap: round; }
+.model-page .range-middle { stroke: #9fb2bf; stroke-width: 1; }
+.model-page .range-value { stroke: var(--heading); stroke-width: 1.2; }
+.model-page .read-cell { stroke: rgba(13, 34, 51, 0.12); stroke-width: 0.5; }
+.model-page .shown-outline { fill: none; stroke: var(--heading); stroke-width: 1.6; pointer-events: none; }
+.model-page .repeat-hit { fill: transparent; cursor: pointer; }
+.model-page .repeat-step { display: flex; align-items: center; gap: 6px; }
+.model-page .repeat-step button { width: 26px; height: 22px; padding: 0; border: 1px solid #c9d6de; border-radius: 6px; background: #fff; color: var(--heading); font: 600 13px var(--body); cursor: pointer; }
+.model-page .repeat-step button:disabled { opacity: 0.35; cursor: default; }
+.model-page .repeat-step span { min-width: 92px; color: var(--heading); font: 600 13px var(--body); text-align: center; }
+/* The overview's close-up of the surface around the point. */
 .model-page .cut { fill: none; stroke: #4f6a78; stroke-width: 1.4; stroke-linecap: round; }
-.model-page .centre-line { stroke: var(--rule); stroke-dasharray: 3 3; }
 .model-page .facing { stroke: var(--heading); stroke-width: 1.6; }
 .model-page .point-dot { fill: #fff; stroke: var(--heading); stroke-width: 2.5; }
-.model-page .dimension line { stroke: var(--group, var(--steel)); stroke-width: 1.3; }
-.model-page .dimension circle { fill: var(--group, var(--steel)); }
-.model-page .drawing .dimension text { fill: var(--heading); }
-.model-page .drawing .size-label { fill: var(--shade); font-weight: 600; }
-.model-page .size-ring { fill: var(--shade); fill-opacity: 0.1; stroke: var(--shade); stroke-width: 1.4; }
-.model-page .size-normal line { stroke: var(--shade); stroke-width: 2; }
-.model-page .size-normal circle { fill: var(--shade); }
-.model-page .station line { stroke: var(--group); stroke-width: 1.6; }
-.model-page .station circle { fill: var(--group); }
-.model-page .station.empty { fill: #fff; stroke: var(--group); stroke-width: 1.3; }
-.model-page .station.other { fill: var(--group); opacity: 0.6; }
-.model-page .flow-view { display: flex; flex-direction: column; gap: 4px; }
-.model-page .drawing-label { color: var(--muted); font-size: 11.5px; }
-.model-page .overlaid { position: relative; }
-.model-page .overlaid canvas { display: block; }
-.model-page .overlaid svg { position: absolute; inset: 0; }
-.model-page .flow-arrow { stroke: var(--heading); stroke-width: 1; opacity: 0.4; }
-.model-page .flow-point line { stroke: var(--group); stroke-width: 2.4; }
-.model-page .flow-point text { fill: var(--heading); font: 600 11px var(--body); paint-order: stroke; stroke: #fff; stroke-width: 3px; }
-.model-page .field-key { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.86); pointer-events: none; }
 .model-page .spread-charts .headline { max-width: 190px; }
 
 /* ---- the networks ---- */

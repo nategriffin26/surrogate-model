@@ -13,11 +13,13 @@ is fixed in the browser's code:
 - `card`: the facts the model view shows, from `metrics.json` and the checkpoint: `dataset` (the
   training data, `DATASET` below); `trainRuns`; `samplesPerCar` (the area-weighted cells each
   training car gave); `dimensions` (the training cars' range of length, width and height, which a
-  car's dimensions are also measured against); `networks` (per network `trainRuns`, `validationRuns`
-  and `layers`, its widths from input to output); `crossValidation` (`meanR2`, `dragMae`);
-  `outsideRuns` (per run `run`, `r2`, `dragMae`); `spreadCoverage` (the share of the outside runs'
-  surface whose error is within the spread σ(Cp)); `comparison` (per model compared `learner`,
-  `columnRanges`, the [start, stop) column ranges it was given, `crossValidationR2`, `dragMae`);
+  car's dimensions are also measured against); `inputRanges` (per input column, in column order,
+  its 2nd percentile, median and 98th percentile over the training cars' sampled cells, in the
+  input's own units); `networks` (per network `trainRuns`, `validationRuns` and `layers`, its widths
+  from input to output); `crossValidation` (`meanR2`, `dragMae`); `outsideRuns` (per run `run`,
+  `r2`, `dragMae`); `spreadCoverage` (the share of the outside runs' surface whose error is within
+  the spread σ(Cp)); `comparison` (per model compared `learner`, `columnRanges`, the [start, stop)
+  column ranges it was given, `crossValidationR2`, `dragMae`);
 - `weightsSha256`, the digest of `weights.bin`, which each analysis records so a stale example shows.
 `weights.bin` holds every float32 array back to back, little-endian: per network the input mean and
 standard deviation, then each layer's weight (outputs x inputs, row-major) and bias. The same
@@ -54,19 +56,14 @@ def feature_definition() -> dict:
         "count": features.FEATURE_COLUMNS.total_dim,
         "rasterStep": features.RASTER_STEP,
         "domainX": list(features.DOMAIN_X),
+        "domainYHalf": features.DOMAIN_Y_HALF,
         "domainZ": list(features.DOMAIN_Z),
-        "outlineDx": list(features.OUTLINE_DX),
-        "outlineDz": list(features.OUTLINE_DZ),
-        "outlineDzDx": list(features.OUTLINE_DZ_DX),
-        "flowStep": features.FLOW_STEP,
-        "flowNodes": list(features.FLOW_NODES),
-        "flowPasses": features.FLOW_PASSES,
-        "flowRelaxation": features.FLOW_RELAXATION,
+        "sectionDx": list(features.SECTION_DX),
         "surfaceScales": list(features.SURFACE_SCALES),
         "surfaceSteps": list(features.SURFACE_STEPS),
         "surfaceSigma": features.SURFACE_SIGMA,
         "gaussianTruncate": features.GAUSSIAN_TRUNCATE,
-        "cubeMeanInverseDistance": features.CUBE_MEAN_INVERSE_DISTANCE,
+        "surfaceReads": [name for name, _ in features.SURFACE_READS],
     }
 
 
@@ -99,6 +96,7 @@ def model_card(payload: dict, metrics: dict) -> dict:
         "trainRuns": [int(run) for run in metrics["allowed_train_runs"]],
         "samplesPerCar": int(metrics["samples_per_car"]),
         "dimensions": {name: {"min": bounds[name]["min"], "max": bounds[name]["max"]} for name in DIMENSIONS},
+        "inputRanges": payload["training_envelope"]["input_ranges"],
         "spreadCoverage": metrics["uncertainty_coverage_holdout"]["within_1_std"],
         "networks": [
             {

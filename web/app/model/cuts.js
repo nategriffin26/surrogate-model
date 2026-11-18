@@ -1,6 +1,6 @@
-// Where an axis-aligned plane cuts the car's surface: the outlines the plan-view outline reads and the surface
-// drawings show, drawn on the car and flat. The triangles are bucketed once along y and z, so a cut visits only the
-// triangles that reach its plane and keeps up with a point dragged across the car.
+// Where an axis-aligned plane cuts the car's surface: the outlines the drawings show and the slice the sections read at
+// a station. The triangles are bucketed once along each axis, so a cut visits only the triangles that reach its plane
+// and keeps up with a point dragged across the car.
 
 /** Cuts kept per car; a drag across the whole car visits fewer distinct planes than this. */
 const KEPT = 96;
@@ -8,14 +8,14 @@ const KEPT = 96;
 export class SurfaceCutter {
 	/**
 	 * @param {import('../../engine/result.js').DisplayMesh} mesh
-	 * @param {number} step  bucket size in metres, the raster step of the plan-view outline
+	 * @param {number} step  bucket size in metres, the raster step of the sections
 	 */
 	constructor({ positions, normals, indices }, step) {
 		this.positions = positions;
 		this.normals = normals;
 		this.indices = indices;
 		this.step = step;
-		this.buckets = { 1: this.bucket(1), 2: this.bucket(2) };
+		this.buckets = { 0: this.bucket(0), 1: this.bucket(1), 2: this.bucket(2) };
 		this.kept = new Map();
 	}
 
@@ -47,7 +47,7 @@ export class SurfaceCutter {
 	}
 
 	/**
-	 * The surface where coordinate `axis` (1 for y, 2 for z) equals `value`, as segments: `positions` and the
+	 * The surface where coordinate `axis` (0 for x, 1 for y, 2 for z) equals `value`, as segments: `positions` and the
 	 * surface `normals` at their ends, six floats per segment each.
 	 * @returns {{ positions: Float32Array, normals: Float32Array }}
 	 */

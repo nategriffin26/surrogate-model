@@ -1,17 +1,18 @@
 /**
  * A car's lookups: what the features read, built once from all of its polygons as `SurfaceContext`
- * in `features.py` builds them. The plan-view outline is a raster of how far the body reaches from
- * the centre plane; the flow is the potential of the car's source sheet after the wall condition's
- * passes; each surface scale is the area and area-weighted normal spread on a grid and blurred,
- * whole and cut to its upstream half. The grids are built on the GPU when there is one
- * (`grid-gpu.js`), else on the CPU (`grid.js`), and the same lookups come out of both.
+ * in `features.py` builds them. The raster is a 2 cm picture of the car that the sections across it
+ * are read from: how far the body reaches from the centre plane at each (x, z), the body's top and
+ * bottom over each (x, y) column, and each section's area S(x). Each surface scale is the area and
+ * area-weighted normal spread on a grid and blurred, whole and cut to its upstream half; its grids
+ * are built on the GPU when there is one (`grid-gpu.js`), else on the CPU (`grid.js`), and the same
+ * lookups come out of both.
  *
  * A surface scale's fields are kept only at the nodes around the polygon centres and the file's
  * points (a few percent of its grid): every read at a polygon, and at a working-mesh vertex, which
  * sits on a file point.
  */
 
-import { correlateAlong, potential, potentialSpectrum, readGradient, spreadOnGrid } from './grid.js';
+import { correlateAlong, spreadOnGrid } from './grid.js';
 
 /**
  * How far from a polygon centre or a file point a read must still find its nodes kept: beyond the
@@ -21,11 +22,6 @@ import { correlateAlong, potential, potentialSpectrum, readGradient, spreadOnGri
 const KEPT_REACH = 5e-5;
 
 /**
- * @typedef {Object} FlowLookup  The potential of the car's sources and their image under the
- *   ground, on the flow grid (`FeatureLayout.flow` gives its step and nodes).
- * @property {number[]} origin
- * @property {Float32Array} potential  (nx, ny, nz)
- *
  * @typedef {Object} ScaleLookup  The surface around the car at one scale, kept at the nodes around it.
  * @property {number[]} origin
  * @property {number[]} nodes
@@ -36,9 +32,13 @@ const KEPT_REACH = 5e-5;
  * @typedef {Object} SurfaceLookups
  * @property {number[]} bounds   [xmin, xmax, ymin, ymax, zmin, zmax] of the polygon centres
  * @property {number} yCenter
- * @property {Float32Array} yOut (2, nx, nz) of the raster: how far the body reaches from the centre
- *   plane in each (x, z) column, [0] toward −y, [1] toward +y
- * @property {FlowLookup} flow
+ * @property {Float32Array} yOut         (2, nx, nz) of the raster: how far the body reaches from the
+ *   centre plane in each (x, z) bin, [0] toward −y, [1] toward +y; 0 where it does not reach the bin
+ * @property {Float32Array} zTop         (nx, ny) the highest polygon centre over each (x, y) column,
+ *   with y measured from the centre plane; the ground (the lowest centre) where the column holds none
+ * @property {Float32Array} zBottom      (nx, ny) the lowest, the ground where the column holds none
+ * @property {Float32Array} sectionArea  (nx) the section across the car at each x, S(x) in m²: the
+ *   columns' heights summed across y, times the raster step
  * @property {ScaleLookup[]} scales  in `FeatureLayout.scales` order
  */
 
@@ -52,21 +52,14 @@ const KEPT_REACH = 5e-5;
 export async function buildLookups(cells, points, layout, gpu) {
   const { bounds } = cells;
   const yCenter = 0.5 * (bounds[2] + bounds[3]);
-  const flowGrid = { origin: flowOrigin(layout.flow, yCenter, bounds[4]), step: layout.flow.step, nodes: layout.flow.nodes };
   const scaleGrids = layout.scales.map((scale) => scaleGrid(scale, bounds));
-  const built = gpu ? await gridsOnGpu(gpu, cells, points, layout, flowGrid, scaleGrids) : gridsOnCpu(cells, points, layout, flowGrid, scaleGrids);
+  const scales = gpu ? await scalesOnGpu(gpu, cells, points, layout, scaleGrids) : scalesOnCpu(cells, points, layout, scaleGrids);
   return {
     bounds,
     yCenter,
-    yOut: outlineRaster(cells, layout, yCenter),
-    flow: { origin: flowGrid.origin, potential: built.potential },
-    scales: scaleGrids.map(({ origin, nodes }, s) => ({ origin, nodes, ...built.scales[s] })),
+    ...carRaster(cells, layout, yCenter, bounds[4]),
+    scales: scaleGrids.map(({ origin, nodes }, s) => ({ origin, nodes, ...scales[s] })),
   };
-}
-
-/** Nodes symmetric about the ground (the lowest polygon centre) in z, so the mirror image is the grid flipped in z. */
-function flowOrigin({ x0, step, nodes }, yCenter, zGround) {
-  return [x0, yCenter - 0.5 * (nodes[1] - 1) * step, zGround - (nodes[2] / 2 - 0.5) * step];
 }
 
 /** A scale's grid: the polygon centres' bounds and a margin of the Gaussian's reach and two nodes. */
@@ -78,25 +71,68 @@ function scaleGrid({ step, radius }, bounds) {
 }
 
 /**
- * The plan-view outline: for each (x, z) column of the raster and each side of the centre plane, the
- * farthest polygon centre from it, in the reference's float32 arithmetic.
+ * The raster, from every polygon centre in the reference's float32 arithmetic, so each centre lands
+ * in the bin it lands in there; S(x) sums each row in NumPy's order and so is the reference's to the bit.
  */
-function outlineRaster({ centers, areas }, { h, x0, z0, nx, nz }, yCenter) {
+function carRaster({ centers, areas }, { h, x0, yHalf, z0, nx, ny, nz }, yCenter, zGround) {
   const f32 = Math.fround;
   const yCenter32 = f32(yCenter);
   const yOut = new Float32Array(2 * nx * nz);
+  const zTop = new Float32Array(nx * ny).fill(-Infinity);
+  const zBottom = new Float32Array(nx * ny).fill(Infinity);
   for (let c = 0; c < areas.length; c++) {
+    const z = centers[3 * c + 2];
     const yRelative = f32(centers[3 * c + 1] - yCenter32);
     const ix = clamp(Math.trunc(f32(f32(centers[3 * c] - x0) / h)), nx);
-    const iz = clamp(Math.trunc(f32(f32(centers[3 * c + 2] - z0) / h)), nz);
+    const iy = clamp(Math.trunc(f32(f32(yRelative + yHalf) / h)), ny);
+    const iz = clamp(Math.trunc(f32(f32(z - z0) / h)), nz);
     const reach = ((yRelative >= 0 ? nx : 0) + ix) * nz + iz;
     if (Math.abs(yRelative) > yOut[reach]) yOut[reach] = Math.abs(yRelative);
+    const column = ix * ny + iy;
+    if (z > zTop[column]) zTop[column] = z;
+    if (z < zBottom[column]) zBottom[column] = z;
   }
-  return yOut;
+  const heights = new Float32Array(nx * ny);
+  for (let column = 0; column < heights.length; column++) {
+    if (zTop[column] === -Infinity) {
+      zTop[column] = zGround;
+      zBottom[column] = zGround;
+    }
+    heights[column] = zTop[column] - zBottom[column];
+  }
+  const sectionArea = new Float32Array(nx);
+  for (let ix = 0; ix < nx; ix++) sectionArea[ix] = f32(numpySum32(heights, ix * ny, ny) * h);
+  return { yOut, zTop, zBottom, sectionArea };
 }
 
 function clamp(index, size) {
   return index < 0 ? 0 : index >= size ? size - 1 : index;
+}
+
+/**
+ * values[start, start + n) summed in float32 in NumPy's order (`pairwise_sum`): eight running sums
+ * for up to 128 values, joined in pairs, and halves summed apart beyond that.
+ */
+function numpySum32(values, start, n) {
+  const f32 = Math.fround;
+  if (n < 8) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum = f32(sum + values[start + i]);
+    return sum;
+  }
+  if (n <= 128) {
+    const r = Array.from(values.subarray(start, start + 8));
+    let i = 8;
+    for (; i < n - (n % 8); i += 8) {
+      for (let j = 0; j < 8; j++) r[j] = f32(r[j] + values[start + i + j]);
+    }
+    let sum = f32(f32(f32(r[0] + r[1]) + f32(r[2] + r[3])) + f32(f32(r[4] + r[5]) + f32(r[6] + r[7])));
+    for (; i < n; i++) sum = f32(sum + values[start + i]);
+    return sum;
+  }
+  let half = Math.floor(n / 2);
+  half -= half % 8;
+  return f32(numpySum32(values, start, half) + numpySum32(values, start + half, n - half));
 }
 
 /** The surface's four carried quantities at each polygon: area, then area × each normal component. */
@@ -105,32 +141,10 @@ function carried({ normals, areas }, quantity, out) {
   return out;
 }
 
-function gridsOnCpu(cells, points, layout, flowGrid, scaleGrids) {
-  const { centers, normals, areas } = cells;
-  const count = areas.length;
-  const { flow } = layout;
-
-  // The source density σ starts as the sheet's own answer to the stream, −2 n_x; each pass moves it
-  // part of the way to what the wall condition asks given the velocity the sheet induces.
-  const spectrum = potentialSpectrum(flow.nodes, flow.step, flow.cubeMeanInverseDistance);
-  const density = new Float64Array(count);
-  for (let c = 0; c < count; c++) density[c] = -2 * normals[3 * c];
-  const strengths = new Float64Array(count);
-  const flowPotential = () => {
-    for (let c = 0; c < count; c++) strengths[c] = density[c] * areas[c];
-    return potential(flow.nodes, spectrum, spreadOnGrid(flowGrid, centers, strengths));
-  };
-  for (let pass = 0; pass < flow.passes; pass++) {
-    const u = readGradient(flowGrid, flowPotential(), centers);
-    for (let c = 0; c < count; c++) {
-      const normal = 3 * c;
-      const inward = u[normal] * normals[normal] + u[normal + 1] * normals[normal + 1] + u[normal + 2] * normals[normal + 2];
-      density[c] += flow.relaxation * (-2 * normals[normal] - 2 * inward - density[c]);
-    }
-  }
-
-  const quantity = new Float64Array(count);
-  const scales = layout.scales.map((scale, s) => {
+function scalesOnCpu(cells, points, layout, scaleGrids) {
+  const { centers, areas } = cells;
+  const quantity = new Float64Array(areas.length);
+  return layout.scales.map((scale, s) => {
     const grid = scaleGrids[s];
     const kept = keptNodes(grid, centers, points);
     const whole = new Float32Array(4 * kept.length);
@@ -143,7 +157,6 @@ function gridsOnCpu(cells, points, layout, flowGrid, scaleGrids) {
     }
     return { kept, whole, ahead };
   });
-  return { potential: flowPotential(), scales };
 }
 
 /** The nodes around every polygon centre and file point, within `KEPT_REACH`, ascending. */
@@ -178,11 +191,10 @@ function gather(field, kept, out, lane) {
   for (let i = 0; i < kept.length; i++) out[4 * i + lane] = field[kept[i]];
 }
 
-async function gridsOnGpu(gpu, cells, points, layout, flowGrid, scaleGrids) {
+async function scalesOnGpu(gpu, cells, points, layout, scaleGrids) {
   const { device } = gpu;
-  const { centers, normals, areas } = cells;
+  const { centers, areas } = cells;
   const count = areas.length;
-  const { flow } = layout;
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const created = [];
   const buffer = (bytes) => {
@@ -223,54 +235,25 @@ async function gridsOnGpu(gpu, cells, points, layout, flowGrid, scaleGrids) {
     filePoints.destroy();
     const kept = await Promise.all(bits.map(async (set, s) => nodesOf(new Uint32Array(await download(set, set.size)), nodeCount(scaleGrids[s]))));
 
-    // The flow: the wall condition's passes, then the potential of the final sheet.
-    const flowNodes = nodeCount(flowGrid);
-    const density = new Float32Array(count);
-    const strength = new Float32Array(count);
-    for (let c = 0; c < count; c++) {
-      density[c] = -2 * normals[3 * c];
-      strength[c] = density[c] * areas[c];
-    }
-    const flowBuffers = {
-      normals: upload(normals), areas: upload(Float32Array.from(areas)), densities: upload(density), strengths: upload(strength),
-      sums: buffer(8 * flowNodes), potential: buffer(4 * flowNodes),
-    };
-    const flowPotential = gpu.potential(flow.nodes, flow.step, flow.cubeMeanInverseDistance);
-    const sheetPotential = (encoder) => {
-      encoder.clearBuffer(flowBuffers.sums);
-      gpu.spread(encoder, flowGrid, { positions, weights: flowBuffers.strengths, count, sums: flowBuffers.sums });
-      gpu.sumsToField(encoder, { sums: flowBuffers.sums, field: flowBuffers.potential, count: flowNodes });
-      flowPotential.encode(encoder, flowBuffers.potential, flowBuffers.potential);
-    };
-    submit((encoder) => {
-      for (let pass = 0; pass < flow.passes; pass++) {
-        sheetPotential(encoder);
-        gpu.wall(encoder, flowGrid, { positions, count, relaxation: flow.relaxation, ...flowBuffers });
-      }
-      sheetPotential(encoder);
-    });
-    const flowField = new Float32Array(await download(flowBuffers.potential, 4 * flowNodes));
-    flowPotential.destroy();
-    for (const name of ['normals', 'areas', 'densities', 'sums', 'potential']) flowBuffers[name].destroy();
-
     // Each scale, one carried quantity at a time, so only one quantity's grids are held at once.
     const quantity = new Float32Array(count);
+    const weights = buffer(4 * count);
     const scales = [];
     for (let s = 0; s < scaleGrids.length; s++) {
       const grid = scaleGrids[s];
-      const { weights, upstream, radius } = layout.scales[s];
+      const { radius } = layout.scales[s];
       const n = nodeCount(grid);
       const keptBuffer = upload(kept[s]);
       const [sums, spread, yz, blurred] = [buffer(8 * n), buffer(4 * n), buffer(4 * n), buffer(4 * n)];
       const whole = buffer(16 * kept[s].length);
       const ahead = buffer(16 * kept[s].length);
-      const gaussian = upload(Float32Array.from(weights));
-      const upstreamHalf = upload(Float32Array.from(upstream));
+      const gaussian = upload(Float32Array.from(layout.scales[s].weights));
+      const upstreamHalf = upload(Float32Array.from(layout.scales[s].upstream));
       for (let q = 0; q < 4; q++) {
-        device.queue.writeBuffer(flowBuffers.strengths, 0, carried(cells, q, quantity));
+        device.queue.writeBuffer(weights, 0, carried(cells, q, quantity));
         submit((encoder) => {
           encoder.clearBuffer(sums);
-          gpu.spread(encoder, grid, { positions, weights: flowBuffers.strengths, count, sums });
+          gpu.spread(encoder, grid, { positions, weights, count, sums });
           gpu.sumsToField(encoder, { sums, field: spread, count: n });
           gpu.correlate(encoder, grid.nodes, 1, { weights: gaussian, radius, field: spread, out: blurred });
           gpu.correlate(encoder, grid.nodes, 2, { weights: gaussian, radius, field: blurred, out: yz });
@@ -287,8 +270,7 @@ async function gridsOnGpu(gpu, cells, points, layout, flowGrid, scaleGrids) {
       });
       for (const made of [keptBuffer, sums, spread, yz, blurred, whole, ahead, gaussian, upstreamHalf]) made.destroy();
     }
-
-    return { potential: flowField, scales };
+    return scales;
   };
 
   device.pushErrorScope('out-of-memory');

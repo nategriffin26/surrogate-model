@@ -256,7 +256,8 @@ def _build_training_envelope(
     arrays_by_run: dict[int, dict[str, np.ndarray]],
     meta_by_run: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Record min/max geometric descriptors strictly across the 10 allowed training runs."""
+    """What the 10 allowed training runs span: their shape descriptors, their cross-section curves,
+    and each input's 2nd percentile, median and 98th percentile over their sampled cells."""
     desc_keys = list(meta_by_run[ALLOWED_TRAIN_RUNS[0]]["shape_descriptor"].keys())
     descriptor_bounds: dict[str, dict[str, float]] = {}
     for key in desc_keys:
@@ -268,11 +269,13 @@ def _build_training_envelope(
         }
 
     section_curves = np.stack([arrays_by_run[r]["section_area_x"] for r in ALLOWED_TRAIN_RUNS], axis=0)
+    training_inputs = np.concatenate([arrays_by_run[r]["features"] for r in ALLOWED_TRAIN_RUNS], axis=0)
     return {
         "train_runs": list(ALLOWED_TRAIN_RUNS),
         "descriptor_bounds": descriptor_bounds,
         "section_area_min": np.round(section_curves.min(axis=0), 4).tolist(),
         "section_area_max": np.round(section_curves.max(axis=0), 4).tolist(),
+        "input_ranges": np.round(np.percentile(training_inputs, [2, 50, 98], axis=0).T, 4).tolist(),
     }
 
 

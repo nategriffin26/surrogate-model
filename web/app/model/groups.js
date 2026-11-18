@@ -1,31 +1,34 @@
 // The model's inputs as the page tells them: groups of columns that the models compared in training were given
 // or not given together, each with its colour, its words and the accuracy it added; and the compared models
-// themselves, in those groups' terms. Everything comes from the model card, so a model trained on other groups
+// themselves, in those groups' terms. Everything else comes from the model card, so a model trained on other groups
 // brings its own, and a group with no words here stops the page with an error naming it.
-
-/** Group colours, in the order the groups are added. */
-const PALETTE = ['#2f739c', '#9a55e8', '#a35b1a', '#197b80', '#237f50', '#a83258'];
 
 /** The learners of this model's own kind: one network on a point's inputs, or the five of them. */
 const OWN = new Set(['mlp', 'ensemble']);
 
-/** Words for each group, by the kind of its first input: its name and the physical reason it is there. */
+/**
+ * Words for each group, by the kind of its first input: its name, its colour and the physical reason it is there; and,
+ * for a group that reads the same things over and over, the column field it repeats over (one station of the
+ * sections, one size of nearby surface) and, if not the columns' own order, the order its reads are listed in.
+ */
 const WORDS = {
 	position: {
 		name: 'Position and facing',
+		color: '#2f739c',
 		reason: 'Surface facing the wind takes high pressure; surface facing away sits in the low pressure of the wake.',
-	},
-	flow: {
-		name: 'Potential flow',
-		reason: 'An ideal flow solved around the whole car on the ground: it stops against the nose and speeds up over crests as air does, but never separates, so it has no wake.',
 	},
 	surface: {
 		name: 'Nearby surface',
+		color: '#a35b1a',
 		reason: 'How the surface curves around the point: flow speeds up over a crest, and pressure falls.',
+		repeat: 'scale',
 	},
-	outline: {
-		name: 'Plan-view outline',
-		reason: 'How far the body stands out beside the point, ahead of it and behind it at its height: air along the side speeds up past a wheel arch and slows where the body narrows.',
+	section: {
+		name: 'Slices across the car',
+		color: '#197b80',
+		reason: 'Air speeds up where the car grows across and slows where it narrows: how big each slice is, and how far it reaches out, up and down from the point.',
+		repeat: 'station',
+		reads: ['outboard', 'above', 'below', 'area'],
 	},
 };
 
@@ -37,6 +40,9 @@ const WORDS = {
  * @property {string} color
  * @property {string[]} kinds    the column kinds in it
  * @property {number[]} columns  indices into `ModelCard.columns`
+ * @property {{ field: string, values: number[], columns: number[][] } | null} repeat  for a group that reads the same
+ *   things at each of several values of a column field: the values, ascending, and the columns read at each, in the
+ *   order they are listed
  * @property {{ before: number, after: number } | null} step  cross-validation R² of this model's kind of network
  *   given the groups before it, and given this one too; null when no such pair was compared
  */
@@ -61,7 +67,8 @@ export function inputGroups(card) {
 	const groups = [...byPattern.values()].map(({ kinds, columns: indices }) => {
 		const id = columns[indices[0]].kind;
 		if (!(id in WORDS)) throw new Error(`The model has a group of inputs the page has no words for: “${id}”.`);
-		return { id, ...WORDS[id], kinds, columns: indices, color: '', step: null };
+		const { repeat: field, reads, ...words } = WORDS[id];
+		return { id, ...words, kinds, columns: indices, repeat: field ? repeatOf(columns, indices, field, reads) : null, step: null };
 	});
 
 	const own = comparison.filter((row) => OWN.has(row.learner));
@@ -80,9 +87,18 @@ export function inputGroups(card) {
 		ordered.push(next.group);
 		before = next.row.crossValidationR2;
 	}
-	const all = [...ordered, ...groups.filter((group) => !ordered.includes(group))];
-	all.forEach((group, i) => (group.color = PALETTE[i % PALETTE.length]));
-	return all;
+	return [...ordered, ...groups.filter((group) => !ordered.includes(group))];
+}
+
+/** A group's columns by the value of `field` they are read at, each in `reads` order when given, else in column order. */
+function repeatOf(columns, indices, field, reads) {
+	const values = [...new Set(indices.map((i) => columns[i][field]))].sort((a, b) => a - b);
+	const place = (i) => (reads ? reads.indexOf(columns[i].read) : i);
+	return {
+		field,
+		values,
+		columns: values.map((value) => indices.filter((i) => columns[i][field] === value).sort((a, b) => place(a) - place(b))),
+	};
 }
 
 /** The group a column belongs to. */

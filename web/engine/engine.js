@@ -186,11 +186,6 @@ export function createEngine() {
     return ask({ type: 'polygonAt', analysis, point, normal });
   }
 
-  function flowOnMesh(result) {
-    const { definition, flow } = result.lookups;
-    return ask({ type: 'flowOnMesh', lookups: { definition, flow }, positions: result.mesh.positions, normals: result.mesh.normals });
-  }
-
   function ask(message, onProgress = () => {}) {
     const id = nextId++;
     return new Promise((resolve, reject) => {
@@ -250,7 +245,7 @@ export function createEngine() {
   }
 
   return {
-    analyze, analyzeSurface, predictQuick, workingCells, fileCells, explain, polygonAt, flowOnMesh, canExportVtp, exportVtp,
+    analyze, analyzeSurface, predictQuick, workingCells, fileCells, explain, polygonAt, canExportVtp, exportVtp,
     cellArrayNames, attachReference, detachReference, device: device.promise, model: model.promise,
   };
 }

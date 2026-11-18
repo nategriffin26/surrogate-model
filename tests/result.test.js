@@ -33,22 +33,24 @@ function wavySheet(withCfd) {
   return { source: { name: 'sheet.vtp', cells: rows * columns }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
 }
 
-/** `SurfaceLookups` with a small raster, potential and surface scale of irregular values. */
+/** `SurfaceLookups` with small section rasters and a surface scale of irregular values. */
 function lookups() {
   const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
   return {
-    definition: { count: 99 },
+    definition: { count: 122 },
     bounds: [-0.7, 2.3, -0.5, 0.5, -0.1, 0.1],
     yCenter: 0,
-    yOut: values(50, 1),
-    flow: { origin: [-1.3, -1.27, -1.98], potential: values(60, 2) },
+    yOut: values(60, 1),
+    zTop: values(40, 2),
+    zBottom: values(40, 5),
+    sectionArea: values(10, 6),
     scales: [{ origin: [-1, -1, -0.5], nodes: [3, 4, 5], kept: Int32Array.of(0, 1, 7, 8, 59), whole: values(20, 3), ahead: values(20, 4) }],
   };
 }
 
 /** Every array of `SurfaceLookups`, by name, for comparing two of them value for value. */
-function lookupArrays({ yOut, flow, scales }) {
-  return { yOut, potential: flow.potential, ...Object.fromEntries(scales.flatMap((scale, k) => ['kept', 'whole', 'ahead'].map((name) => [`${name}${k}`, scale[name]]))) };
+function lookupArrays({ yOut, zTop, zBottom, sectionArea, scales }) {
+  return { yOut, zTop, zBottom, sectionArea, ...Object.fromEntries(scales.flatMap((scale, k) => ['kept', 'whole', 'ahead'].map((name) => [`${name}${k}`, scale[name]]))) };
 }
 
 function sameValues(a, b) {
@@ -84,7 +86,6 @@ Deno.test('a packed result comes back within the stated precision', async () => 
   assert(back.mesh.bounds.every((value, i) => Math.abs(value - bounds[i]) < 1e-4), `bounds ${back.mesh.bounds} are not ${bounds}`);
   for (const [name, array] of Object.entries(lookupArrays(result.lookups))) assert(sameValues(lookupArrays(back.lookups)[name], array), `lookup ${name} changed`);
   assert(JSON.stringify(back.lookups.scales[0].origin) === JSON.stringify(result.lookups.scales[0].origin), 'scale origin changed');
-  assert(JSON.stringify(back.lookups.flow.origin) === JSON.stringify(result.lookups.flow.origin), 'flow origin changed');
   assert(new Set(match).size === match.length && !match.includes(undefined), 'vertices do not map one to one');
 
   for (let v = 0; v < match.length; v++) {

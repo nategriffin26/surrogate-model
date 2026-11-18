@@ -28,9 +28,8 @@
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
 // `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
 // predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
-// forces, the `exact` numbers, what `polygonAt` and `explain` give at points just outside two
-// dozen polygons, and the result mesh with what `flowOnMesh` gives at its vertices. `pick` times
-// `polygonAt`'s lookup at points outside two hundred polygons, the
+// forces, the `exact` numbers, and what `polygonAt` and `explain` give at points just outside two
+// dozen polygons. `pick` times `polygonAt`'s lookup at points outside two hundred polygons, the
 // networks asked at each on demand, without the rest of the engine. `stretch` stretches the car
 // lengthwise by `factor` and analyses it from arrays (`analyzeSurface`), writing what `analysis` does
 // and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
@@ -38,12 +37,10 @@
 // anew with `writeVtp`, with cell and point arrays of several types and widths. `reference` analyses
 // `cfd.vtp` alone, then the surface, attaches a reference to it from each of the four other files in
 // turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
-// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example, and `flowOnMesh` for
-// it. `grid-cpu` and
+// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example. `grid-cpu` and
 // `grid-gpu` run the grid operations (`grid.js`, `grid-gpu.js`) on synthetic inputs (spec.json with
-// sources, points, weights, normals, areas, densities and field as float32) and write each result;
-// `grid-gpu` needs a runtime with WebGPU (Deno) and writes outcome.json { "gpu": false } where there
-// is no adapter.
+// points, weights and field as float32) and write each result; `grid-gpu` needs a runtime with
+// WebGPU (Deno) and writes outcome.json { "gpu": false } where there is no adapter.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -57,7 +54,7 @@ import { ensembleStatistics, loadEnsemble, networkActivations, predictOnCpu } fr
 import { packResult, unpackResult } from '../web/engine/result.js';
 import { createEngine } from '../web/engine/engine.js';
 import { describePolygon, indexPolygons, polygonAt } from '../web/engine/polygon-lookup.js';
-import { correlateAlong, gaussianWeights, potential, potentialSpectrum, readGradient, spreadOnGrid, upstreamHalf } from '../web/engine/grid.js';
+import { correlateAlong, gaussianWeights, spreadOnGrid, upstreamHalf } from '../web/engine/grid.js';
 import { createGridOperations } from '../web/engine/grid-gpu.js';
 
 const [mode, path, outDir, modelSource] = process.argv.slice(2);
@@ -89,9 +86,7 @@ if (mode === 'example') {
   const normal = Array.from(example.mesh.normals.subarray(3 * v, 3 * v + 3));
   const { at, index, cfd } = await engine.explain(example, point, normal);
   const polygon = await engine.polygonAt(example, point, normal);
-  const { induced, speedSquared } = await engine.flowOnMesh(example);
-  const flow = { vertices: speedSquared.length, inducedValues: induced.length, finite: [...induced, ...speedSquared].every(Number.isFinite) };
-  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ explained: { at, index, cfd }, vertexCfd: example.mesh.cfd[index], polygon, flow }));
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ explained: { at, index, cfd }, vertexCfd: example.mesh.cfd[index], polygon }));
   process.exit(0);
 }
 
@@ -153,11 +148,6 @@ if (mode === 'analysis') {
   const numbers = await everyPolygon;
   const late = await ask(engine.polygonAt);
   const explained = await ask(engine.explain);
-  const { induced, speedSquared } = await engine.flowOnMesh(result);
-  write('mesh_positions.f32', result.mesh.positions);
-  write('mesh_normals.f32', result.mesh.normals);
-  write('flow_induced.f32', induced);
-  write('flow_speed_squared.f32', speedSquared);
   writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
     geometry: result.geometry,
     sampled: { forces: result.forces },
@@ -333,20 +323,16 @@ if (mode === 'write') {
 }
 
 if (mode === 'grid-cpu' || mode === 'grid-gpu') {
-  // `path` is a directory of synthetic inputs: spec.json, and as float32 sources on the grid, points
-  // with weights, normals, areas and source densities, and a field on the grid.
+  // `path` is a directory of synthetic inputs: spec.json, and as float32 points with weights and a
+  // field on the grid.
   const spec = JSON.parse(readFileSync(join(path, 'spec.json'), 'utf8'));
   const input = (name) => new Float32Array(readFileSync(join(path, `${name}.f32`)).buffer.slice(0));
-  const [sources, points, weights, normals, areas, densities, field] = ['sources', 'points', 'weights', 'normals', 'areas', 'densities', 'field'].map(input);
+  const [points, weights, field] = ['points', 'weights', 'field'].map(input);
   const grid = { origin: spec.origin, step: spec.step, nodes: spec.nodes };
   const gauss = gaussianWeights(spec.sigmaNodes, 3);
   const ahead = upstreamHalf(gauss);
   if (mode === 'grid-cpu') {
-    const spectrum = potentialSpectrum(grid.nodes, grid.step, spec.cubeMeanInverseDistance);
-    write('spectrum.f32', spectrum);
-    write('potential.f32', potential(grid.nodes, spectrum, sources));
     write('spread.f32', Float32Array.from(spreadOnGrid(grid, points, weights)));
-    write('gradient.f32', readGradient(grid, field, points));
     for (const axis of [0, 1, 2]) write(`blur${axis}.f32`, correlateAlong(field, grid.nodes, axis, gauss));
     write('ahead.f32', correlateAlong(field, grid.nodes, 0, ahead));
     process.exit(0);
@@ -371,25 +357,17 @@ if (mode === 'grid-cpu' || mode === 'grid-gpu') {
   const positions = upload(points);
   const fieldBuffer = upload(field);
   const outputs = {
-    potential: [buffer(nodes), nodes], spread: [buffer(nodes), nodes], wall: [upload(densities), count],
+    spread: [buffer(nodes), nodes],
     blur0: [buffer(nodes), nodes], blur1: [buffer(nodes), nodes], blur2: [buffer(nodes), nodes], ahead: [buffer(nodes), nodes],
   };
   const encoder = device.createCommandEncoder();
-  const flow = operations.potential(grid.nodes, grid.step, spec.cubeMeanInverseDistance);
-  flow.encode(encoder, upload(sources), outputs.potential[0]);
   const sums = buffer(2 * nodes);
   operations.spread(encoder, grid, { positions, weights: upload(weights), count, sums });
   operations.sumsToField(encoder, { sums, field: outputs.spread[0], count: nodes });
-  operations.wall(encoder, grid, {
-    positions, normals: upload(normals), areas: upload(areas), count, potential: fieldBuffer,
-    densities: outputs.wall[0], strengths: buffer(count), relaxation: 0.5,
-  });
   const radius = (gauss.length - 1) / 2;
   for (const axis of [0, 1, 2]) operations.correlate(encoder, grid.nodes, axis, { weights: upload(gauss), radius, field: fieldBuffer, out: outputs[`blur${axis}`][0] });
   operations.correlate(encoder, grid.nodes, 0, { weights: upload(ahead), radius, field: fieldBuffer, out: outputs.ahead[0] });
   device.queue.submit([encoder.finish()]);
-  const [a, b, c] = grid.nodes.map((n) => n + 1);
-  outputs.spectrum = [flow.kernel, a * b * c];
   for (const [name, [source, floats]] of Object.entries(outputs)) {
     const staging = device.createBuffer({ size: 4 * floats, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     const copy = device.createCommandEncoder();

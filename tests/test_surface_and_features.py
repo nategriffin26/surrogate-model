@@ -9,8 +9,8 @@ import pytest
 import pyvista as pv
 
 from surrogate import features
-from surrogate.features import FEATURE_COLUMNS, OUTLINE_DX, SurfaceContext, extract_query_features
-from surrogate.surface import compute_pressure_forces, read_vtp_surface, sample_cells_by_area
+from surrogate.features import FEATURE_COLUMNS, SECTION_DX, SurfaceContext, extract_query_features
+from surrogate.surface import SurfaceMesh, compute_pressure_forces, read_vtp_surface, sample_cells_by_area
 
 
 def _make_closed_box_vtp(
@@ -95,37 +95,6 @@ def test_geometry_only_vtp_without_cp_and_poisoned_solver_arrays_produce_identic
     np.testing.assert_allclose(f_geom, f_full, atol=1e-6)
 
 
-def test_potential_flow_around_a_sphere_matches_the_exact_solution(tmp_path: Path) -> None:
-    """Catches a wrong source kernel, strength, velocity scale or wall condition: around a sphere,
-    potential flow has Cp = 1 - 9/4 sin^2 of the angle from the stream (the first pass alone,
-    sources of -2 n_x, gives 1 - 25/9 sin^2)."""
-    sphere = pv.Icosphere(radius=0.6, nsub=5, center=(0.3, 0.0, 0.0))
-    # A speck 1.2 m below is the ground: the sphere's image is 4 radii away and barely acts on it.
-    ground = pv.Triangle([[0.3, 0.0, -1.2], [0.301, 0.0, -1.2], [0.3, 0.001, -1.2]])
-    sphere.merge(ground).save(tmp_path / "sphere.vtp")
-    surface = read_vtp_surface(tmp_path / "sphere.vtp")
-    on_sphere = surface.centers[:, 2] > -1.0
-    f = extract_query_features(SurfaceContext.from_surface(surface), surface.centers[on_sphere], surface.normals[on_sphere])
-    cp = 1.0 - f[:, FEATURE_COLUMNS.flow.start + 3]
-    sin2 = 1.0 - surface.normals[on_sphere, 0].astype(np.float64) ** 2
-    rms = np.sqrt(np.average((cp - (1.0 - 9.0 / 4.0 * sin2)) ** 2, weights=surface.areas[on_sphere]))
-    assert rms < 0.05  # 0.025 on the 4 cm grid; one pass instead of four gives 0.11
-
-
-def test_the_flow_does_not_pass_through_the_ground(tmp_path: Path) -> None:
-    """Catches a missing or misplaced ground image: under a car near the road, the flow the car
-    induces must run along the road, with no vertical component at the road's surface."""
-    body = pv.Box(bounds=(0.0, 3.0, -0.8, 0.8, -0.15, 1.0)).triangulate().subdivide(3)
-    wheel = pv.Box(bounds=(0.5, 0.8, 0.5, 0.8, -0.3, -0.15)).triangulate().subdivide(1)  # sets the ground at z = -0.3
-    body.merge(wheel).save(tmp_path / "car.vtp")
-    surface = read_vtp_surface(tmp_path / "car.vtp")
-    context = SurfaceContext.from_surface(surface)
-    road = np.column_stack([np.linspace(0.2, 2.8, 50), np.zeros(50), np.full(50, surface.bounds[4])])
-    ux, _, uz = (context.flow_grid.read(c, road) for c in context.induced_velocity)
-    assert np.abs(ux).max() > 0.05
-    assert np.abs(uz).max() < 1e-3 * np.abs(ux).max()
-
-
 def test_the_surface_around_a_cell_does_not_depend_on_the_mesh_density(tmp_path: Path) -> None:
     """Catches surroundings averaged over cells rather than area: the same box meshed with cells of
     14 cm and of 3.6 cm must read the same mean normal and amount, and about 1 on a flat face."""
@@ -138,15 +107,27 @@ def test_the_surface_around_a_cell_does_not_depend_on_the_mesh_density(tmp_path:
     up = np.tile(np.array([0.0, 0.0, 1.0], dtype=np.float32), (len(roof), 1))
     f_coarse = extract_query_features(SurfaceContext.from_surface(coarse), roof, up)
     f_fine = extract_query_features(SurfaceContext.from_surface(fine), roof, up)
+    per_scale = sum(width for _, width in features.SURFACE_READS)
     for k, scale in enumerate(features.SURFACE_SCALES):
         if scale < 0.25:  # the coarse cells (14 cm) cannot resolve the smaller scales
             continue
-        cols = slice(FEATURE_COLUMNS.surface.start + 15 * k, FEATURE_COLUMNS.surface.start + 15 * k + 4)
+        cols = slice(FEATURE_COLUMNS.surface.start + per_scale * k, FEATURE_COLUMNS.surface.start + per_scale * k + 4)
         np.testing.assert_allclose(f_coarse[:, cols], f_fine[:, cols], atol=0.03)
         if scale < 0.6:  # the roof is flat for 60 cm around every point
             np.testing.assert_allclose(f_fine[:, cols][:, :3], np.tile([0.0, 0.0, 1.0], (len(roof), 1)), atol=0.03)
             # Where the face falls between grid nodes moves the amount by up to 10%; 1 is its mean
             np.testing.assert_allclose(f_fine[:, cols][:, 3], 1.0, atol=0.1)
+
+
+def _cell_near(surface: SurfaceMesh, point: tuple[float, float, float], facing: tuple[float, float, float]) -> int:
+    """The cell facing `facing` whose centre is nearest `point`."""
+    on_face = np.flatnonzero(surface.normals @ np.array(facing, dtype=np.float32) > 0.99)
+    return int(on_face[np.argmin(np.linalg.norm(surface.centers[on_face] - np.array(point), axis=1))])
+
+
+def _section_read(read: str, dx: float) -> int:
+    """The column of one of a slice's four reads, for the slice `dx` from the cell's station."""
+    return FEATURE_COLUMNS.sections.start + 4 * (1 + SECTION_DX.index(dx)) + ("area", "outboard", "above", "below").index(read)
 
 
 def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path: Path) -> None:
@@ -160,17 +141,35 @@ def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path:
     surface = read_vtp_surface(tmp_path / "one_sided.vtp")
     ctx = SurfaceContext.from_surface(surface)
 
-    def cell_near(point: tuple[float, float, float], facing: tuple[float, float, float]) -> int:
-        on_face = np.flatnonzero(surface.normals @ np.array(facing, dtype=np.float32) > 0.99)
-        return int(on_face[np.argmin(np.linalg.norm(surface.centers[on_face] - np.array(point), axis=1))])
-
     # Cells on either side, 20 cm behind the middle of the part
-    behind = cell_near((1.5, 0.9, 0.87), (0.0, 1.0, 0.0))
-    mirrored = cell_near((1.5, -0.9, 0.87), (0.0, -1.0, 0.0))
+    behind = _cell_near(surface, (1.5, 0.9, 0.87), (0.0, 1.0, 0.0))
+    mirrored = _cell_near(surface, (1.5, -0.9, 0.87), (0.0, -1.0, 0.0))
     f = extract_query_features(ctx, surface.centers[[behind, mirrored]], surface.normals[[behind, mirrored]])
-    ahead_by_20cm = FEATURE_COLUMNS.outline.start + 1 + OUTLINE_DX.index(-0.2)
-    assert f[0, ahead_by_20cm] == pytest.approx(0.25, abs=0.02)
-    assert f[1, ahead_by_20cm] < 0.02
+    assert f[0, _section_read("outboard", -0.2)] == pytest.approx(0.25, abs=0.02)
+    assert f[1, _section_read("outboard", -0.2)] < 0.02
+
+
+def test_a_roof_block_on_one_side_shows_in_the_slices_through_it(tmp_path: Path) -> None:
+    """Catches a slice's reach above or below read from the wrong spanwise column (the other side,
+    or the centre plane) or from the body's underside, and its area summed along the wrong axis or
+    unscaled: a 20 cm block on the roof's +y half must stand 20 cm above the roof cells 20 cm behind
+    it on that half and not on the -y half, and add its 0.3 x 0.2 m to the area of its slice. The
+    raster is filled from cell centres, so the box is meshed finer than its 2 cm step."""
+    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(8)
+    block = pv.Box(bounds=(1.2, 1.4, 0.3, 0.6, 1.1, 1.3)).triangulate().subdivide(5)
+    body.merge(block).save(tmp_path / "roof_block.vtp")
+    surface = read_vtp_surface(tmp_path / "roof_block.vtp")
+    ctx = SurfaceContext.from_surface(surface)
+
+    behind = _cell_near(surface, (1.5, 0.45, 1.1), (0.0, 0.0, 1.0))
+    mirrored = _cell_near(surface, (1.5, -0.45, 1.1), (0.0, 0.0, 1.0))
+    f = extract_query_features(ctx, surface.centers[[behind, mirrored]], surface.normals[[behind, mirrored]])
+    assert f[0, _section_read("above", -0.2)] == pytest.approx(0.2, abs=0.01)
+    assert abs(f[1, _section_read("above", -0.2)]) < 0.01
+    assert f[1, _section_read("below", -0.2)] == pytest.approx(1.4, abs=0.01)  # the body down to its floor
+    own_slice = f[0, FEATURE_COLUMNS.sections.start]
+    assert own_slice == pytest.approx(1.8 * 1.4, abs=0.05)
+    assert f[0, _section_read("area", -0.2)] - own_slice == pytest.approx(0.3 * 0.2, abs=0.01)
 
 
 def test_area_weighted_sampling_matches_physical_surface_share() -> None:

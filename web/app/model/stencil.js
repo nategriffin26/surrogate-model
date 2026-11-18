@@ -1,8 +1,8 @@
 // The marks of `measures.js` for one group of inputs, drawn on the page's car in the group's colour. Everything is
 // depth-tested against the car: what lies on the surface or in front of it is drawn in full, what the car hides is
-// drawn faintly, so the eye can tell which is which. Cuts are the car's own outlines, lifted a hair off the surface;
-// nearby surface is a crisp ring on the surface at each size, with each size's mean normal as an arrow; the potential
-// flow is an arrow of its velocity along the surface. The point is a handle the reader drags.
+// drawn faintly, so the eye can tell which is which. Nearby surface is a crisp ring on the surface at each size, with
+// each size's mean normal as an arrow; a section's read is a dot where it ends, with a faint hairline from its station
+// on the point's fore-aft line. The point is a handle the reader drags.
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -13,14 +13,10 @@ import { SurfaceCutter } from './cuts.js';
 
 /** Length of the drawn normal, in metres. */
 const NORMAL_LENGTH = 0.2;
-/** Cuts sit this far off the surface, in metres, so the car does not hide them. */
-const CUT_LIFT = 0.003;
-/** Cuts are drawn this far beyond the stations at their ends, in metres. */
-const SPAN_MARGIN = 0.06;
 /** Dots are drawn this far towards the camera, in metres, so those on the surface are not lost in it. */
 const DOT_LIFT = 0.012;
-/** Dot diameters in CSS pixels. */
-const DOT = { handle: 21, reading: 6 };
+/** Dot diameters in CSS pixels: the handle, a reading, a section's read, and a read of the station shown. */
+const DOT = { handle: 21, reading: 6, section: 8, shown: 11 };
 /**
  * While the rings of nearby surface are drawn, the handle is a small ink dot, so the smallest ring (3 cm, about 7 px
  * across at the page's close view on a phone) is seen around it.
@@ -32,8 +28,8 @@ const REACH = 14;
 const SIZES = 4;
 /** Length of the mean normal drawn for the smallest size of nearby surface, in metres, and how much longer each next one is. */
 const MEAN_NORMAL = [0.1, 0.06];
-/** Length of the drawn flow velocity, in metres per unit of the stream's speed. */
-const FLOW_LENGTH = 0.3;
+/** How strongly the sizes of nearby surface not shown are ringed, against the shown size's 1. */
+const FAINT_SIZE = 0.3;
 const INK = '#0d2233';
 
 const DOT_VERTEX = /* glsl */ `
@@ -98,11 +94,13 @@ void main() {
 }`;
 
 // The sizes of nearby surface about the point: a crisp ring at each size's radius, about 1.5 pixels wide whatever the
-// zoom, and inside it a light fill in the shade of the smallest ring that holds the place.
+// zoom, and inside it a light fill in the shade of the smallest ring that holds the place; each size at its strength,
+// the shown size's full and the others' faint.
 const RING_FRAGMENT = /* glsl */ `
 uniform vec3 uCentre;
 uniform float uRadius[${SIZES}];
 uniform vec3 uShade[${SIZES}];
+uniform float uStrength[${SIZES}];
 varying vec3 vWorld;
 void main() {
 	float d = length(vWorld - uCentre);
@@ -114,13 +112,13 @@ void main() {
 	bool inside = false;
 	for (int s = 0; s < ${SIZES}; s++) {
 		if (uRadius[s] <= 0.0) continue;
-		float l = 1.0 - smoothstep(0.7 * w, 1.7 * w, abs(d - uRadius[s]));
+		float l = (1.0 - smoothstep(0.7 * w, 1.7 * w, abs(d - uRadius[s]))) * uStrength[s];
 		if (l > line) {
 			line = l;
 			lineColor = uShade[s];
 		}
 		if (d < uRadius[s]) {
-			fill += 0.08;
+			fill += 0.08 * uStrength[s];
 			if (!inside) {
 				fillColor = uShade[s];
 				inside = true;
@@ -150,6 +148,15 @@ export class Stencil {
 		// Per width: the part of a line in view, then the part the car hides.
 		this.lines = {};
 		for (const [name, width] of [['major', 2.5], ['minor', 1.5]]) this.lines[name] = [line(width, 1, false), line(width * 0.7, 1, true)];
+		// A hairline is faint and drawn over the car, never hidden by it; the shown station's are bold.
+		const over = (linewidth, opacity) => new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, depthTest: false, linewidth, opacity });
+		this.lines.hair = [over(1, 0.55)];
+		this.lines.shown = [over(2.4, 0.95)];
+		// The shown station's cross-section, fainter where the car hides it.
+		this.lines.section = [
+			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.6, opacity: 0.85 }),
+			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.2, opacity: 0.22, depthFunc: THREE.GreaterDepth }),
+		];
 		const dots = (opacity, depthFunc) => new THREE.ShaderMaterial({
 			uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: DOT_LIFT } },
 			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
@@ -157,13 +164,12 @@ export class Stencil {
 		this.dots = [dots(1, THREE.LessEqualDepth), dots(0.3, THREE.GreaterDepth)];
 		this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.04, 20), new THREE.MeshBasicMaterial({ color: INK }));
 		this.cone.renderOrder = ORDER.handle;
-		this.flowCone = new THREE.Mesh(this.cone.geometry, new THREE.MeshBasicMaterial());
-		this.flowCone.renderOrder = ORDER.handle;
 		this.ringMaterial = new THREE.ShaderMaterial({
 			uniforms: {
 				uCentre: { value: new THREE.Vector3() },
 				uRadius: { value: new Array(SIZES).fill(0) },
 				uShade: { value: Array.from({ length: SIZES }, () => new THREE.Color()) },
+				uStrength: { value: new Array(SIZES).fill(1) },
 				uLift: { value: 0.002 },
 			},
 			vertexShader: TINT_VERTEX, fragmentShader: RING_FRAGMENT, transparent: true, depthWrite: false,
@@ -171,7 +177,7 @@ export class Stencil {
 		});
 	}
 
-	/** The car the marks are drawn on; its working mesh is cut for the outline and ringed for nearby surface. */
+	/** The car the marks are drawn on; its working mesh is cut for the drawings and ringed for nearby surface. */
 	setCar(result) {
 		if (this.car?.result === result) return;
 		this.car?.rings.geometry.dispose();
@@ -183,33 +189,7 @@ export class Stencil {
 		const rings = new THREE.Mesh(geometry, this.ringMaterial);
 		rings.renderOrder = ORDER.rings;
 		rings.frustumCulled = false;
-		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), rings, segments: new WeakMap() };
-	}
-
-	/**
-	 * The part of a cut its inputs are read along: within its span of x (and a little beyond, so its ends are
-	 * seen to be ends), on the point's side of the centre plane.
-	 */
-	segments(mark) {
-		const kept = this.car.segments.get(mark);
-		if (kept) return kept;
-		const { positions, normals } = this.car.cutter.cut(mark.axis, mark.value);
-		const yCenter = this.car.result.lookups.yCenter;
-		const [lo, hi] = [mark.span[0] - SPAN_MARGIN, mark.span[1] + SPAN_MARGIN];
-		const p = [];
-		const n = [];
-		for (let i = 0; i < positions.length; i += 6) {
-			const x = (positions[i] + positions[i + 3]) / 2;
-			const y = (positions[i + 1] + positions[i + 4]) / 2;
-			if (x < lo || x > hi || (y - yCenter) * mark.side < 0) continue;
-			for (let k = 0; k < 6; k++) {
-				p.push(positions[i + k]);
-				n.push(normals[i + k]);
-			}
-		}
-		const segments = { positions: Float32Array.from(p), normals: Float32Array.from(n) };
-		this.car.segments.set(mark, segments);
-		return segments;
+		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), rings };
 	}
 
 	/**
@@ -217,8 +197,9 @@ export class Stencil {
 	 * @param {{ position: number[], normal: number[] }} point
 	 * @param {import('./measures.js').Mark[]} marks
 	 * @param {string} hex  the group's colour
+	 * @param {number | null} shown  the station of the sections, or the size of nearby surface, drawn as the one shown
 	 */
-	draw(point, marks, hex) {
+	draw(point, marks, hex, shown) {
 		const group = new THREE.Group();
 		const lines = {};
 		const addLine = (style, from, to, color) => {
@@ -233,41 +214,46 @@ export class Stencil {
 		const shades = sizeShades(hex, sizes.length).map((shade) => new THREE.Color(shade));
 
 		for (const mark of marks) {
+			const isShown = mark.station === shown;
 			if (mark.type === 'reading') {
-				dots.push({ at: mark.at, size: DOT.reading, style: mark.hollow ? 1 : 0, color });
+				const size = mark.layer !== 'section' ? DOT.reading : isShown ? DOT.shown : DOT.section;
+				dots.push({ at: mark.at, size, style: mark.hollow ? 1 : 0, color });
 			} else if (mark.type === 'guide') {
 				addLine('minor', mark.from, mark.to, color);
-			} else if (mark.type === 'cut') {
-				const { positions, normals } = this.segments(mark);
-				const style = mark.own ? 'major' : 'minor';
-				for (let i = 0; i < positions.length; i += 6) {
-					const lift = (k) => positions[i + k] + normals[i + k] * CUT_LIFT;
-					addLine(style, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], color);
-				}
-			} else if (mark.type === 'velocity') {
-				// At a stagnation point the flow has no velocity along the surface, and nothing is drawn.
-				const speed = Math.hypot(...mark.velocity);
-				if (speed === 0) continue;
-				const tip = mark.at.map((p, k) => p + mark.velocity[k] * FLOW_LENGTH);
-				addLine('major', mark.at, tip, color);
-				this.flowCone.material.color.copy(color);
-				this.flowCone.position.fromArray(tip);
-				this.flowCone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...mark.velocity.map((v) => v / speed)));
-				group.add(this.flowCone);
+			} else if (mark.type === 'hairline') {
+				// A read that runs to the ground for want of body is drawn only for the station shown.
+				if (isShown || !mark.ground) addLine(isShown ? 'shown' : 'hair', mark.from, mark.to, color);
+			} else if (mark.type === 'stations') {
+				addLine('hair', mark.from, mark.to, ink);
 			}
 		}
-		// Nearby surface: a ring at each size's radius, and the mean normal under it as an arrow from the point, longer
-		// for each larger size so all are seen.
+		// The shown station's cross-section, the slice its area is read from.
+		if (marks.some((m) => m.type === 'stations') && shown !== null) {
+			const { positions } = this.car.cutter.cut(0, point.position[0] + shown);
+			for (let i = 0; i < positions.length; i += 6) addLine('section', positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6), color);
+		}
+		// Nearby surface: a ring at each size's radius, the shown size's strong and the others' faint; under the shown
+		// size, its mean normal as an arrow from the point, and across it the line between the part ahead and the part
+		// behind.
 		if (sizes.length) {
 			const rings = this.ringMaterial.uniforms;
 			rings.uCentre.value.fromArray(point.position);
 			rings.uRadius.value.fill(0);
 			sizes.forEach((size, k) => {
+				const isShown = shown === null || size.scale === shown;
 				rings.uRadius.value[k] = size.scale;
 				rings.uShade.value[k].copy(shades[k]);
+				rings.uStrength.value[k] = isShown ? 1 : FAINT_SIZE;
+				if (!isShown) return;
 				const length = Math.hypot(...size.normal);
 				const reach = MEAN_NORMAL[0] + MEAN_NORMAL[1] * k;
 				if (length > 0) addLine('major', size.at, size.at.map((p, c) => p + (size.normal[c] / length) * reach), shades[k]);
+				const [, ny, nz] = point.normal;
+				const across = Math.hypot(ny, nz);
+				if (across > 1e-3) {
+					const t = [0, nz / across, -ny / across];
+					addLine('hair', size.at.map((p, c) => p - t[c] * size.scale), size.at.map((p, c) => p + t[c] * size.scale), ink);
+				}
 			});
 			group.add(this.car.rings);
 		}

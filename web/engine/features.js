@@ -1,11 +1,11 @@
 /**
  * The numbers the networks are told about a surface point, as `features.py` defines them, read from
- * a car's lookups (`lookups.js`): where the point is on the car and which way it faces; the flow
- * around the car standing on the ground, as a sheet of sources on its surface satisfying the wall
- * condition (the velocity the car adds to the stream, and the squared speed along the surface); the
- * surface around the point at four scales, whole and split into the part ahead and the part behind;
- * and how far the car reaches sideways beyond the point, at its height, ahead, behind, above and
- * below. Nothing is folded across the centre plane: a point is read on its own side.
+ * a car's lookups (`lookups.js`): where the point is on the car and which way it faces; the surface
+ * around the point at four scales, whole and split into the part ahead and the part behind; and
+ * sections across the car at the point's station and ahead and behind it, each read for its area,
+ * how far it reaches outboard of the point at the point's height, and how far it reaches above and
+ * below the point at the point's distance from the centre plane. Nothing is folded across the centre
+ * plane: a point is read on its own side.
  *
  * Axes are the file's: x downstream, z up, and so (right-handed) +y toward the car's right as seen
  * from the driver's seat.
@@ -16,28 +16,39 @@
  * bins are chosen as in training and values agree to float32.
  */
 
-import { gaussianWeights, gradientAt, locate, upstreamHalf } from './grid.js';
+import { gaussianWeights, locate, upstreamHalf } from './grid.js';
 
 const f32 = Math.fround;
+
+/**
+ * The reads of a surface scale a model can be given, in the reference's column order, each with its
+ * columns' names and the part of the surface they read. A model file names the reads it was trained
+ * with (`surfaceReads`), the same for every scale.
+ */
+const SURFACE_READS = {
+  meanNormal: [['Mean facing rearward', 'whole'], ['Mean facing +y', 'whole'], ['Mean facing up', 'whole']],
+  amount: [['Surface density', 'whole']],
+  ownMinusMean: [['Bend, rearward', 'whole'], ['Bend, +y', 'whole'], ['Bend, up', 'whole']],
+  aheadNormal: [['Mean facing rearward, ahead', 'ahead'], ['Mean facing +y, ahead', 'ahead'], ['Mean facing up, ahead', 'ahead']],
+  aheadAmount: [['Surface density, ahead', 'ahead']],
+  behindNormal: [['Mean facing rearward, behind', 'behind'], ['Mean facing +y, behind', 'behind'], ['Mean facing up, behind', 'behind']],
+  behindAmount: [['Surface density, behind', 'behind']],
+};
 
 /**
  * @typedef {Object} FeatureDefinition  as `export_web.py` writes it
  * @property {number} count
  * @property {number} rasterStep
  * @property {number[]} domainX
+ * @property {number} domainYHalf      the raster spans y from the centre plane over [−domainYHalf, domainYHalf)
  * @property {number[]} domainZ
- * @property {number[]} outlineDx
- * @property {number[]} outlineDz
- * @property {number[]} outlineDzDx
- * @property {number} flowStep
- * @property {number[]} flowNodes      (nx, ny, nz) above the ground; the grid holds their mirror image below too
- * @property {number} flowPasses
- * @property {number} flowRelaxation
+ * @property {number[]} sectionDx      the stations ahead of (negative) and behind the point's own
  * @property {number[]} surfaceScales
  * @property {number[]} surfaceSteps
  * @property {number} surfaceSigma     the Gaussian's standard deviation, as a share of the scale
  * @property {number} gaussianTruncate the Gaussian's reach, in standard deviations
- * @property {number} cubeMeanInverseDistance
+ * @property {string[]} surfaceReads   the reads of each surface scale given to the model, in order
+ *   (`SURFACE_READS` names them)
  *
  * @typedef {Object} ScaleLayout  One surface scale's grid step and Gaussian.
  * @property {number} scale
@@ -48,11 +59,10 @@ const f32 = Math.fround;
  * @property {number} flatPanel       the blurred area a flat panel through the point reads, on average over
  *   where it falls between nodes
  *
- * @typedef {FeatureDefinition & { h: number, x0: number, z0: number, nx: number, nz: number,
- *   flow: { x0: number, step: number, nodes: number[], passes: number, relaxation: number, cubeMeanInverseDistance: number },
- *   scales: ScaleLayout[] }} FeatureLayout
- *   The outline raster's origin (x0, z0) and step h in float32, as the raster is built, and its size
- *   (nx, nz); the flow grid with its mirror image (nodes[2] twice the definition's); each scale's grid.
+ * @typedef {FeatureDefinition & { h: number, x0: number, yHalf: number, z0: number, nx: number, ny: number,
+ *   nz: number, scales: ScaleLayout[], surfaceColumns: number[] }} FeatureLayout
+ *   The raster's origin (x0, −yHalf, z0) and step h in float32, as the raster is built, and its size
+ *   (nx, ny, nz); each scale's grid; and which of a scale's fifteen values go to the model, in order.
  */
 
 /**
@@ -61,22 +71,16 @@ const f32 = Math.fround;
  * @returns {FeatureLayout}
  */
 export function featureLayout(definition) {
-  const { rasterStep, domainX, domainZ, flowNodes, surfaceSigma, gaussianTruncate } = definition;
+  const { rasterStep, domainX, domainYHalf, domainZ, surfaceSigma, gaussianTruncate } = definition;
   const layout = {
     ...definition,
     h: f32(rasterStep),
     x0: f32(domainX[0]),
+    yHalf: f32(domainYHalf),
     z0: f32(domainZ[0]),
     nx: Math.round((domainX[1] - domainX[0]) / rasterStep),
+    ny: 2 * Math.round(domainYHalf / rasterStep),
     nz: Math.round((domainZ[1] - domainZ[0]) / rasterStep),
-    flow: {
-      x0: domainX[0],
-      step: definition.flowStep,
-      nodes: [flowNodes[0], flowNodes[1], 2 * flowNodes[2]],
-      passes: definition.flowPasses,
-      relaxation: definition.flowRelaxation,
-      cubeMeanInverseDistance: definition.cubeMeanInverseDistance,
-    },
     scales: definition.surfaceScales.map((scale, s) => {
       const step = definition.surfaceSteps[s];
       const weights = gaussianWeights((surfaceSigma * scale) / step, gaussianTruncate);
@@ -87,6 +91,7 @@ export function featureLayout(definition) {
       const flatPanel = step * step * ((2.0 / 3.0) * weights[radius] + (1.0 / 3.0) * weights[radius + 1]);
       return { scale, step, radius, weights, upstream: upstreamHalf(weights), flatPanel };
     }),
+    surfaceColumns: surfaceColumns(definition.surfaceReads),
   };
   const columns = describeColumns(definition).length;
   if (columns !== definition.count) {
@@ -95,21 +100,38 @@ export function featureLayout(definition) {
   return layout;
 }
 
+/** Where each read's columns sit among a scale's fifteen values, in the order `reads` lists them. */
+function surfaceColumns(reads) {
+  if (!Array.isArray(reads)) {
+    throw new Error("The model file's feature definition does not say which surface reads its model was given (surfaceReads).");
+  }
+  const unknown = reads.filter((read) => !Object.hasOwn(SURFACE_READS, read));
+  if (unknown.length) throw new Error(`The model file's feature definition names surface reads this page does not know: ${unknown.join(', ')}.`);
+  const first = {};
+  let at = 0;
+  for (const [read, columns] of Object.entries(SURFACE_READS)) {
+    first[read] = at;
+    at += columns.length;
+  }
+  return reads.flatMap((read) => SURFACE_READS[read].map((_, i) => first[read] + i));
+}
+
 /**
  * For each column, in the networks' order: `kind`, a stable id of its family; `group`, the family's
  * display label; a short plain name; its unit; `offset`, the place it reads relative to the point,
  * [dx, dy, dz] in metres along the file's axes (dx downstream, dy toward +y, dz up); and `along`, for
  * a distance in metres, the unit direction it runs from that place, so place + value × along is where
  * it measured to (a body surface, or for the distances from nose, tail, centre plane and lowest point
- * that plane), null for every other column. The plan-view outline is measured outboard, away from the
+ * that plane), null for every other column. A section's reach outboard is measured away from the
  * centre plane on the point's own side: its `along` is [0, 1, 0] for a point on the +y side and is
  * turned to [0, −1, 0] for a point on the −y side. A surface column also has `scale`, the size it is
  * named by, `sigma`, its Gaussian's standard deviation (both in metres), and `part`: the whole surface
- * about the point, the part ahead of it, or the part behind.
+ * about the point, the part ahead of it, or the part behind. A section column also has `station`,
+ * its dx, and `read`: 'area', 'outboard', 'above' or 'below'.
  * @param {FeatureDefinition} definition
  * @returns {import('./result.js').ModelColumn[]}
  */
-export function describeColumns({ surfaceScales, surfaceSigma, outlineDx, outlineDz, outlineDzDx }) {
+export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sectionDx }) {
   const columns = [];
   const add = (kind, group, name, { offset = [0, 0, 0], along = null, ...more } = {}) => {
     columns.push({ kind, group, name, unit: along ? 'm' : '', offset, along, ...more });
@@ -124,7 +146,7 @@ export function describeColumns({ surfaceScales, surfaceSigma, outlineDx, outlin
     say(dz, 'down', 'up');
     return parts.length ? `, ${parts.join(', ')}` : '';
   };
-  const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], down = [0, 0, -1];
+  const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], up = [0, 0, 1], down = [0, 0, -1];
 
   const position = 'Position and facing';
   add('position', position, 'Distance from nose', { along: forward });
@@ -135,44 +157,28 @@ export function describeColumns({ surfaceScales, surfaceSigma, outlineDx, outlin
   add('position', position, 'Facing rearward');
   add('position', position, 'Facing +y');
   add('position', position, 'Facing up');
-  add('position', position, 'Share of length from nose');
-  add('position', position, 'y from centre plane, share of half-width');
-  add('position', position, 'Share of height from bottom');
-
-  const flow = 'Potential flow';
-  add('flow', flow, 'Induced velocity, rearward');
-  add('flow', flow, 'Induced velocity, +y');
-  add('flow', flow, 'Induced velocity, up');
-  add('flow', flow, 'Speed along the surface, squared');
 
   for (const scale of surfaceScales) {
     const group = `Surface at ${Math.round(scale * 100)} cm`;
-    const surface = (name, part) => add('surface', group, name, { scale, sigma: surfaceSigma * scale, part });
-    const facing = (part, label) => {
-      surface(`Mean facing rearward${label}`, part);
-      surface(`Mean facing +y${label}`, part);
-      surface(`Mean facing up${label}`, part);
-      surface(`Surface density${label}`, part);
-    };
-    facing('whole', '');
-    surface('Bend, rearward', 'whole');
-    surface('Bend, +y', 'whole');
-    surface('Bend, up', 'whole');
-    facing('ahead', ', ahead');
-    facing('behind', ', behind');
+    for (const read of surfaceReads) {
+      for (const [name, part] of SURFACE_READS[read]) add('surface', group, name, { scale, sigma: surfaceSigma * scale, part });
+    }
   }
 
-  const outline = 'Plan-view outline';
-  add('outline', outline, 'Outline outboard', { along: outboard });
-  for (const dx of outlineDx) add('outline', outline, `Outline outboard${where([dx, 0, 0])}`, { offset: [dx, 0, 0], along: outboard });
-  for (const dz of outlineDz) {
-    for (const dx of outlineDzDx) add('outline', outline, `Outline outboard${where([dx, 0, dz])}`, { offset: [dx, 0, dz], along: outboard });
+  const sections = 'Sections across the car';
+  for (const station of [0, ...sectionDx]) {
+    const place = where([station, 0, 0]);
+    const at = { offset: [station, 0, 0], station };
+    add('section', sections, `Section area${place}`, { ...at, read: 'area', unit: 'm²' });
+    add('section', sections, `Reach outboard${place}`, { ...at, read: 'outboard', along: outboard });
+    add('section', sections, `Reach above${place}`, { ...at, read: 'above', along: up });
+    add('section', sections, `Reach below${place}`, { ...at, read: 'below', along: down });
   }
   return columns;
 }
 
 /** Column kinds in the order the model view lists them. */
-const COLUMN_KINDS = ['position', 'flow', 'surface', 'outline'];
+const COLUMN_KINDS = ['position', 'surface', 'section'];
 
 /**
  * The kinds of the columns inside [start, stop) ranges, in `COLUMN_KINDS` order: what a model given
@@ -192,9 +198,10 @@ export function kindsWithin(columns, ranges) {
  */
 
 const CUBE = new Float64Array(6);
-const VELOCITY = new Float64Array(3);
 const WHOLE = new Float64Array(4);
 const AHEAD = new Float64Array(4);
+/** A scale's fifteen values at a point, in `SURFACE_READS` order. */
+const SURFACE = new Float64Array(15);
 
 /**
  * Write the features of points [first, first + count) into `out`, one row of `stride` floats per
@@ -205,11 +212,10 @@ const AHEAD = new Float64Array(4);
  * @param {Float32Array} out       (count, stride)
  */
 export function computeFeatures(context, positions, normals, first, count, out, stride = context.layout.count) {
-  const { layout, yOut, flow, scales } = context;
-  const { rasterStep, domainX, domainZ, nx, nz, outlineDx, outlineDz, outlineDzDx } = layout;
-  const [xmin, xmax, ymin, ymax, zmin, zmax] = context.bounds;
+  const { layout, yOut, zTop, zBottom, sectionArea, scales } = context;
+  const { rasterStep, domainX, domainYHalf, domainZ, nx, ny, nz, sectionDx, surfaceColumns: chosen } = layout;
+  const [xmin, xmax, , , zmin] = context.bounds;
   const yCenter = context.yCenter;
-  const flowGrid = { origin: flow.origin, step: layout.flow.step, nodes: layout.flow.nodes };
   const scaleGrids = scales.map(({ origin, nodes }, s) => ({ origin, nodes, step: layout.scales[s].step }));
   const bin = (value, low, size) => clamp(Math.trunc((value - low) / rasterStep), size);
 
@@ -229,89 +235,51 @@ export function computeFeatures(context, positions, normals, first, count, out, 
     out[k++] = n0;
     out[k++] = n1;
     out[k++] = n2;
-    out[k++] = (sx - xmin) / (xmax - xmin);
-    out[k++] = sy / (0.5 * (ymax - ymin));
-    out[k++] = (sz - zmin) / (zmax - zmin);
-
-    // The velocity the car adds to the stream, and the squared speed of the whole flow along the surface.
-    flowAtPoint(flowGrid, flow.potential, sx, positions[q + 1], sz, n0, n1, n2, out, k);
-    k += 4;
 
     // The surface around the point at each scale: its mean facing and density, the point's own facing
-    // against that mean, then the same for the part ahead and the part behind.
+    // against that mean, then the same for the part ahead and the part behind; the model's share of them.
     for (let s = 0; s < scales.length; s++) {
       readScale(scaleGrids[s], scales[s], sx, positions[q + 1], sz);
       const flat = layout.scales[s].flatPanel;
       const whole = Math.max(WHOLE[0], 1e-12);
       const mx = WHOLE[1] / whole, my = WHOLE[2] / whole, mz = WHOLE[3] / whole;
-      out[k++] = mx;
-      out[k++] = my;
-      out[k++] = mz;
-      out[k++] = WHOLE[0] / flat;
-      out[k++] = n0 - mx;
-      out[k++] = n1 - my;
-      out[k++] = n2 - mz;
       const ahead = Math.max(AHEAD[0], 1e-12);
-      out[k++] = AHEAD[1] / ahead;
-      out[k++] = AHEAD[2] / ahead;
-      out[k++] = AHEAD[3] / ahead;
-      out[k++] = AHEAD[0] / (0.5 * flat);
       const behindArea = WHOLE[0] - AHEAD[0];
       const behind = Math.max(behindArea, 1e-12);
-      out[k++] = (WHOLE[1] - AHEAD[1]) / behind;
-      out[k++] = (WHOLE[2] - AHEAD[2]) / behind;
-      out[k++] = (WHOLE[3] - AHEAD[3]) / behind;
-      out[k++] = behindArea / (0.5 * flat);
+      SURFACE[0] = mx;
+      SURFACE[1] = my;
+      SURFACE[2] = mz;
+      SURFACE[3] = WHOLE[0] / flat;
+      SURFACE[4] = n0 - mx;
+      SURFACE[5] = n1 - my;
+      SURFACE[6] = n2 - mz;
+      SURFACE[7] = AHEAD[1] / ahead;
+      SURFACE[8] = AHEAD[2] / ahead;
+      SURFACE[9] = AHEAD[3] / ahead;
+      SURFACE[10] = AHEAD[0] / (0.5 * flat);
+      SURFACE[11] = (WHOLE[1] - AHEAD[1]) / behind;
+      SURFACE[12] = (WHOLE[2] - AHEAD[2]) / behind;
+      SURFACE[13] = (WHOLE[3] - AHEAD[3]) / behind;
+      SURFACE[14] = behindArea / (0.5 * flat);
+      for (const column of chosen) out[k++] = SURFACE[column];
     }
 
-    // Plan-view outline: how far beyond the point the body reaches away from the centre plane, on the
-    // point's own side and at its height, along the stencil. Bins are found in float64, as the
-    // reference finds them for a point it asks about.
+    // Sections across the car at the point's station and at each of `sectionDx`: the area, how far the
+    // body reaches outboard of the point on its own side at its height, and how far above and below the
+    // point at its distance from the centre plane. Bins are found in float64, as the reference finds them
+    // for a point it asks about; a station beyond the raster reads its edge.
     const side = sy >= 0 ? nx : 0;
     const fromCentre = Math.abs(sy);
-    const reach = (x, z) => yOut[(side + bin(x, domainX[0], nx)) * nz + bin(z, domainZ[0], nz)] - fromCentre;
-    out[k++] = reach(sx, sz);
-    for (const dx of outlineDx) out[k++] = reach(sx + dx, sz);
-    for (const dz of outlineDz) {
-      for (const dx of outlineDzDx) out[k++] = reach(sx + dx, sz + dz);
+    const height = bin(sz, domainZ[0], nz);
+    const row = bin(sy, -domainYHalf, ny);
+    for (let s = -1; s < sectionDx.length; s++) {
+      const i = bin(s < 0 ? sx : sx + sectionDx[s], domainX[0], nx);
+      out[k++] = sectionArea[i];
+      out[k++] = yOut[(side + i) * nz + height] - fromCentre;
+      out[k++] = zTop[i * ny + row] - sz;
+      out[k++] = sz - zBottom[i * ny + row];
     }
   }
-}
-
-/**
- * The flow inputs at points with their normals: the velocity the car adds to the stream along +x,
- * in units of the stream's speed, and the squared speed of the whole flow along the surface, so
- * 1 − |V_t|² is potential flow's pressure coefficient.
- * @param {SurfaceContext} context
- * @param {Float32Array} positions (P, 3)
- * @param {Float32Array} normals   (P, 3) unit, outward
- * @returns {{ induced: Float32Array, speedSquared: Float32Array }}  (P, 3) and (P)
- */
-export function flowAt({ layout, flow }, positions, normals) {
-  const grid = { origin: flow.origin, step: layout.flow.step, nodes: layout.flow.nodes };
-  const count = positions.length / 3;
-  const induced = new Float32Array(3 * count);
-  const speedSquared = new Float32Array(count);
-  const row = new Float32Array(4);
-  for (let p = 0; p < count; p++) {
-    const q = 3 * p;
-    flowAtPoint(grid, flow.potential, positions[q], positions[q + 1], positions[q + 2], normals[q], normals[q + 1], normals[q + 2], row, 0);
-    induced.set(row.subarray(0, 3), q);
-    speedSquared[p] = row[3];
-  }
-  return { induced, speedSquared };
-}
-
-/** The four flow inputs at (x, y, z) with normal n into out[at .. at + 4]: u, then |V_t|² of V = u + (1, 0, 0). */
-function flowAtPoint(grid, potential, x, y, z, n0, n1, n2, out, at) {
-  gradientAt(grid, potential, x, y, z, VELOCITY, 0);
-  const vx = VELOCITY[0] + 1, vy = VELOCITY[1], vz = VELOCITY[2];
-  const across = vx * n0 + vy * n1 + vz * n2;
-  const tx = vx - across * n0, ty = vy - across * n1, tz = vz - across * n2;
-  out[at] = VELOCITY[0];
-  out[at + 1] = VELOCITY[1];
-  out[at + 2] = VELOCITY[2];
-  out[at + 3] = tx * tx + ty * ty + tz * tz;
 }
 
 function clamp(index, size) {

@@ -1,13 +1,14 @@
 // What a point is told, group by group. On the left the open car, with the point as a handle the reader drags or
 // moves with a click, the chosen group's inputs drawn on the car where they are read, and the networks' answer there.
-// On the right a row per group: its drawing at the point, its reason, its values as the networks read them, and the
-// accuracy it added as the staircase of compared networks added it.
+// On the right a row per group: its numbers at the point on their ranges, its reason, and the accuracy it added as the
+// staircase of compared networks added it. A group that reads the same things at several stations or sizes shows one
+// of them at a time, on the car and as numbers.
 
 import { h } from '../dom.js';
 import { signed } from '../format.js';
 import { Viewer } from '../../viewer/viewer.js';
-import { colorBar, section, shade } from './charts.js';
-import { drawGroup } from './drawings.js';
+import { section } from './charts.js';
+import { drawGroup } from './numbers.js';
 import { locator } from './overview.js';
 import { Stencil } from './stencil.js';
 
@@ -41,20 +42,22 @@ export function createInputs({ card, groups, ask }) {
 	viewer.controls.enablePan = false;
 	const stencil = new Stencil(viewer);
 	const answer = h('div', { class: 'point-answer' });
-	const fieldKey = h('div', { class: 'field-key', hidden: true });
-	carHost.append(fieldKey);
-	// `close`: whether the camera is in nearby surface's close view of the point.
-	const state = { group: groups[0], network: 0, case: null, point: null, width: DRAWING, close: false };
+	// `close`: whether the camera is in nearby surface's close view of the point. `shown`: per repeating group, which of
+	// its stations or sizes is shown; at first the point's own station, or the smallest size.
+	const state = {
+		group: groups[0], case: null, point: null, width: DRAWING, close: false,
+		shown: Object.fromEntries(groups.filter((g) => g.repeat).map((g) => [g.id, Math.max(0, g.repeat.values.indexOf(0))])),
+	};
 
 	const rows = groups.map((group) => {
 		const drawings = h('div', { class: 'group-drawings' });
-		const values = h('div', { class: 'group-values', 'aria-hidden': 'true' }, group.columns.map(() => h('i')));
 		const step = group.step;
 		const el = h('div', {
 			class: 'group-row', role: 'radio', tabindex: 0, 'aria-checked': 'false', style: `--group: ${group.color}`,
 			onclick: () => choose(group),
 			onkeydown: (e) => {
-				if (e.key !== 'Enter' && e.key !== ' ') return;
+				// Keys on the row's own buttons are theirs.
+				if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
 				e.preventDefault();
 				choose(group);
 			},
@@ -63,13 +66,12 @@ export function createInputs({ card, groups, ask }) {
 		h('div', { class: 'group-text' },
 			h('h3', {}, h('i', { class: 'swatch' }), group.name, h('span', { class: 'group-count num' }, `${group.columns.length} inputs`)),
 			h('p', { class: 'group-reason' }, group.reason),
-			values,
 			step ? h('div', { class: 'group-step' },
 				h('span', { class: 'step-track' },
 					h('span', { class: 'step-before', style: `width: ${100 * Math.max(0, step.before)}%` }),
 					h('span', { class: 'step-gain', style: `left: ${100 * Math.max(0, step.before)}%; width: ${100 * (step.after - Math.max(0, step.before))}%` })),
 				h('span', { class: 'step-value num' }, h('b', {}, `+${(step.after - step.before).toFixed(2)}`), ` R² ${step.after.toFixed(2)}`)) : null));
-		return { group, el, drawings, values };
+		return { group, el, drawings };
 	});
 	const list = h('div', { class: 'group-list', role: 'radiogroup', 'aria-label': 'Groups of inputs' },
 		h('div', { class: 'group-list-head' }, h('span'), h('span', { class: 'step-head' }, 'Cross-validated R² as each group is added')),
@@ -84,19 +86,8 @@ export function createInputs({ card, groups, ask }) {
 	function choose(group) {
 		state.group = group;
 		for (const row of rows) row.el.setAttribute('aria-checked', String(row.group === group));
-		showField();
 		drawMarks();
 		frame();
-	}
-
-	/** The car in clay, or coloured by the potential flow's pressure while that group is chosen. */
-	function showField() {
-		const c = state.case;
-		const flow = c?.flow && state.group.id === 'flow' ? c.flow : null;
-		if (c?.flow) c.surface.working.setFields({ cp: flow ? flow.pressure : c.result.mesh.cp });
-		viewer.setPanes([flow ? { field: 'cp', map: flow.map } : { field: 'none', map: null }]);
-		fieldKey.hidden = !flow;
-		if (flow) fieldKey.replaceChildren(colorBar(flow.map, 'Cp of the ideal flow'));
 	}
 
 	function drawMarks() {
@@ -105,22 +96,25 @@ export function createInputs({ card, groups, ask }) {
 			stencil.clear();
 			return;
 		}
-		stencil.draw(point.explanation, point.marks.filter((m) => state.group.kinds.includes(m.layer)), state.group.color);
+		const { repeat, id, kinds, color } = state.group;
+		stencil.draw(point.explanation, point.marks.filter((m) => kinds.includes(m.layer)), color, repeat ? repeat.values[state.shown[id]] : null);
 	}
 
 	function drawRows() {
-		const point = state.point;
-		if (!point?.explanation || !state.case) return;
-		const { explanation, marks } = point;
-		const { outlines, cutter, result } = state.case;
-		const read = explanation.activations[state.network][0];
-		for (const row of rows) {
-			const own = marks.filter((m) => row.group.kinds.includes(m.layer));
-			row.drawings.replaceChildren(...drawGroup(row.group, {
-				width: state.width, explanation, marks: own, outlines, cutter, columns: card.columns,
-				bounds: result.geometry.bounds, yCenter: result.lookups.yCenter, flow: state.case.flow,
+		const explanation = state.point?.explanation;
+		if (!explanation || !state.case) return;
+		for (const { group, drawings } of rows) {
+			drawings.replaceChildren(...drawGroup(group, {
+				width: state.width, explanation, columns: card.columns, shown: state.shown[group.id] ?? null,
+				// The row's own click then chooses the group, which draws the shown one on the car. A stepper button that
+				// had the keyboard keeps it in the new drawing.
+				show: (k) => {
+					const focused = drawings.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
+					state.shown[group.id] = k;
+					drawRows();
+					if (focused) drawings.querySelector(`[aria-label="${focused}"]`)?.focus();
+				},
 			}));
-			row.group.columns.forEach((column, i) => (row.values.children[i].style.background = shade(read[column], 1.5)));
 		}
 	}
 
@@ -234,7 +228,8 @@ export function createInputs({ card, groups, ask }) {
 		setCase(caseView) {
 			if (caseView.surface !== state.case?.surface) state.close = false;
 			state.case = caseView;
-			showField();
+			// The car in clay: the pictures taken of it leave a field on.
+			viewer.setPanes([{ field: 'none', map: null }]);
 			drawRows();
 		},
 		setPoint(point) {
@@ -243,10 +238,6 @@ export function createInputs({ card, groups, ask }) {
 			drawRows();
 			showAnswer();
 			if (state.group.id === 'surface' && !state.close) frame();
-		},
-		setNetwork(k) {
-			state.network = k;
-			drawRows();
 		},
 	};
 }

@@ -87,9 +87,9 @@
  * @property {Float32Array | null} cfd    (C) the reference field, when there is one
  *
  * @typedef {import('./lookups.js').SurfaceLookups & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
- *   The whole-car lookups the features read (`lookups.js`, about 15 MB on a DrivAerML car), built
+ *   The whole-car lookups the features read (`lookups.js`, about 18 MB on a DrivAerML car), built
  *   from every polygon of the file, with the feature definition they were built for. They let
- *   `explain` and `flowOnMesh` answer for a result without its file.
+ *   `explain` answer for a result without its file.
  *
  * @typedef {Object} Coverage  The car measured against the training cars. Facts only.
  * @property {{ name: 'length' | 'width' | 'height', value: number, trainMin: number, trainMax: number }[]} dimensions
@@ -133,7 +133,7 @@
  *   behind running analyses like they do, but leaves the car analysed last held. The arrays move to
  *   the worker as for `analyzeSurface`. Aborting `signal` abandons it.
  *   Give it a working mesh or a variant of one, nothing coarser: the lookups are filled from polygon
- *   centres (the outline's 2 cm raster, the surface's 1.5 cm grid), so a coarser mesh leaves gaps in
+ *   centres (the sections' 2 cm raster, the surface's 1.5 cm grid), so a coarser mesh leaves gaps in
  *   them and the prediction degrades.
  * @property {(result: Result) => CellSet} workingCells  A result's working mesh as polygons, made on
  *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's Cp,
@@ -156,13 +156,6 @@
  *   For the file analysed last, from its result until the next analysis starts or its `signal` is
  *   aborted; null at once for any other result (a bundled example, an earlier file). A few
  *   milliseconds, also while the rest of the surface is being predicted.
- * @property {(result: Result) => Promise<{ induced: Float32Array, speedSquared: Float32Array }>} flowOnMesh
- *   The model's flow inputs at the vertices of `result.mesh`, with their normals: `induced` (V, 3),
- *   the velocity the car adds to a unit stream along +x (the potential flow of a sheet of sources on
- *   its surface, standing on the ground), and `speedSquared` (V), the squared speed of the whole flow
- *   along the surface, so 1 − speedSquared is potential flow's pressure coefficient. Computed in the
- *   worker from `result.lookups`, for every result, the bundled examples too. Rejects for a result
- *   computed with other model inputs than the engine runs.
  * @property {(result: Result) => boolean} canExportVtp  Whether `exportVtp` can run for `result`: true
  *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
  *   engine holds the last car's prediction only); never for a bundled example or a quick Result, nor
@@ -282,22 +275,31 @@
  * @property {ModelColumn[]} columns  what each of the model's inputs is, in order
  *
  * @typedef {Object} ModelColumn
- * @property {'position' | 'flow' | 'surface' | 'outline'} kind  its family, a stable id
+ * @property {'position' | 'surface' | 'section'} kind  its family, a stable id
  * @property {string} group     the family's display label
  * @property {string} name      a short plain name
- * @property {string} unit      'm' for distances, '' for the rest
+ * @property {string} unit      'm' for distances, 'm²' for a section's area, '' for the rest
  * @property {number[]} offset  the place it reads relative to the point asked about, [dx, dy, dz] in
  *   metres along the file's axes: dx downstream, dy toward +y (the car's right as seen from the
  *   driver's seat), dz up
  * @property {number[] | null} along  for a distance, the unit direction (same axes) it runs from that
  *   place, so place + value × along is where it measured to: the body surface, or for the distances
  *   from nose, tail, centre plane and lowest point, that plane; null for every other column. The
- *   plan-view outline ('outline') is measured outboard, away from the centre plane on the point's own
- *   side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0] on the −y side
+ *   reach outboard of a section ('section', read 'outboard') is measured away from the centre plane
+ *   on the point's own side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0]
+ *   on the −y side
  * @property {number} [scale]  a surface column's size of nearby surface, in metres
  * @property {number} [sigma]  a surface column's Gaussian standard deviation, in metres
  * @property {'whole' | 'ahead' | 'behind'} [part]  a surface column's part of the nearby surface: all
  *   of it, the part ahead of the point (upstream, at smaller x), or the part behind
+ * @property {number} [station]  a section column's station, its dx from the point in metres (0 for
+ *   the point's own section, negative ahead of it)
+ * @property {'area' | 'outboard' | 'above' | 'below'} [read]  what a section column reads: the
+ *   section's area, or how far the body in it reaches outboard of the point at the point's height,
+ *   above it or below it at the point's distance from the centre plane (to the ground where the
+ *   section holds no body there)
+ * @property {number[]} range  the input over the training cells: its 2nd percentile, median and 98th
+ *   percentile, from the model file
  *
  * @typedef {Object} ParsedSurface  A surface as the parser hands it to the rest of the engine, or as
  *   the page gives it to `analyzeSurface` and `predictQuick`, where `cfd` may be left out.
@@ -319,10 +321,12 @@ const NORMAL_BITS = 12;
 const FIELDS = ['cp', 'sigma', 'cfd'];
 
 /** The lookups' arrays by their place in `SurfaceLookups`. */
-function lookupArrays({ yOut, flow, scales }) {
+function lookupArrays({ yOut, zTop, zBottom, sectionArea, scales }) {
   return [
     ['yOut', yOut],
-    ['flow.potential', flow.potential],
+    ['zTop', zTop],
+    ['zBottom', zBottom],
+    ['sectionArea', sectionArea],
     ...scales.flatMap(({ kept, whole, ahead }, k) => [[`scales.${k}.kept`, kept], [`scales.${k}.whole`, whole], [`scales.${k}.ahead`, ahead]]),
   ];
 }
@@ -411,13 +415,12 @@ export async function packResult(result) {
     parts.push(bytes);
   }
 
-  const { definition, bounds, yCenter, flow, scales } = result.lookups;
+  const { definition, bounds, yCenter, scales } = result.lookups;
   const summary = {
     ...result,
     mesh: { vertices: vertexCount, triangles: indices.length / 3, streams },
     lookups: {
       definition, bounds, yCenter,
-      flow: { origin: flow.origin },
       scales: scales.map(({ origin, nodes }) => ({ origin, nodes })),
       streams: lookupStreams,
     },
@@ -511,7 +514,6 @@ export async function unpackResult(summary, buffer) {
   mesh.bounds = boundsOf(mesh.positions);
 
   const { streams: lookupStreams, ...lookups } = summary.lookups;
-  lookups.flow = { ...lookups.flow };
   lookups.scales = lookups.scales.map((scale) => ({ ...scale }));
   for (const stream of lookupStreams) {
     const { buffer: bytes } = ungroupedBytes(block.subarray(offset, offset + stream.bytes));
