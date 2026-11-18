@@ -30,7 +30,8 @@ export function inputGroups({ columns }) {
 	columns.forEach((column, index) => {
 		let group = groups.find((g) => g.id === column.kind);
 		if (!group) {
-			if (!(column.kind in REPEATS)) throw new Error(`The model has a group of inputs the page has no words for: “${column.kind}”.`);
+			if (!(column.kind in REPEATS))
+				throw new Error(`The model has a group of inputs the page has no words for: “${column.kind}”.`);
 			group = { id: column.kind, color: COLORS[column.kind], columns: [], repeat: REPEATS[column.kind] };
 			groups.push(group);
 		}

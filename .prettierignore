@@ -1,0 +1,13 @@
+web/vendor/
+web/model/
+web/examples/
+artifacts/
+data/
+local/
+uv.lock
+*.md
+*.py
+*.html
+*.css
+*.json
+*.sse

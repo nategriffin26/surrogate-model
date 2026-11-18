@@ -9,7 +9,8 @@ const TRAINING_CARS = new URL('../../model/training-cars.json', import.meta.url)
 /** @returns {Promise<{ cars: { run: number, nx: number, nz: number, cp: (number | null)[] }[] }>} */
 export async function loadTrainingCars() {
 	const response = await fetch(TRAINING_CARS);
-	if (!response.ok) throw new Error(`The training cars could not be read (${response.status} for ${TRAINING_CARS.pathname}).`);
+	if (!response.ok)
+		throw new Error(`The training cars could not be read (${response.status} for ${TRAINING_CARS.pathname}).`);
 	return response.json();
 }
 
@@ -22,7 +23,13 @@ const colourOf = (map) => (hundredths) => sample(map.ramp, rampPosition(hundredt
 /** A training car's raster as a canvas, one pixel per cell, scaled by the page. */
 export function trainingCarImage({ run, nx, nz, cp }, map) {
 	const colour = colourOf(map);
-	const canvas = h('canvas', { class: 'training-car solid', width: nx, height: nz, role: 'img', 'aria-label': `Run ${run}` });
+	const canvas = h('canvas', {
+		class: 'training-car solid',
+		width: nx,
+		height: nz,
+		role: 'img',
+		'aria-label': `Run ${run}`,
+	});
 	const g = canvas.getContext('2d');
 	const image = g.createImageData(nx, nz);
 	cp.forEach((value, i) => {
@@ -39,7 +46,11 @@ export function trainingCarDots({ run, nx, nz, cp }, map) {
 	const colour = colourOf(map);
 	const ratio = devicePixelRatio;
 	const canvas = h('canvas', {
-		class: 'training-car dots', width: nx * DOT_CELL * ratio, height: nz * DOT_CELL * ratio, role: 'img', 'aria-label': `Run ${run}`,
+		class: 'training-car dots',
+		width: nx * DOT_CELL * ratio,
+		height: nz * DOT_CELL * ratio,
+		role: 'img',
+		'aria-label': `Run ${run}`,
 		style: `width: ${nx * DOT_CELL}px`,
 	});
 	const g = canvas.getContext('2d');

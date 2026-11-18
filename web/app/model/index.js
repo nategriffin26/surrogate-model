@@ -40,7 +40,10 @@ function hoodRequest({ mesh: { positions, normals }, geometry: { bounds }, looku
 	let best = Infinity;
 	for (let v = 0; v < positions.length / 3; v++) {
 		if (normals[3 * v + 2] < 0.5) continue;
-		const d = (positions[3 * v] - target[0]) ** 2 + (positions[3 * v + 1] - target[1]) ** 2 + (positions[3 * v + 2] - target[2]) ** 2;
+		const d =
+			(positions[3 * v] - target[0]) ** 2 +
+			(positions[3 * v + 1] - target[1]) ** 2 +
+			(positions[3 * v + 2] - target[2]) ** 2;
 		if (d < best) {
 			best = d;
 			vertex = v;
@@ -76,26 +79,45 @@ function whenShown(host) {
 export function mountModelPage(host, { engine }) {
 	const notice = h('div', { class: 'page-notice', role: 'status' });
 	const title = h('h1');
-	const page = h('div', { class: 'model-page', 'data-state': 'loading' },
+	const page = h(
+		'div',
+		{ class: 'model-page', 'data-state': 'loading' },
 		h('header', { class: 'model-top' }, title),
-		notice);
+		notice,
+	);
 	host.append(page);
 
 	// Asked for at once and held as an outcome, so it may fail before the words that report it are read.
-	const reference = loadResult(new URL(`../../examples/${REFERENCE.id}`, import.meta.url).href).then((result) => ({ result }), (error) => ({ error }));
+	const reference = loadResult(new URL(`../../examples/${REFERENCE.id}`, import.meta.url).href).then(
+		(result) => ({ result }),
+		(error) => ({ error }),
+	);
 	const fail = (message) => {
 		page.dataset.state = 'failed';
 		notice.replaceChildren(message);
 	};
-	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(([card, training]) => {
-		// Values any words may name: {inputs}, {networks}, {networksWord}, {cars}, the training cars, and {car}, the reference car.
-		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length), cars: card.trainRuns.length, car: REFERENCE.label });
-		copied(title, 'page.title');
-		notice.replaceChildren(copied(h('p'), 'page.notice.waiting'));
-		reference.then(({ result, error }) => (error
-			? fail(copied(h('p', { class: 'point-failure', role: 'alert' }), 'page.notice.failed', { error: error.message }))
-			: build(card, training, result)));
-	}, (error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)));
+	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(
+		([card, training]) => {
+			// Values any words may name: {inputs}, {networks}, {networksWord}, {cars}, the training cars, and {car}, the reference car.
+			shareValues({
+				inputs: card.columns.length,
+				networks: card.networks.length,
+				networksWord: countWord(card.networks.length),
+				cars: card.trainRuns.length,
+				car: REFERENCE.label,
+			});
+			copied(title, 'page.title');
+			notice.replaceChildren(copied(h('p'), 'page.notice.waiting'));
+			reference.then(({ result, error }) =>
+				error
+					? fail(
+							copied(h('p', { class: 'point-failure', role: 'alert' }), 'page.notice.failed', { error: error.message }),
+						)
+					: build(card, training, result),
+			);
+		},
+		(error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
+	);
 
 	function build(card, training, result) {
 		const groups = inputGroups(card);
@@ -126,14 +148,22 @@ export function mountModelPage(host, { engine }) {
 			createAccuracy({ card }),
 			createSpread(),
 		];
-		page.append(h('div', { class: 'model-body' }, parts.map((part) => part.el)));
+		page.append(
+			h(
+				'div',
+				{ class: 'model-body' },
+				parts.map((part) => part.el),
+			),
+		);
 		// The car is in hand: the figures show, so the page's viewer has its size when it draws the car's pictures.
 		page.dataset.state = 'ready';
 		notice.replaceChildren();
-		whenShown(host).then(() => draw(parts, inputs, result)).then(
-			() => explain(hoodRequest(result)),
-			(error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
-		);
+		whenShown(host)
+			.then(() => draw(parts, inputs, result))
+			.then(
+				() => explain(hoodRequest(result)),
+				(error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
+			);
 	}
 
 	/** Draw the car in the page's viewer, take its pictures, and give the parts the car, its pictures and its numbers. */
@@ -152,17 +182,26 @@ export function mountModelPage(host, { engine }) {
 		const side = (field, map) => ({ field, map, view: 'side' });
 		const below = (field, map) => ({ field, map, view: 'below' });
 		const wanted = {
-			claySide: side('none', null), fieldSide: side('cp', maps.cp),
-			sigmaSide: side('sigma', maps.spread), sigmaBelow: below('sigma', maps.spread),
-			cfdSide: side('cfd', maps.cp), cpSide: side('cp', maps.cp), errorSide: side('error', maps.error),
-			cfdBelow: below('cfd', maps.cp), cpBelow: below('cp', maps.cp), errorBelow: below('error', maps.error),
+			claySide: side('none', null),
+			fieldSide: side('cp', maps.cp),
+			sigmaSide: side('sigma', maps.spread),
+			sigmaBelow: below('sigma', maps.spread),
+			cfdSide: side('cfd', maps.cp),
+			cpSide: side('cp', maps.cp),
+			errorSide: side('error', maps.error),
+			cfdBelow: below('cfd', maps.cp),
+			cpBelow: below('cp', maps.cp),
+			errorBelow: below('error', maps.error),
 		};
 		const taken = takePictures(viewer, Object.values(wanted));
 		const pictures = Object.fromEntries(Object.keys(wanted).map((id, i) => [id, taken[i]]));
 		// The error's size, drawn through the spread's colour map so the two pictures compare directly.
 		surface.working.setFields({ sigma: Float32Array.from(mesh.cp, (cp, v) => Math.abs(cp - mesh.cfd[v])) });
 		await whenDrawn(viewer, surface);
-		[pictures.missSide, pictures.missBelow] = takePictures(viewer, [side('sigma', maps.spread), below('sigma', maps.spread)]);
+		[pictures.missSide, pictures.missBelow] = takePictures(viewer, [
+			side('sigma', maps.spread),
+			below('sigma', maps.spread),
+		]);
 		const car = { result, pictures, stats, maps, cutter: inputs.stencil.car.cutter };
 		for (const part of parts) part.setCar(car);
 	}

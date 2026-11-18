@@ -47,14 +47,18 @@ function settled(session, c) {
 }
 
 /** The engine reads a File; a workspace blob becomes one named for its path, without copying its bytes. */
-const fileFor = (path, blob) => (blob instanceof File && blob.name === baseOf(path) ? blob : new File([blob], baseOf(path)));
+const fileFor = (path, blob) =>
+	blob instanceof File && blob.name === baseOf(path) ? blob : new File([blob], baseOf(path));
 
 /** context: { session, workspace, engine, update }. */
 export function defineFileOperations({ session, workspace, engine, update }) {
 	const fileAt = (path) => {
 		const file = workspace.file(normalPath(path));
 		if (!file) {
-			const listed = workspace.files().map((f) => f.path).slice(0, 20);
+			const listed = workspace
+				.files()
+				.map((f) => f.path)
+				.slice(0, 20);
 			throw new Error(`There is no file "${path}". Files: ${listed.join(', ') || 'none'}.`);
 		}
 		return file;
@@ -65,7 +69,8 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 	/** The case showing a geometry, made and analysed if it has none. */
 	function openPath(path) {
 		const file = fileAt(path);
-		if (!isGeometry(file.path)) throw new Error(`${file.path} is not a geometry; only .vtp files open as cases. Read text files with read_file.`);
+		if (!isGeometry(file.path))
+			throw new Error(`${file.path} is not a geometry; only .vtp files open as cases. Read text files with read_file.`);
 		const open = session.cases.find((c) => c.id === file.caseId);
 		if (open) {
 			session.activate(open);
@@ -91,7 +96,8 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'list_files',
-		description: 'The files in the workspace, which the engineer sees in the file panel and the Python kernel sees as its working directory: geometry (.vtp) the engineer dropped or that was made in a study, tables, pictures, reports and anything else written there. Each with its path, kind, size, when and by whom (engineer or assistant) it was last written, and for a geometry the case_id of the open case showing its result.',
+		description:
+			'The files in the workspace, which the engineer sees in the file panel and the Python kernel sees as its working directory: geometry (.vtp) the engineer dropped or that was made in a study, tables, pictures, reports and anything else written there. Each with its path, kind, size, when and by whom (engineer or assistant) it was last written, and for a geometry the case_id of the open case showing its result.',
 		parameters: {
 			type: 'object',
 			properties: { folder: { type: 'string', description: 'Only files under this folder; default all.' } },
@@ -100,14 +106,17 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 		run({ folder }) {
 			const prefix = folder ? `${normalPath(folder)}/` : '';
 			return {
-				files: workspace.files().filter((f) => f.path.startsWith(prefix)).map((f) => ({
-					path: f.path,
-					kind: kindOf(f.path).label.toLowerCase(),
-					size_bytes: f.size,
-					modified: new Date(f.modified).toISOString(),
-					by: f.by,
-					...(f.caseId ? { case_id: f.caseId } : {}),
-				})),
+				files: workspace
+					.files()
+					.filter((f) => f.path.startsWith(prefix))
+					.map((f) => ({
+						path: f.path,
+						kind: kindOf(f.path).label.toLowerCase(),
+						size_bytes: f.size,
+						modified: new Date(f.modified).toISOString(),
+						by: f.by,
+						...(f.caseId ? { case_id: f.caseId } : {}),
+					})),
 			};
 		},
 	});
@@ -117,22 +126,39 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 		description: `Read a text file from the workspace (CSV, text, JSON, Python, HTML), up to ${READ_LIMIT / 1000} kB from its start. For large tables and arrays use the Python kernel, which reads the same files.`,
 		parameters: {
 			type: 'object',
-			properties: { path: pathParameter, max_bytes: { type: 'integer', description: `Read at most this many bytes; default and limit ${READ_LIMIT}.` } },
+			properties: {
+				path: pathParameter,
+				max_bytes: { type: 'integer', description: `Read at most this many bytes; default and limit ${READ_LIMIT}.` },
+			},
 			required: ['path'],
 			additionalProperties: false,
 		},
 		async run({ path, max_bytes = READ_LIMIT }) {
 			const file = fileAt(path);
-			if (!kindOf(file.path).text) throw new Error(`${file.path} is a ${kindOf(file.path).label.toLowerCase()} file, not text. Read it in the Python kernel.`);
+			if (!kindOf(file.path).text)
+				throw new Error(
+					`${file.path} is a ${kindOf(file.path).label.toLowerCase()} file, not text. Read it in the Python kernel.`,
+				);
 			const limit = Math.min(READ_LIMIT, Math.max(1, max_bytes));
-			return { path: file.path, size_bytes: file.size, text: await file.blob.slice(0, limit).text(), truncated: file.size > limit };
+			return {
+				path: file.path,
+				size_bytes: file.size,
+				text: await file.blob.slice(0, limit).text(),
+				truncated: file.size > limit,
+			};
 		},
 	});
 
 	defineOperation({
 		name: 'open_file',
-		description: 'Open a geometry (.vtp) from the workspace as a case: the model runs on it in the browser (reading, measuring, meshing, predicting, a few seconds for a DrivAerML car) and its result is shown in a new tab. A geometry already open is shown again instead. Resolves once the result is ready, with the case_id; the background prediction of every polygon continues after that.',
-		parameters: { type: 'object', properties: { path: pathParameter }, required: ['path'], additionalProperties: false },
+		description:
+			'Open a geometry (.vtp) from the workspace as a case: the model runs on it in the browser (reading, measuring, meshing, predicting, a few seconds for a DrivAerML car) and its result is shown in a new tab. A geometry already open is shown again instead. Resolves once the result is ready, with the case_id; the background prediction of every polygon continues after that.',
+		parameters: {
+			type: 'object',
+			properties: { path: pathParameter },
+			required: ['path'],
+			additionalProperties: false,
+		},
 		async run({ path }) {
 			const c = await settled(session, openPath(path));
 			if (c.status === 'failed') throw new Error(c.error);
@@ -142,7 +168,8 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'attach_reference',
-		description: 'Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car\'s polygons. The car can then be compared with it (set_comparison with "cfd"), and its result reports the CFD\'s whole-car numbers. The file must describe the same surface, its polygons within 5 mm of the car\'s: the CFD of another car is refused. The engine holds the car analysed last only, so another car is first analysed again (about as long as its first analysis); a car whose every polygon this device could not predict cannot take one. Reading a DrivAerML file takes a few seconds.',
+		description:
+			"Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car's polygons. The car can then be compared with it (set_comparison with \"cfd\"), and its result reports the CFD's whole-car numbers. The file must describe the same surface, its polygons within 5 mm of the car's: the CFD of another car is refused. The engine holds the car analysed last only, so another car is first analysed again (about as long as its first analysis); a car whose every polygon this device could not predict cannot take one. Reading a DrivAerML file takes a few seconds.",
 		parameters: {
 			type: 'object',
 			properties: {
@@ -155,12 +182,17 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 		},
 		async run({ path, case_id, array }) {
 			const c = case_id === undefined ? session.active : session.byId(case_id);
-			if (c?.kind !== 'file' || !c.result) throw new Error('A reference is attached to a dropped file\'s result. Open the geometry first.');
+			if (c?.kind !== 'file' || !c.result)
+				throw new Error("A reference is attached to a dropped file's result. Open the geometry first.");
 			const file = fileAt(path);
 			if (!isGeometry(file.path)) throw new Error(`${file.path} is not a .vtp file.`);
 			if (!engine.canExportVtp(c.result)) {
-				if (!c.exact) throw new Error(`${c.name} cannot take a reference: this device did not predict its every polygon.`);
-				if (!c.path || !workspace.file(c.path)) throw new Error(`${c.name}'s file is no longer in the workspace, so it cannot be analysed again to take a reference.`);
+				if (!c.exact)
+					throw new Error(`${c.name} cannot take a reference: this device did not predict its every polygon.`);
+				if (!c.path || !workspace.file(c.path))
+					throw new Error(
+						`${c.name}'s file is no longer in the workspace, so it cannot be analysed again to take a reference.`,
+					);
 				await session.analyseAgain(c, fileFor(c.path, workspace.file(c.path).blob));
 			}
 			const { cfd, fullCfd } = await engine.attachReference(c.result, fileFor(file.path, file.blob), { array });
@@ -168,13 +200,19 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 			c.surface.working.setFields({ cfd });
 			if (fullCfd && c.surface.full) c.surface.full.setFields({ cfd: fullCfd });
 			update('card', 'toolbar', 'dock', 'viewer');
-			return { case_id: c.id, reference: c.result.reference, cx_cfd: c.result.referenceTotals.coefficients[0], cx_predicted: c.result.forces.cdP };
+			return {
+				case_id: c.id,
+				reference: c.result.reference,
+				cx_cfd: c.result.referenceTotals.coefficients[0],
+				cx_predicted: c.result.forces.cdP,
+			};
 		},
 	});
 
 	defineOperation({
 		name: 'move_file',
-		description: 'Rename or move a file or folder in the workspace: from one path to another, e.g. "boundary_1.vtp" to "baseline/boundary_1.vtp". Fails if the destination exists. Moving a file the engineer wrote asks the engineer first. An open case keeps showing a moved geometry.',
+		description:
+			'Rename or move a file or folder in the workspace: from one path to another, e.g. "boundary_1.vtp" to "baseline/boundary_1.vtp". Fails if the destination exists. Moving a file the engineer wrote asks the engineer first. An open case keeps showing a moved geometry.',
 		parameters: {
 			type: 'object',
 			properties: { from: pathParameter, to: { type: 'string', description: 'New path.' } },
@@ -199,8 +237,14 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'delete_file',
-		description: 'Delete a file or folder from the workspace. An open case showing a deleted geometry stays open. Ask the engineer first.',
-		parameters: { type: 'object', properties: { path: pathParameter }, required: ['path'], additionalProperties: false },
+		description:
+			'Delete a file or folder from the workspace. An open case showing a deleted geometry stays open. Ask the engineer first.',
+		parameters: {
+			type: 'object',
+			properties: { path: pathParameter },
+			required: ['path'],
+			additionalProperties: false,
+		},
 		confirm: true,
 		run({ path }, { by }) {
 			const target = normalPath(path);
@@ -212,8 +256,13 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'download_file',
-		description: 'Download a file from the workspace to the engineer\'s computer.',
-		parameters: { type: 'object', properties: { path: pathParameter }, required: ['path'], additionalProperties: false },
+		description: "Download a file from the workspace to the engineer's computer.",
+		parameters: {
+			type: 'object',
+			properties: { path: pathParameter },
+			required: ['path'],
+			additionalProperties: false,
+		},
 		confirm: true,
 		run({ path }) {
 			const file = fileAt(path);
@@ -241,7 +290,11 @@ export function addFiles(files, { workspace, run }) {
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 /** What an analysis held and took: the file's cells, the time from reading to the last prediction, and the device. */
-const runFacts = (r) => [`${millions(r.source.cells)} cells`, seconds(r.timings.reduce((sum, t) => sum + t.seconds, 0)), r.device];
+const runFacts = (r) => [
+	`${millions(r.source.cells)} cells`,
+	seconds(r.timings.reduce((sum, t) => sum + t.seconds, 0)),
+	r.device,
+];
 
 /**
  * context: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
@@ -249,20 +302,52 @@ const runFacts = (r) => [`${millions(r.source.cells)} cells`, seconds(r.timings.
  * analysed again first (attach_reference).
  */
 export function createFilesPanel({ session, workspace, engine, run, progress }) {
-	const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
-		addFiles([...input.files], { workspace, run });
-		input.value = '';
-	} });
+	const input = h('input', {
+		type: 'file',
+		multiple: true,
+		hidden: true,
+		onchange: () => {
+			addFiles([...input.files], { workspace, run });
+			input.value = '';
+		},
+	});
 	const list = h('div', { class: 'files-list', role: 'tree', 'aria-label': 'Files' });
 	const examples = h('div', { class: 'files-examples' });
-	const close = h('button', { type: 'button', class: 'icon-button', title: 'Close the Files panel', onclick: () => setOpen(false) }, icon('close'));
-	const el = h('aside', { class: 'files', id: 'files', 'aria-label': 'Files' },
-		h('div', { class: 'files-head' },
+	const close = h(
+		'button',
+		{ type: 'button', class: 'icon-button', title: 'Close the Files panel', onclick: () => setOpen(false) },
+		icon('close'),
+	);
+	const el = h(
+		'aside',
+		{ class: 'files', id: 'files', 'aria-label': 'Files' },
+		h(
+			'div',
+			{ class: 'files-head' },
 			h('span', { class: 'files-title' }, 'Files'),
-			h('button', { type: 'button', class: 'button files-upload', onclick: () => input.click() }, icon('upload'), 'Upload'),
-			close, input),
-		h('div', { class: 'files-body' }, list, h('div', { class: 'files-group' }, 'Examples'), examples));
-	const toggle = h('button', { type: 'button', class: 'button files-button', 'aria-pressed': 'false', 'aria-controls': 'files', onclick: () => setOpen(!open) }, icon('folder'), 'Files');
+			h(
+				'button',
+				{ type: 'button', class: 'button files-upload', onclick: () => input.click() },
+				icon('upload'),
+				'Upload',
+			),
+			close,
+			input,
+		),
+		h('div', { class: 'files-body' }, list, h('div', { class: 'files-group' }, 'Examples'), examples),
+	);
+	const toggle = h(
+		'button',
+		{
+			type: 'button',
+			class: 'button files-button',
+			'aria-pressed': 'false',
+			'aria-controls': 'files',
+			onclick: () => setOpen(!open),
+		},
+		icon('folder'),
+		'Files',
+	);
 
 	/** Folders the engineer folded shut, by path. */
 	const folded = new Set();
@@ -308,7 +393,16 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 	/** Open a row: a geometry runs or shows its result; any other file opens in a browser tab to be read. */
 	function openRow(file) {
 		if (isGeometry(file.path)) openGeometry(run, file.path);
-		else window.open(URL.createObjectURL(kindOf(file.path).text && !/\.html?$/i.test(file.path) ? new Blob([file.blob], { type: 'text/plain' }) : file.blob), '_blank', 'noopener');
+		else
+			window.open(
+				URL.createObjectURL(
+					kindOf(file.path).text && !/\.html?$/i.test(file.path)
+						? new Blob([file.blob], { type: 'text/plain' })
+						: file.blob,
+				),
+				'_blank',
+				'noopener',
+			);
 	}
 
 	/**
@@ -320,15 +414,25 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		if (!isGeometry(path)) return [];
 		const own = session.cases.find((c) => c.id === workspace.file(path)?.caseId);
 		if (own?.result && own.result.reference?.mapping !== 'own') return [];
-		return session.cases.filter((c) => c.kind === 'file' && c.status === 'ready' && c.path && c.path !== path && c.exact && c.result.reference?.mapping !== 'own');
+		return session.cases.filter(
+			(c) =>
+				c.kind === 'file' &&
+				c.status === 'ready' &&
+				c.path &&
+				c.path !== path &&
+				c.exact &&
+				c.result.reference?.mapping !== 'own',
+		);
 	}
 
 	/** The state an attaching row shows: the car analysed again while the engine no longer holds it, then the CFD read. */
-	const attachingLabel = () => (engine.canExportVtp(attaching.taker.result) ? 'Reading CFD' : 'Analysing the car again');
+	const attachingLabel = () =>
+		engine.canExportVtp(attaching.taker.result) ? 'Reading CFD' : 'Analysing the car again';
 
 	function rowMenu(file) {
 		let m = null;
-		const item = (label, onclick, cls = 'menu-item') => h('button', { type: 'button', class: cls, onclick }, h('span', {}, label));
+		const item = (label, onclick, cls = 'menu-item') =>
+			h('button', { type: 'button', class: cls, onclick }, h('span', {}, label));
 		const edit = (mode) => () => {
 			m.close();
 			editing = { path: file.path, mode };
@@ -340,24 +444,32 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 			if (mode === 'rename') field.setSelectionRange(0, dot > 0 ? dot : field.value.length);
 		};
 		// Deleting takes a second click on the same item, so a slip of the pointer removes nothing.
-		const remove = item('Delete', () => {
-			if (remove.dataset.armed !== 'true') {
-				remove.dataset.armed = 'true';
-				remove.firstChild.textContent = 'Delete, click to confirm';
-				return;
-			}
-			m.close();
-			act('delete_file', { path: file.path });
-		}, 'menu-item danger');
-		const attach = referenceTakers(file.path).map((taker) => item(`Use as CFD for ${taker.name}`, async () => {
-			m.close();
-			attaching = { path: file.path, taker };
-			render();
-			await act('attach_reference', { path: file.path, case_id: taker.id });
-			attaching = null;
-			render();
-		}));
-		const items = h('div', { class: 'menu-list', role: 'menu' },
+		const remove = item(
+			'Delete',
+			() => {
+				if (remove.dataset.armed !== 'true') {
+					remove.dataset.armed = 'true';
+					remove.firstChild.textContent = 'Delete, click to confirm';
+					return;
+				}
+				m.close();
+				act('delete_file', { path: file.path });
+			},
+			'menu-item danger',
+		);
+		const attach = referenceTakers(file.path).map((taker) =>
+			item(`Use as CFD for ${taker.name}`, async () => {
+				m.close();
+				attaching = { path: file.path, taker };
+				render();
+				await act('attach_reference', { path: file.path, case_id: taker.id });
+				attaching = null;
+				render();
+			}),
+		);
+		const items = h(
+			'div',
+			{ class: 'menu-list', role: 'menu' },
 			item('Download', () => {
 				m.close();
 				act('download_file', { path: file.path });
@@ -366,22 +478,38 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 			item('Move to folder', edit('move')),
 			attach,
 			h('hr', { class: 'menu-rule' }),
-			remove);
-		m = menu(h('button', { type: 'button', class: 'icon-button file-more', title: `More for ${baseOf(file.path)}` }, icon('more')), items, { align: 'right' });
+			remove,
+		);
+		m = menu(
+			h(
+				'button',
+				{ type: 'button', class: 'icon-button file-more', title: `More for ${baseOf(file.path)}` },
+				icon('more'),
+			),
+			items,
+			{ align: 'right' },
+		);
 		return m.el;
 	}
 
 	/** The inline field a rename or move is typed into. Enter commits, Escape or leaving it cancels. */
 	function editor(file) {
 		const rename = editing.mode === 'rename';
-		const field = h('input', { class: 'file-edit', spellcheck: 'false', 'aria-label': rename ? 'New name' : 'Folder', placeholder: rename ? '' : 'Folder, empty for the top' });
+		const field = h('input', {
+			class: 'file-edit',
+			spellcheck: 'false',
+			'aria-label': rename ? 'New name' : 'Folder',
+			placeholder: rename ? '' : 'Folder, empty for the top',
+		});
 		field.value = rename ? baseOf(file.path) : folderOf(file.path);
 		const finish = async (commit) => {
 			if (!editing) return;
 			const value = field.value.trim();
 			editing = null;
 			if (commit) {
-				const to = rename ? [folderOf(file.path), value].filter(Boolean).join('/') : [value, baseOf(file.path)].filter(Boolean).join('/');
+				const to = rename
+					? [folderOf(file.path), value].filter(Boolean).join('/')
+					: [value, baseOf(file.path)].filter(Boolean).join('/');
 				if (value || !rename) await act('move_file', { from: file.path, to });
 			}
 			render();
@@ -399,25 +527,61 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		const geometry = isGeometry(file.path) ? geometryState(file) : null;
 		const shown = geometry?.c && geometry.c === session.active;
 		// Once analysed, what the file held and how long it took on this device replaces who added it and when.
-		const meta = (geometry?.ready ? runFacts(geometry.c.result) : [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)]).join(' · ');
+		const meta = (
+			geometry?.ready
+				? runFacts(geometry.c.result)
+				: [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)]
+		).join(' · ');
 		const name = editing?.path === file.path ? editor(file) : h('span', { class: 'file-name' }, baseOf(file.path));
-		const state = attaching?.path === file.path
-			? h('span', { class: 'file-state' }, attachingLabel())
-			: geometry?.label ? h('span', { class: `file-state${geometry.ready ? ' ready' : ''}${geometry.failed ? ' failed' : ''}` }, geometry.label) : null;
-		const action = isGeometry(file.path) && !geometry.busy && !shown
-			? h('button', { type: 'button', class: 'file-action', title: geometry.c ? `Show the result of ${baseOf(file.path)}` : `Run the model on ${baseOf(file.path)}`, onclick: (e) => {
-				e.stopPropagation();
-				openRow(file);
-			} }, geometry.c ? 'Open' : h('span', { class: 'file-run' }, icon('run'), 'Run'))
-			: null;
-		const row = h('div', {
-			class: `file-row${shown ? ' current' : ''}`, role: 'treeitem', tabindex: '0', draggable: 'true', 'data-path': file.path,
-			style: `--depth:${depth}`, title: file.path,
-		},
+		const state =
+			attaching?.path === file.path
+				? h('span', { class: 'file-state' }, attachingLabel())
+				: geometry?.label
+					? h(
+							'span',
+							{ class: `file-state${geometry.ready ? ' ready' : ''}${geometry.failed ? ' failed' : ''}` },
+							geometry.label,
+						)
+					: null;
+		const action =
+			isGeometry(file.path) && !geometry.busy && !shown
+				? h(
+						'button',
+						{
+							type: 'button',
+							class: 'file-action',
+							title: geometry.c ? `Show the result of ${baseOf(file.path)}` : `Run the model on ${baseOf(file.path)}`,
+							onclick: (e) => {
+								e.stopPropagation();
+								openRow(file);
+							},
+						},
+						geometry.c ? 'Open' : h('span', { class: 'file-run' }, icon('run'), 'Run'),
+					)
+				: null;
+		const row = h(
+			'div',
+			{
+				class: `file-row${shown ? ' current' : ''}`,
+				role: 'treeitem',
+				tabindex: '0',
+				draggable: 'true',
+				'data-path': file.path,
+				style: `--depth:${depth}`,
+				title: file.path,
+			},
 			h('span', { class: 'file-icon' }, icon(kind.icon)),
-			h('span', { class: 'file-text' }, h('span', { class: 'file-line' }, name, state), h('span', { class: 'file-meta' }, meta)),
+			h(
+				'span',
+				{ class: 'file-text' },
+				h('span', { class: 'file-line' }, name, state),
+				h('span', { class: 'file-meta' }, meta),
+			),
 			h('span', { class: 'file-actions' }, action, rowMenu(file)),
-			geometry?.fraction !== undefined ? h('span', { class: 'file-progress', style: `transform:scaleX(${geometry.fraction})` }) : null);
+			geometry?.fraction !== undefined
+				? h('span', { class: 'file-progress', style: `transform:scaleX(${geometry.fraction})` })
+				: null,
+		);
 		row.addEventListener('click', (e) => {
 			if (editing || e.target.closest('.menu, .file-edit')) return;
 			openRow(file);
@@ -432,10 +596,25 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 	/** A folder row, which folds its contents and takes files dragged onto it. */
 	function folderRow(path, depth, count) {
 		const open = !folded.has(path);
-		const row = h('div', { class: 'file-row folder', role: 'treeitem', 'aria-expanded': String(open), tabindex: '0', style: `--depth:${depth}`, 'data-folder': path },
+		const row = h(
+			'div',
+			{
+				class: 'file-row folder',
+				role: 'treeitem',
+				'aria-expanded': String(open),
+				tabindex: '0',
+				style: `--depth:${depth}`,
+				'data-folder': path,
+			},
 			h('span', { class: 'file-icon' }, icon('folder')),
-			h('span', { class: 'file-text' }, h('span', { class: 'file-line' }, h('span', { class: 'file-name' }, baseOf(path))), h('span', { class: 'file-meta' }, `${count} ${count === 1 ? 'file' : 'files'}`)),
-			h('span', { class: 'folder-chevron' }, icon('chevron')));
+			h(
+				'span',
+				{ class: 'file-text' },
+				h('span', { class: 'file-line' }, h('span', { class: 'file-name' }, baseOf(path))),
+				h('span', { class: 'file-meta' }, `${count} ${count === 1 ? 'file' : 'files'}`),
+			),
+			h('span', { class: 'folder-chevron' }, icon('chevron')),
+		);
 		const flip = () => {
 			if (open) folded.add(path);
 			else folded.delete(path);
@@ -481,7 +660,12 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		built.set(key, { signature, el: row });
 		return row;
 	}
-	const empty = h('label', { class: 'files-empty' }, h('span', {}, 'Drop files here or '), h('span', { class: 'link', onclick: () => input.click() }, 'choose them'));
+	const empty = h(
+		'label',
+		{ class: 'files-empty' },
+		h('span', {}, 'Drop files here or '),
+		h('span', { class: 'link', onclick: () => input.click() }, 'choose them'),
+	);
 
 	function render() {
 		if (!open) return;
@@ -504,7 +688,8 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 					const count = files.filter((f) => f.path.startsWith(`${folder}/`)).length;
 					const key = `folder:${folder}`;
 					used.add(key);
-					if (!hiddenUnder) rows.push(keyed(key, `${d}|${count}|${folded.has(folder)}`, () => folderRow(folder, d - 1, count)));
+					if (!hiddenUnder)
+						rows.push(keyed(key, `${d}|${count}|${folded.has(folder)}`, () => folderRow(folder, d - 1, count)));
 				}
 				if (folded.has(folder)) hiddenUnder = true;
 			}
@@ -512,13 +697,25 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 			const c = session.cases.find((x) => x.id === file.caseId);
 			const key = `file:${file.path}`;
 			used.add(key);
-			const signature = [file.size, file.by, file.modified, file.caseId, c?.status, c === session.active, editing?.path === file.path && editing.mode,
-				referenceTakers(file.path).map((taker) => taker.id).join(','), attaching?.path === file.path && attachingLabel()].join('|');
+			const signature = [
+				file.size,
+				file.by,
+				file.modified,
+				file.caseId,
+				c?.status,
+				c === session.active,
+				editing?.path === file.path && editing.mode,
+				referenceTakers(file.path)
+					.map((taker) => taker.id)
+					.join(','),
+				attaching?.path === file.path && attachingLabel(),
+			].join('|');
 			rows.push(keyed(key, signature, () => fileRow(file, parts.length - 1)));
 		}
 		for (const key of built.keys()) if (!used.has(key)) built.delete(key);
 		const wanted = rows.length ? rows : [empty];
-		if (wanted.length !== list.children.length || wanted.some((row, i) => row !== list.children[i])) list.replaceChildren(...wanted);
+		if (wanted.length !== list.children.length || wanted.some((row, i) => row !== list.children[i]))
+			list.replaceChildren(...wanted);
 		renderExamples();
 	}
 
@@ -548,14 +745,37 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		const signature = JSON.stringify([facts, states.map((c) => c && [c.id, c.status, c === session.active])]);
 		if (signature === examplesShown) return;
 		examplesShown = signature;
-		examples.replaceChildren(...EXAMPLES.map((example, i) => {
-			const c = states[i];
-			const shown = c && c === session.active;
-			return h('button', { type: 'button', class: `example-row${shown ? ' current' : ''}`, 'data-example-row': example.id, onclick: () => act(c ? 'show_case' : 'open_example', c ? { case_id: c.id } : { example: example.id }) },
-				s('svg', { class: 'example-mark', viewBox: '0 0 132 40', 'aria-hidden': 'true' }, s('path', { d: example.profile })),
-				h('span', { class: 'file-text' }, h('span', { class: 'file-line' }, h('span', { class: 'file-name' }, example.label), c?.status === 'ready' ? h('span', { class: 'file-state ready' }, 'Result') : null),
-					h('span', { class: 'file-meta' }, ['Example', facts[i]].filter(Boolean).join(' · '))));
-		}));
+		examples.replaceChildren(
+			...EXAMPLES.map((example, i) => {
+				const c = states[i];
+				const shown = c && c === session.active;
+				return h(
+					'button',
+					{
+						type: 'button',
+						class: `example-row${shown ? ' current' : ''}`,
+						'data-example-row': example.id,
+						onclick: () => act(c ? 'show_case' : 'open_example', c ? { case_id: c.id } : { example: example.id }),
+					},
+					s(
+						'svg',
+						{ class: 'example-mark', viewBox: '0 0 132 40', 'aria-hidden': 'true' },
+						s('path', { d: example.profile }),
+					),
+					h(
+						'span',
+						{ class: 'file-text' },
+						h(
+							'span',
+							{ class: 'file-line' },
+							h('span', { class: 'file-name' }, example.label),
+							c?.status === 'ready' ? h('span', { class: 'file-state ready' }, 'Result') : null,
+						),
+						h('span', { class: 'file-meta' }, ['Example', facts[i]].filter(Boolean).join(' · ')),
+					),
+				);
+			}),
+		);
 	}
 
 	workspace.onChange(() => render());

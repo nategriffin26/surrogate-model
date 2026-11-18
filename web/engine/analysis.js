@@ -15,17 +15,17 @@
  * @param {Float64Array} areas
  */
 export function evenPicks(areas, count) {
-  let total = 0;
-  for (let c = 0; c < areas.length; c++) total += areas[c];
-  const picks = new Uint32Array(count);
-  let cumulative = areas[0];
-  let c = 0;
-  for (let i = 0; i < count; i++) {
-    const mark = ((i + 0.5) / count) * total;
-    while (cumulative < mark && c < areas.length - 1) cumulative += areas[++c];
-    picks[i] = c;
-  }
-  return { picks, weight: total / count };
+	let total = 0;
+	for (let c = 0; c < areas.length; c++) total += areas[c];
+	const picks = new Uint32Array(count);
+	let cumulative = areas[0];
+	let c = 0;
+	for (let i = 0; i < count; i++) {
+		const mark = ((i + 0.5) / count) * total;
+		while (cumulative < mark && c < areas.length - 1) cumulative += areas[++c];
+		picks[i] = c;
+	}
+	return { picks, weight: total / count };
 }
 
 /**
@@ -33,87 +33,87 @@ export function evenPicks(areas, count) {
  * and the whole-car totals of the networks' mean.
  */
 export class SurfaceTally {
-  /**
-   * @param {number} networks
-   * @param {number} frontalArea
-   * @param {import('./geometry.js').CellGeometry} cells  the polygons' normals, and the centres of the extremes
-   */
-  constructor(networks, frontalArea, cells) {
-    this.networks = networks;
-    this.frontalArea = frontalArea;
-    this.cells = cells;
-    /** Each network's drag. */
-    this.drag = new Float64Array(networks);
-    this.area = 0;
-    this.pressure = 0;
-    this.forceY = 0;
-    this.forceZ = 0;
-    this.lowest = { cp: Infinity, cell: -1 };
-    this.highest = { cp: -Infinity, cell: -1 };
-  }
+	/**
+	 * @param {number} networks
+	 * @param {number} frontalArea
+	 * @param {import('./geometry.js').CellGeometry} cells  the polygons' normals, and the centres of the extremes
+	 */
+	constructor(networks, frontalArea, cells) {
+		this.networks = networks;
+		this.frontalArea = frontalArea;
+		this.cells = cells;
+		/** Each network's drag. */
+		this.drag = new Float64Array(networks);
+		this.area = 0;
+		this.pressure = 0;
+		this.forceY = 0;
+		this.forceZ = 0;
+		this.lowest = { cp: Infinity, cell: -1 };
+		this.highest = { cp: -Infinity, cell: -1 };
+	}
 
-  /**
-   * @param {number} weight  the area the polygon stands for
-   * @param {number} cell    its index
-   * @param {Float32Array} models  (networks, count) each network's Cp; this polygon is entry `at`
-   * @param {number} cp      the networks' mean
-   */
-  add(weight, cell, models, at, count, cp) {
-    const { normals } = this.cells;
-    const nx = normals[3 * cell];
-    for (let f = 0; f < this.networks; f++) this.drag[f] -= models[f * count + at] * nx * weight;
-    this.area += weight;
-    this.pressure += cp * weight;
-    this.forceY -= cp * normals[3 * cell + 1] * weight;
-    this.forceZ -= cp * normals[3 * cell + 2] * weight;
-    if (cp < this.lowest.cp) this.lowest = { cp, cell };
-    if (cp > this.highest.cp) this.highest = { cp, cell };
-  }
+	/**
+	 * @param {number} weight  the area the polygon stands for
+	 * @param {number} cell    its index
+	 * @param {Float32Array} models  (networks, count) each network's Cp; this polygon is entry `at`
+	 * @param {number} cp      the networks' mean
+	 */
+	add(weight, cell, models, at, count, cp) {
+		const { normals } = this.cells;
+		const nx = normals[3 * cell];
+		for (let f = 0; f < this.networks; f++) this.drag[f] -= models[f * count + at] * nx * weight;
+		this.area += weight;
+		this.pressure += cp * weight;
+		this.forceY -= cp * normals[3 * cell + 1] * weight;
+		this.forceZ -= cp * normals[3 * cell + 2] * weight;
+		if (cp < this.lowest.cp) this.lowest = { cp, cell };
+		if (cp > this.highest.cp) this.highest = { cp, cell };
+	}
 
-  forces() {
-    const cdPModels = Array.from(this.drag, (value) => value / this.frontalArea);
-    const cdP = cdPModels.reduce((sum, value) => sum + value, 0) / this.networks;
-    return { cdP, cdPModels };
-  }
+	forces() {
+		const cdPModels = Array.from(this.drag, (value) => value / this.frontalArea);
+		const cdP = cdPModels.reduce((sum, value) => sum + value, 0) / this.networks;
+		return { cdP, cdPModels };
+	}
 
-  /** @returns {import('./result.js').Totals} */
-  totals() {
-    const { centers, normals } = this.cells;
-    const extreme = ({ cp, cell }) => ({
-      value: cp,
-      center: Array.from(centers.subarray(3 * cell, 3 * cell + 3)),
-      normal: Array.from(normals.subarray(3 * cell, 3 * cell + 3)),
-    });
-    return {
-      area: this.area,
-      meanCp: this.pressure / this.area,
-      coefficients: [this.forces().cdP, this.forceY / this.frontalArea, this.forceZ / this.frontalArea],
-      cpMin: extreme(this.lowest),
-      cpMax: extreme(this.highest),
-    };
-  }
+	/** @returns {import('./result.js').Totals} */
+	totals() {
+		const { centers, normals } = this.cells;
+		const extreme = ({ cp, cell }) => ({
+			value: cp,
+			center: Array.from(centers.subarray(3 * cell, 3 * cell + 3)),
+			normal: Array.from(normals.subarray(3 * cell, 3 * cell + 3)),
+		});
+		return {
+			area: this.area,
+			meanCp: this.pressure / this.area,
+			coefficients: [this.forces().cdP, this.forceY / this.frontalArea, this.forceZ / this.frontalArea],
+			cpMin: extreme(this.lowest),
+			cpMax: extreme(this.highest),
+		};
+	}
 }
 
 /** Sums for the area-weighted accuracy (R²) of the networks' mean Cp against CFD, one polygon at a time. */
 export class Accuracy {
-  area = 0;
-  truth = 0;
-  truthSquared = 0;
-  errorSquared = 0;
+	area = 0;
+	truth = 0;
+	truthSquared = 0;
+	errorSquared = 0;
 
-  add(weight, cp, cfd) {
-    const error = cp - cfd;
-    this.area += weight;
-    this.truth += weight * cfd;
-    this.truthSquared += weight * cfd * cfd;
-    this.errorSquared += weight * error * error;
-  }
+	add(weight, cp, cfd) {
+		const error = cp - cfd;
+		this.area += weight;
+		this.truth += weight * cfd;
+		this.truthSquared += weight * cfd * cfd;
+		this.errorSquared += weight * error * error;
+	}
 
-  /** @returns {{ r2: number }} */
-  result() {
-    const variance = this.truthSquared - (this.truth * this.truth) / this.area;
-    return { r2: 1 - this.errorSquared / Math.max(variance, 1e-12) };
-  }
+	/** @returns {{ r2: number }} */
+	result() {
+		const variance = this.truthSquared - (this.truth * this.truth) / this.area;
+		return { r2: 1 - this.errorSquared / Math.max(variance, 1e-12) };
+	}
 }
 
 /**
@@ -121,9 +121,9 @@ export class Accuracy {
  * gives the same number, to the last digit, as the same field read with the car's own file.
  */
 export function surfaceAccuracy(areas, cp, cfd) {
-  const accuracy = new Accuracy();
-  for (let c = 0; c < areas.length; c++) accuracy.add(areas[c], cp[c], cfd[c]);
-  return accuracy.result();
+	const accuracy = new Accuracy();
+	for (let c = 0; c < areas.length; c++) accuracy.add(areas[c], cp[c], cfd[c]);
+	return accuracy.result();
 }
 
 /**
@@ -133,15 +133,19 @@ export function surfaceAccuracy(areas, cp, cfd) {
  * @returns {import('./result.js').ReferenceTotals}
  */
 export function referenceTotals({ normals, areas }, cfd, frontalArea) {
-  let area = 0, pressure = 0, forceX = 0, forceY = 0, forceZ = 0;
-  for (let c = 0; c < areas.length; c++) {
-    area += areas[c];
-    pressure += cfd[c] * areas[c];
-    forceX -= cfd[c] * normals[3 * c] * areas[c];
-    forceY -= cfd[c] * normals[3 * c + 1] * areas[c];
-    forceZ -= cfd[c] * normals[3 * c + 2] * areas[c];
-  }
-  return { meanCp: pressure / area, coefficients: [forceX / frontalArea, forceY / frontalArea, forceZ / frontalArea] };
+	let area = 0,
+		pressure = 0,
+		forceX = 0,
+		forceY = 0,
+		forceZ = 0;
+	for (let c = 0; c < areas.length; c++) {
+		area += areas[c];
+		pressure += cfd[c] * areas[c];
+		forceX -= cfd[c] * normals[3 * c] * areas[c];
+		forceY -= cfd[c] * normals[3 * c + 1] * areas[c];
+		forceZ -= cfd[c] * normals[3 * c + 2] * areas[c];
+	}
+	return { meanCp: pressure / area, coefficients: [forceX / frontalArea, forceY / frontalArea, forceZ / frontalArea] };
 }
 
 /**
@@ -151,13 +155,13 @@ export function referenceTotals({ normals, areas }, cfd, frontalArea) {
  * @returns {import('./result.js').Coverage}
  */
 export function coverage([xmin, xmax, ymin, ymax, zmin, zmax], training) {
-  const sizes = { length: xmax - xmin, width: ymax - ymin, height: zmax - zmin };
-  return {
-    dimensions: ['length', 'width', 'height'].map((name) => ({
-      name,
-      value: sizes[name],
-      trainMin: training[name].min,
-      trainMax: training[name].max,
-    })),
-  };
+	const sizes = { length: xmax - xmin, width: ymax - ymin, height: zmax - zmin };
+	return {
+		dimensions: ['length', 'width', 'height'].map((name) => ({
+			name,
+			value: sizes[name],
+			trainMin: training[name].min,
+			trainMax: training[name].max,
+		})),
+	};
 }

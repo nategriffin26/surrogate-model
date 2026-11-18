@@ -56,7 +56,10 @@ export class Session extends EventTarget {
 	/** The case with an id, or an error naming the open ones. */
 	byId(id) {
 		const c = this.cases.find((x) => x.id === id);
-		if (!c) throw new Error(`There is no open case ${id}. Open cases: ${this.cases.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`);
+		if (!c)
+			throw new Error(
+				`There is no open case ${id}. Open cases: ${this.cases.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`,
+			);
 		return c;
 	}
 
@@ -64,7 +67,11 @@ export class Session extends EventTarget {
 	withResult(id) {
 		const c = id === undefined ? this.active : this.byId(id);
 		if (c?.result) return c;
-		throw new Error(id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${id} has no result yet (${c.status}).`);
+		throw new Error(
+			id === undefined
+				? 'No case with a result is on screen. Open a file or an example first.'
+				: `Case ${id} has no result yet (${c.status}).`,
+		);
 	}
 
 	/** detail.what: 'cases' (opened, closed), 'active', 'status', 'stage', 'geometry', 'full', 'numbers', 'device'. */

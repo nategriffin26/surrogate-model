@@ -219,102 +219,126 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
 
 /** Workgroups for `count` items, one thread each, laid out as the shaders index them. */
 function groupsFor(count) {
-  const groups = Math.ceil(count / THREADS);
-  return [Math.min(groups, ROW_GROUPS), Math.ceil(groups / ROW_GROUPS)];
+	const groups = Math.ceil(count / THREADS);
+	return [Math.min(groups, ROW_GROUPS), Math.ceil(groups / ROW_GROUPS)];
 }
 
 /**
  * @param {GPUDevice} device
  */
 export function createGridOperations(device) {
-  const pipelines = new Map();
-  const pipeline = (code) => {
-    if (!pipelines.has(code)) {
-      pipelines.set(code, device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } }));
-    }
-    return pipelines.get(code);
-  };
-  const uniform = (bytes) => {
-    const buffer = device.createBuffer({ size: Math.max(16, bytes.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(buffer, 0, bytes);
-    return buffer;
-  };
-  const gridUniform = ({ origin, step, nodes }, count) => {
-    const bytes = new ArrayBuffer(32);
-    new Float32Array(bytes, 0, 4).set([...origin, step]);
-    new Uint32Array(bytes, 16, 4).set([...nodes, count]);
-    return uniform(bytes);
-  };
-  const dispatch = (encoder, code, buffers, groups) => {
-    const compute = pipeline(code);
-    const bindGroup = device.createBindGroup({
-      layout: compute.getBindGroupLayout(0),
-      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
-    });
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(compute);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(...groups);
-    pass.end();
-  };
+	const pipelines = new Map();
+	const pipeline = (code) => {
+		if (!pipelines.has(code)) {
+			pipelines.set(
+				code,
+				device.createComputePipeline({
+					layout: 'auto',
+					compute: { module: device.createShaderModule({ code }), entryPoint: 'main' },
+				}),
+			);
+		}
+		return pipelines.get(code);
+	};
+	const uniform = (bytes) => {
+		const buffer = device.createBuffer({
+			size: Math.max(16, bytes.byteLength),
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(buffer, 0, bytes);
+		return buffer;
+	};
+	const gridUniform = ({ origin, step, nodes }, count) => {
+		const bytes = new ArrayBuffer(32);
+		new Float32Array(bytes, 0, 4).set([...origin, step]);
+		new Uint32Array(bytes, 16, 4).set([...nodes, count]);
+		return uniform(bytes);
+	};
+	const dispatch = (encoder, code, buffers, groups) => {
+		const compute = pipeline(code);
+		const bindGroup = device.createBindGroup({
+			layout: compute.getBindGroupLayout(0),
+			entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+		});
+		const pass = encoder.beginComputePass();
+		pass.setPipeline(compute);
+		pass.setBindGroup(0, bindGroup);
+		pass.dispatchWorkgroups(...groups);
+		pass.end();
+	};
 
-  return {
-    device,
+	return {
+		device,
 
-    /**
-     * Each point's weight shared among the 27 nodes around it, added to the fixed-point `sums` of
-     * the nodes [first, first + length) (8 bytes a node; cleared by the caller before the first
-     * spread into them). What a point gives the grid's other nodes is left out, so a grid whose sums
-     * are larger than one buffer binding may hold is spread one block of nodes at a time.
-     * @param {GPUCommandEncoder} encoder
-     * @param {import('./grid.js').Grid} grid
-     * @param {{ positions: GPUBuffer, weights: GPUBuffer, count: number, sums: GPUBuffer, first: number, length: number }} buffers
-     */
-    spread(encoder, grid, { positions, weights, count, sums, first, length }) {
-      dispatch(encoder, SPREAD, [gridUniform(grid, count), positions, weights, sums, uniform(new Uint32Array([first, length]))], groupsFor(count));
-    },
+		/**
+		 * Each point's weight shared among the 27 nodes around it, added to the fixed-point `sums` of
+		 * the nodes [first, first + length) (8 bytes a node; cleared by the caller before the first
+		 * spread into them). What a point gives the grid's other nodes is left out, so a grid whose sums
+		 * are larger than one buffer binding may hold is spread one block of nodes at a time.
+		 * @param {GPUCommandEncoder} encoder
+		 * @param {import('./grid.js').Grid} grid
+		 * @param {{ positions: GPUBuffer, weights: GPUBuffer, count: number, sums: GPUBuffer, first: number, length: number }} buffers
+		 */
+		spread(encoder, grid, { positions, weights, count, sums, first, length }) {
+			dispatch(
+				encoder,
+				SPREAD,
+				[gridUniform(grid, count), positions, weights, sums, uniform(new Uint32Array([first, length]))],
+				groupsFor(count),
+			);
+		},
 
-    /**
-     * The fixed-point sums of the nodes [first, first + length) into those nodes of a float32 field.
-     * @param {GPUCommandEncoder} encoder
-     * @param {{ sums: GPUBuffer, field: GPUBuffer, first: number, length: number }} buffers
-     */
-    sumsToField(encoder, { sums, field, first, length }) {
-      dispatch(encoder, FIXED_TO_FLOAT, [uniform(new Uint32Array([first, length])), sums, field], groupsFor(length));
-    },
+		/**
+		 * The fixed-point sums of the nodes [first, first + length) into those nodes of a float32 field.
+		 * @param {GPUCommandEncoder} encoder
+		 * @param {{ sums: GPUBuffer, field: GPUBuffer, first: number, length: number }} buffers
+		 */
+		sumsToField(encoder, { sums, field, first, length }) {
+			dispatch(encoder, FIXED_TO_FLOAT, [uniform(new Uint32Array([first, length])), sums, field], groupsFor(length));
+		},
 
-    /**
-     * The nodes a read within `reach` (metres) of each of `count` points touches, set in `bits`
-     * (one bit a node, 32 to a word; cleared by the caller).
-     * @param {GPUCommandEncoder} encoder
-     * @param {import('./grid.js').Grid} grid
-     * @param {{ positions: GPUBuffer, count: number, reach: number, bits: GPUBuffer }} buffers
-     */
-    mark(encoder, grid, { positions, count, reach, bits }) {
-      dispatch(encoder, MARK, [gridUniform(grid, count), positions, bits, uniform(new Float32Array([reach]))], groupsFor(count));
-    },
+		/**
+		 * The nodes a read within `reach` (metres) of each of `count` points touches, set in `bits`
+		 * (one bit a node, 32 to a word; cleared by the caller).
+		 * @param {GPUCommandEncoder} encoder
+		 * @param {import('./grid.js').Grid} grid
+		 * @param {{ positions: GPUBuffer, count: number, reach: number, bits: GPUBuffer }} buffers
+		 */
+		mark(encoder, grid, { positions, count, reach, bits }) {
+			dispatch(
+				encoder,
+				MARK,
+				[gridUniform(grid, count), positions, bits, uniform(new Float32Array([reach]))],
+				groupsFor(count),
+			);
+		},
 
-    /**
-     * `field` at `count` listed nodes, into lane `lane` of rows of `lanes` floats.
-     * @param {GPUCommandEncoder} encoder
-     * @param {{ field: GPUBuffer, nodes: GPUBuffer, count: number, out: GPUBuffer, lane: number, lanes: number }} buffers
-     */
-    gather(encoder, { field, nodes, count, out, lane, lanes }) {
-      dispatch(encoder, GATHER, [uniform(new Uint32Array([count, lane, lanes])), field, nodes, out], groupsFor(count));
-    },
+		/**
+		 * `field` at `count` listed nodes, into lane `lane` of rows of `lanes` floats.
+		 * @param {GPUCommandEncoder} encoder
+		 * @param {{ field: GPUBuffer, nodes: GPUBuffer, count: number, out: GPUBuffer, lane: number, lanes: number }} buffers
+		 */
+		gather(encoder, { field, nodes, count, out, lane, lanes }) {
+			dispatch(encoder, GATHER, [uniform(new Uint32Array([count, lane, lanes])), field, nodes, out], groupsFor(count));
+		},
 
-    /**
-     * `field` correlated along `axis` with `weights` (2r + 1 float32 in a storage buffer), into `out`,
-     * as `grid.js` `correlateAlong`.
-     * @param {GPUCommandEncoder} encoder
-     * @param {number[]} nodes
-     * @param {number} axis
-     * @param {{ weights: GPUBuffer, radius: number, field: GPUBuffer, out: GPUBuffer }} buffers
-     */
-    correlate(encoder, nodes, axis, { weights, radius, field, out }) {
-      const count = nodes[0] * nodes[1] * nodes[2];
-      const stride = axis === 0 ? nodes[1] * nodes[2] : axis === 1 ? nodes[2] : 1;
-      dispatch(encoder, CORRELATE, [uniform(new Uint32Array([count, nodes[axis], stride, radius])), weights, field, out], groupsFor(count));
-    },
-  };
+		/**
+		 * `field` correlated along `axis` with `weights` (2r + 1 float32 in a storage buffer), into `out`,
+		 * as `grid.js` `correlateAlong`.
+		 * @param {GPUCommandEncoder} encoder
+		 * @param {number[]} nodes
+		 * @param {number} axis
+		 * @param {{ weights: GPUBuffer, radius: number, field: GPUBuffer, out: GPUBuffer }} buffers
+		 */
+		correlate(encoder, nodes, axis, { weights, radius, field, out }) {
+			const count = nodes[0] * nodes[1] * nodes[2];
+			const stride = axis === 0 ? nodes[1] * nodes[2] : axis === 1 ? nodes[2] : 1;
+			dispatch(
+				encoder,
+				CORRELATE,
+				[uniform(new Uint32Array([count, nodes[axis], stride, radius])), weights, field, out],
+				groupsFor(count),
+			);
+		},
+	};
 }

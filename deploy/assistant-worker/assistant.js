@@ -58,15 +58,19 @@ export async function route(request, env) {
 	const enabled = Boolean(env.OPENROUTER_API_KEY) && env.ASSISTANT_ENABLED !== '0';
 	const model = env.ASSISTANT_MODEL || DEFAULT_MODEL;
 	if (request.method === 'GET') {
-		return enabled ? Response.json({ enabled, model }) : Response.json({ enabled, model: null, error: { message: UNAVAILABLE } }, { status: 503 });
+		return enabled
+			? Response.json({ enabled, model })
+			: Response.json({ enabled, model: null, error: { message: UNAVAILABLE } }, { status: 503 });
 	}
 	if (request.method !== 'POST') return refuse(405, 'Use GET or POST.');
 	if (!enabled) return refuse(503, UNAVAILABLE);
-	if (!ALLOWED_ORIGINS.includes(request.headers.get('Origin'))) return refuse(403, 'This route serves the tool on its own site only.');
+	if (!ALLOWED_ORIGINS.includes(request.headers.get('Origin')))
+		return refuse(403, 'This route serves the tool on its own site only.');
 
 	const declared = Number(request.headers.get('Content-Length') ?? 0);
 	const bytes = declared > MAX_REQUEST_BYTES ? null : await request.arrayBuffer();
-	if (bytes === null || bytes.byteLength > MAX_REQUEST_BYTES) return refuse(413, 'This conversation is too long to send. Start a new one.');
+	if (bytes === null || bytes.byteLength > MAX_REQUEST_BYTES)
+		return refuse(413, 'This conversation is too long to send. Start a new one.');
 	let body;
 	try {
 		body = JSON.parse(new TextDecoder().decode(bytes));
@@ -80,9 +84,14 @@ export async function route(request, env) {
 
 	const limits = env.ASSISTANT_LIMITS.get(env.ASSISTANT_LIMITS.idFromName('all'));
 	const visitor = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-	const verdict = await (await limits.fetch('https://limits/admit', { method: 'POST', body: JSON.stringify({ visitor }) })).json();
+	const verdict = await (
+		await limits.fetch('https://limits/admit', { method: 'POST', body: JSON.stringify({ visitor }) })
+	).json();
 	if (verdict.refused) {
-		return Response.json({ error: { message: REFUSALS[verdict.refused] } }, { status: 429, headers: { 'Retry-After': String(verdict.retryAfter) } });
+		return Response.json(
+			{ error: { message: REFUSALS[verdict.refused] } },
+			{ status: 429, headers: { 'Retry-After': String(verdict.retryAfter) } },
+		);
 	}
 
 	let upstream;
@@ -104,7 +113,10 @@ export async function route(request, env) {
 		return refuse(502, `The model service could not be reached (${error.message}).`);
 	}
 	if (!upstream.ok) {
-		return new Response(upstream.body, { status: upstream.status, headers: { 'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json' } });
+		return new Response(upstream.body, {
+			status: upstream.status,
+			headers: { 'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json' },
+		});
 	}
 	return new Response(upstream.body, { headers: { 'Content-Type': STREAM_TYPE, 'Cache-Control': 'no-cache' } });
 }
@@ -142,7 +154,8 @@ export class Limiter {
 		}
 		const visitorCount = this.byVisitor.get(visitor) ?? 0;
 		const toNextMinute = Math.ceil(((minute + 1) * 60000 - now) / 1000);
-		if (this.inDay >= this.limits.perDay) return { refused: 'day', retryAfter: Math.ceil((Date.parse(`${day}T00:00:00Z`) + 86400000 - now) / 1000) };
+		if (this.inDay >= this.limits.perDay)
+			return { refused: 'day', retryAfter: Math.ceil((Date.parse(`${day}T00:00:00Z`) + 86400000 - now) / 1000) };
 		if (this.inMinute >= this.limits.perMinute) return { refused: 'minute', retryAfter: toNextMinute };
 		if (visitorCount >= this.limits.perVisitorPerMinute) return { refused: 'visitor', retryAfter: toNextMinute };
 		this.inMinute++;

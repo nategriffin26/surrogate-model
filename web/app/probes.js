@@ -64,7 +64,14 @@ function faceSite(mesh, f) {
 	const outward = [0, 1, 2].map((k) => N[3 * vertices[0] + k] + N[3 * vertices[1] + k] + N[3 * vertices[2] + k]);
 	const length = Math.hypot(...normal) * (dot(normal, outward) < 0 ? -1 : 1);
 	const mean = (field) => (field[vertices[0]] + field[vertices[1]] + field[vertices[2]]) / 3;
-	return { cell: null, corners, point, normal: normal.map((x) => x / length), cp: mean(mesh.cp), sigma: mean(mesh.sigma) };
+	return {
+		cell: null,
+		corners,
+		point,
+		normal: normal.map((x) => x / length),
+		cp: mean(mesh.cp),
+		sigma: mean(mesh.sigma),
+	};
 }
 
 /** Whether a surface point lies on a site's cell: near its plane and inside its outline, whichever way that winds. */
@@ -101,7 +108,14 @@ async function siteAtPoint(engine, c, point, face = faceNear(c.result.mesh, poin
 	// The face's normal keeps a point on a thin panel on its own side.
 	const polygon = await engine.polygonAt(c.result, point, face.normal);
 	if (!polygon) return face;
-	return { cell: polygon.index, corners: polygon.corners, point: polygon.center, normal: polygon.normal, cp: polygon.cp, sigma: polygon.sigma };
+	return {
+		cell: polygon.index,
+		corners: polygon.corners,
+		point: polygon.center,
+		normal: polygon.normal,
+		cp: polygon.cp,
+		sigma: polygon.sigma,
+	};
 }
 
 /** A field added at run time (fields.addField) on working-mesh face f of case c: the mean of its corners' values; null where the case has none. */
@@ -117,15 +131,25 @@ const sitesOn = (c) => (c.sites ??= new WeakMap());
 /** A set's probes read on a case: each probe's site there, looking up the ones not yet known. */
 export async function readSet(engine, c, set) {
 	const sites = sitesOn(c);
-	await Promise.all(set.probes.filter((p) => !sites.has(p)).map(async (p) => sites.set(p, await siteAtPoint(engine, c, p.point))));
+	await Promise.all(
+		set.probes.filter((p) => !sites.has(p)).map(async (p) => sites.set(p, await siteAtPoint(engine, c, p.point))),
+	);
 	return set.probes.map((p) => sites.get(p));
 }
 
 /** The probe table of a set on a case as CSV; a dropped file's probes name the file's cell, so each can be found again in the file. */
 function probesCsv(c, set, sites) {
 	const cells = c.kind === 'file';
-	const head = ['probe', ...(cells ? ['cell'] : []), ...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key))];
-	const rows = set.probes.map((p, i) => [p.n, ...(cells ? [sites[i].cell ?? ''] : []), ...COLUMNS.map((col) => col.read(sites[i]).toFixed(6))]);
+	const head = [
+		'probe',
+		...(cells ? ['cell'] : []),
+		...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key)),
+	];
+	const rows = set.probes.map((p, i) => [
+		p.n,
+		...(cells ? [sites[i].cell ?? ''] : []),
+		...COLUMNS.map((col) => col.read(sites[i]).toFixed(6)),
+	]);
 	return csv([head, ...rows]);
 }
 
@@ -150,7 +174,10 @@ export function defineProbeOperations({ session, engine, update }) {
 	let nextSet = 1;
 	const setById = (set_id) => {
 		const set = session.probeSets.find((x) => x.id === set_id);
-		if (!set) throw new Error(`There is no probe set ${set_id}. Sets: ${session.probeSets.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`);
+		if (!set)
+			throw new Error(
+				`There is no probe set ${set_id}. Sets: ${session.probeSets.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`,
+			);
 		return set;
 	};
 	/** The set an operation acts on: the one named, or the one in use. */
@@ -163,7 +190,8 @@ export function defineProbeOperations({ session, engine, update }) {
 	const checkedSetName = (name) => {
 		const label = String(name).trim();
 		if (!label) throw new Error('name must not be empty.');
-		if (session.probeSets.some((x) => x.name === label)) throw new Error(`A probe set is already named ${JSON.stringify(label)}. Choose another name.`);
+		if (session.probeSets.some((x) => x.name === label))
+			throw new Error(`A probe set is already named ${JSON.stringify(label)}. Choose another name.`);
 		return label;
 	};
 	/** A new set in use, holding probes at `points` ([x, y, z] each) snapped to the cells of case c. */
@@ -191,17 +219,29 @@ export function defineProbeOperations({ session, engine, update }) {
 
 	defineOperation({
 		name: 'place_probe',
-		description: 'Place a probe at the surface cell nearest a point, in a probe set (default the set in use; a first set is made if there is none). On a dropped file the cell is the file\'s own polygon with the values predicted for it; on a bundled example, the working-mesh triangle, valued at its centre. The probe keeps that cell\'s centre, so every car reads it at its own cell nearest there. Returns the probe read on the case: its number in the set, the file cell index when there is one, its centre and outward normal, Cp and the spread σ(Cp).',
+		description:
+			"Place a probe at the surface cell nearest a point, in a probe set (default the set in use; a first set is made if there is none). On a dropped file the cell is the file's own polygon with the values predicted for it; on a bundled example, the working-mesh triangle, valued at its centre. The probe keeps that cell's centre, so every car reads it at its own cell nearest there. Returns the probe read on the case: its number in the set, the file cell index when there is one, its centre and outward normal, Cp and the spread σ(Cp).",
 		parameters: {
 			type: 'object',
-			properties: { point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] in metres; snapped to the nearest surface cell.' }, case_id: caseId, set_id: setId },
+			properties: {
+				point: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 3,
+					maxItems: 3,
+					description: '[x, y, z] in metres; snapped to the nearest surface cell.',
+				},
+				case_id: caseId,
+				set_id: setId,
+			},
 			required: ['point'],
 			additionalProperties: false,
 		},
 		async run({ point, case_id, set_id }) {
 			const c = session.withResult(case_id);
 			const at = triple('point', point);
-			if (set_id === undefined && !session.probeSets.some((x) => x.id === view.probeSet)) await addSet(freeSetName(session.probeSets), [], c);
+			if (set_id === undefined && !session.probeSets.some((x) => x.id === view.probeSet))
+				await addSet(freeSetName(session.probeSets), [], c);
 			const set = chosen(set_id);
 			const [probe] = await addProbes(set, [at], c);
 			update('dock', 'layout', 'markers');
@@ -224,21 +264,27 @@ export function defineProbeOperations({ session, engine, update }) {
 		},
 		async run({ count = STATIONS, branch = 'upper', name, case_id }) {
 			const c = session.withResult(case_id);
-			if (!Number.isInteger(count) || count < 1 || count > MOST_STATIONS) throw new Error(`count must be a whole number from 1 to ${MOST_STATIONS}; got ${count}.`);
+			if (!Number.isInteger(count) || count < 1 || count > MOST_STATIONS)
+				throw new Error(`count must be a whole number from 1 to ${MOST_STATIONS}; got ${count}.`);
 			const b = ['upper', 'lower'].indexOf(oneOf('branch', branch, ['upper', 'lower']));
 			const plane = view.section;
 			if (!plane.on) throw new Error('The section is off. Turn it on with set_section first.');
 			const points = sectionStations(c, plane, count, b);
 			if (points.length === 0) throw new Error('The section cuts no outer surface there. Move it onto the car.');
 			const axis = ['x', 'y', 'z'][plane.axis];
-			const set = await addSet(name ?? `${axis} = ${signed(plane.offset, 3)} m, ${CUT_AXES[plane.axis].branches[b].toLowerCase()}`, points, c);
+			const set = await addSet(
+				name ?? `${axis} = ${signed(plane.offset, 3)} m, ${CUT_AXES[plane.axis].branches[b].toLowerCase()}`,
+				points,
+				c,
+			);
 			return { ...setSummary(set), probes: set.probes.map((p) => probeResult(p, sitesOn(c).get(p))) };
 		},
 	});
 
 	defineOperation({
 		name: 'list_probes',
-		description: 'The probe sets, and the probes of one (default the set in use) read on a case: each one\'s number, cell, centre, normal, Cp and σ.',
+		description:
+			"The probe sets, and the probes of one (default the set in use) read on a case: each one's number, cell, centre, normal, Cp and σ.",
 		parameters: { type: 'object', properties: { case_id: caseId, set_id: setId }, additionalProperties: false },
 		async run({ case_id, set_id }) {
 			const sets = session.probeSets.map(setSummary);
@@ -246,14 +292,25 @@ export function defineProbeOperations({ session, engine, update }) {
 			if (!set) return { sets, in_use: null };
 			const c = session.withResult(case_id);
 			const sites = await readSet(engine, c, set);
-			return { sets, in_use: view.probeSet, set_id: set.id, name: set.name, probes: set.probes.map((p, i) => probeResult(p, sites[i])) };
+			return {
+				sets,
+				in_use: view.probeSet,
+				set_id: set.id,
+				name: set.name,
+				probes: set.probes.map((p, i) => probeResult(p, sites[i])),
+			};
 		},
 	});
 
 	defineOperation({
 		name: 'use_probe_set',
-		description: 'Put a probe set in use, the one clicks add to and the table shows: an existing one by set_id (renamed when a name is given), or a new empty one with the given name.',
-		parameters: { type: 'object', properties: { set_id: { type: 'integer' }, name: { type: 'string' } }, additionalProperties: false },
+		description:
+			'Put a probe set in use, the one clicks add to and the table shows: an existing one by set_id (renamed when a name is given), or a new empty one with the given name.',
+		parameters: {
+			type: 'object',
+			properties: { set_id: { type: 'integer' }, name: { type: 'string' } },
+			additionalProperties: false,
+		},
 		async run({ set_id, name }) {
 			if (set_id === undefined) {
 				if (name === undefined) throw new Error('Give set_id to use a set, or name to make one.');
@@ -270,7 +327,12 @@ export function defineProbeOperations({ session, engine, update }) {
 	defineOperation({
 		name: 'delete_probe_set',
 		description: 'Delete a probe set and its probes.',
-		parameters: { type: 'object', properties: { set_id: { type: 'integer' } }, required: ['set_id'], additionalProperties: false },
+		parameters: {
+			type: 'object',
+			properties: { set_id: { type: 'integer' } },
+			required: ['set_id'],
+			additionalProperties: false,
+		},
 		run({ set_id }) {
 			const set = setById(set_id);
 			session.probeSets.splice(session.probeSets.indexOf(set), 1);
@@ -283,10 +345,18 @@ export function defineProbeOperations({ session, engine, update }) {
 	defineOperation({
 		name: 'remove_probe',
 		description: 'Remove one probe from a set by its number. The others keep their numbers.',
-		parameters: { type: 'object', properties: { number: { type: 'integer' }, set_id: setId }, required: ['number'], additionalProperties: false },
+		parameters: {
+			type: 'object',
+			properties: { number: { type: 'integer' }, set_id: setId },
+			required: ['number'],
+			additionalProperties: false,
+		},
 		run({ number, set_id }) {
 			const set = chosen(set_id);
-			if (!set.probes.some((p) => p.n === number)) throw new Error(`Set ${set.id} (${set.name}) has no probe ${number}. Its probes: ${set.probes.map((p) => p.n).join(', ') || 'none'}.`);
+			if (!set.probes.some((p) => p.n === number))
+				throw new Error(
+					`Set ${set.id} (${set.name}) has no probe ${number}. Its probes: ${set.probes.map((p) => p.n).join(', ') || 'none'}.`,
+				);
 			set.probes = set.probes.filter((p) => p.n !== number);
 			update('dock', 'layout', 'markers');
 			return { removed: number };
@@ -311,7 +381,10 @@ export function defineProbeOperations({ session, engine, update }) {
 		label: 'Probes',
 		format: 'CSV',
 		title: 'The probe table of the set in use: number, file cell, position, Cp and σ',
-		unavailable: () => (session.probeSets.find((x) => x.id === view.probeSet)?.probes.length ? null : 'There are no probes in use. Click the car to place one.'),
+		unavailable: () =>
+			session.probeSets.find((x) => x.id === view.probeSet)?.probes.length
+				? null
+				: 'There are no probes in use. Click the car to place one.',
 		make: async (c) => {
 			const set = chosen();
 			return new Blob([probesCsv(c, set, await readSet(engine, c, set))], { type: 'text/csv' });
@@ -334,9 +407,17 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	const symbol = h('span', { class: 'tip-symbol' });
 	const value = h('b', { class: 'tip-value' });
 	const coordinates = ['x', 'y', 'z'].map(() => h('span', { class: 'tip-number' }));
-	const tip = h('div', { class: 'probe-tip', role: 'status' },
+	const tip = h(
+		'div',
+		{ class: 'probe-tip', role: 'status' },
 		h('div', { class: 'tip-head' }, symbol, value),
-		h('div', { class: 'tip-at' }, ['x', 'y', 'z'].map((axis, k) => h('span', {}, axis, ' ', coordinates[k])), h('span', { class: 'tip-unit' }, 'm')));
+		h(
+			'div',
+			{ class: 'tip-at' },
+			['x', 'y', 'z'].map((axis, k) => h('span', {}, axis, ' ', coordinates[k])),
+			h('span', { class: 'tip-unit' }, 'm'),
+		),
+	);
 	const preview = h('div', { class: 'probe-preview', hidden: true }, outline, marker, tip);
 	const markers = h('div', { class: 'probe-markers' });
 	host.append(markers, preview);
@@ -396,7 +477,9 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 			pending = null;
 			const site = await siteAt(c, next.hit);
 			if (c !== active()) break;
-			current = site ? { c, site, pane: next.hit.pane, face: next.hit.face, clientX: next.clientX, clientY: next.clientY } : null;
+			current = site
+				? { c, site, pane: next.hit.pane, face: next.hit.face, clientX: next.clientX, clientY: next.clientY }
+				: null;
 			draw();
 		}
 		looking = false;
@@ -471,16 +554,62 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	function table(c) {
 		const set = inUse();
 		// Placing a probe is a click or a tap on the car, which no control in the tab shows.
-		if (!set || set.probes.length === 0) return h('div', { class: 'probes' }, failure.el, h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`));
+		if (!set || set.probes.length === 0)
+			return h(
+				'div',
+				{ class: 'probes' },
+				failure.el,
+				h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`),
+			);
 		const sites = known(c, set);
-		return h('div', { class: 'probes' },
+		return h(
+			'div',
+			{ class: 'probes' },
 			failure.el,
-			h('table', { class: 'data-table probe-table' },
-				h('thead', {}, h('tr', {}, h('th', {}, '#'), COLUMNS.map((col) => h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null)), h('th', {}))),
-				h('tbody', {}, set.probes.map((p, i) => h('tr', { 'data-probe': p.n },
-					h('td', { class: 'probe-n' }, p.n),
-					COLUMNS.map((col) => h('td', { class: 'num' }, sites[i] ? signed(col.read(sites[i]), 3) : '')),
-					h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove probe ${p.n}`, onclick: () => act('remove_probe', { number: p.n }) }, icon('close'))))))));
+			h(
+				'table',
+				{ class: 'data-table probe-table' },
+				h(
+					'thead',
+					{},
+					h(
+						'tr',
+						{},
+						h('th', {}, '#'),
+						COLUMNS.map((col) =>
+							h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null),
+						),
+						h('th', {}),
+					),
+				),
+				h(
+					'tbody',
+					{},
+					set.probes.map((p, i) =>
+						h(
+							'tr',
+							{ 'data-probe': p.n },
+							h('td', { class: 'probe-n' }, p.n),
+							COLUMNS.map((col) => h('td', { class: 'num' }, sites[i] ? signed(col.read(sites[i]), 3) : '')),
+							h(
+								'td',
+								{},
+								h(
+									'button',
+									{
+										type: 'button',
+										class: 'icon-button',
+										title: `Remove probe ${p.n}`,
+										onclick: () => act('remove_probe', { number: p.n }),
+									},
+									icon('close'),
+								),
+							),
+						),
+					),
+				),
+			),
+		);
 	}
 
 	// ---- the dock's header: the set in use, stations along the section, and clear; the table is exported from Export ----
@@ -490,7 +619,12 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	const setList = h('div', { class: 'menu-list', role: 'menu' });
 	const setButton = h('button', { type: 'button', class: 'tool probe-set', title: 'The probe set in use' });
 	const sets = menu(setButton, setList);
-	const naming = h('input', { class: 'number probe-set-name', type: 'text', 'aria-label': 'Set name', spellcheck: 'false' });
+	const naming = h('input', {
+		class: 'number probe-set-name',
+		type: 'text',
+		'aria-label': 'Set name',
+		spellcheck: 'false',
+	});
 	naming.addEventListener('keydown', (e) => {
 		if (e.key === 'Escape') return renderSets();
 		if (e.key !== 'Enter') return;
@@ -500,41 +634,101 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	});
 	function renderSets(renaming = false) {
 		const set = inUse();
-		const item = (label, onclick, extra = {}) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick, ...extra }, label);
-		put(setList,
-			...session.probeSets.map((x) => item([x.name, h('span', { class: 'menu-count' }, String(x.probes.length))], () => { sets.close(); act('use_probe_set', { set_id: x.id }); }, { role: 'menuitemradio', 'aria-checked': String(x === set) })),
+		const item = (label, onclick, extra = {}) =>
+			h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick, ...extra }, label);
+		put(
+			setList,
+			...session.probeSets.map((x) =>
+				item(
+					[x.name, h('span', { class: 'menu-count' }, String(x.probes.length))],
+					() => {
+						sets.close();
+						act('use_probe_set', { set_id: x.id });
+					},
+					{ role: 'menuitemradio', 'aria-checked': String(x === set) },
+				),
+			),
 			session.probeSets.length ? h('hr', { class: 'menu-rule' }) : null,
-			item('New set', () => { sets.close(); act('use_probe_set', { name: freeSetName(session.probeSets) }); }),
-			set && !renaming ? item('Rename', () => { renderSets(true); naming.value = set.name; naming.focus(); naming.select(); }) : null,
+			item('New set', () => {
+				sets.close();
+				act('use_probe_set', { name: freeSetName(session.probeSets) });
+			}),
+			set && !renaming
+				? item('Rename', () => {
+						renderSets(true);
+						naming.value = set.name;
+						naming.focus();
+						naming.select();
+					})
+				: null,
 			set && renaming ? h('div', { class: 'menu-field' }, naming) : null,
-			set ? item(`Delete ${set.name}`, () => { sets.close(); act('delete_probe_set', { set_id: set.id }); }, { class: 'menu-item danger' }) : null);
+			set
+				? item(
+						`Delete ${set.name}`,
+						() => {
+							sets.close();
+							act('delete_probe_set', { set_id: set.id });
+						},
+						{ class: 'menu-item danger' },
+					)
+				: null,
+		);
 	}
 	setButton.addEventListener('click', () => renderSets());
 
-	const stationCount = h('input', { class: 'number', type: 'text', inputmode: 'numeric', value: String(STATIONS), 'aria-label': 'Stations' });
-	let branch = 'upper';
-	const branches = segmented('Branch', [['upper', ''], ['lower', '']], (chosen) => {
-		branch = chosen;
-		branches.show(branch);
+	const stationCount = h('input', {
+		class: 'number',
+		type: 'text',
+		inputmode: 'numeric',
+		value: String(STATIONS),
+		'aria-label': 'Stations',
 	});
+	let branch = 'upper';
+	const branches = segmented(
+		'Branch',
+		[
+			['upper', ''],
+			['lower', ''],
+		],
+		(chosen) => {
+			branch = chosen;
+			branches.show(branch);
+		},
+	);
 	branches.show(branch);
-	const stationsForm = h('form', { class: 'stations', onsubmit: (e) => {
-		e.preventDefault();
-		const count = Number(stationCount.value);
-		stations.close();
-		act('place_probes_along_section', { count, branch });
-	} },
+	const stationsForm = h(
+		'form',
+		{
+			class: 'stations',
+			onsubmit: (e) => {
+				e.preventDefault();
+				const count = Number(stationCount.value);
+				stations.close();
+				act('place_probes_along_section', { count, branch });
+			},
+		},
 		h('label', { class: 'stations-row' }, h('span', { class: 'control-label' }, 'Stations'), stationCount),
 		branches.el,
-		h('button', { type: 'submit', class: 'button' }, 'Place'));
-	const stationsButton = h('button', { type: 'button', class: 'tool', title: 'Probes at stations evenly spaced along the section' }, icon('section'), 'Along section');
+		h('button', { type: 'submit', class: 'button' }, 'Place'),
+	);
+	const stationsButton = h(
+		'button',
+		{ type: 'button', class: 'tool', title: 'Probes at stations evenly spaced along the section' },
+		icon('section'),
+		'Along section',
+	);
 	const stations = menu(stationsButton, stationsForm);
 	stationsButton.addEventListener('click', () => {
 		const names = CUT_AXES[view.section.axis].branches;
 		branches.buttons.forEach((b, k) => (b.textContent = names[k]));
 	});
 
-	const clear = h('button', { type: 'button', class: 'tool', onclick: () => act('clear_probes', {}) }, icon('close'), 'Clear');
+	const clear = h(
+		'button',
+		{ type: 'button', class: 'tool', onclick: () => act('clear_probes', {}) },
+		icon('close'),
+		'Clear',
+	);
 	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, stations.el, clear);
 
 	/** The dock's header for the probes, brought up to date: the set in use and what can be done with it. */
@@ -542,7 +736,9 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 		const set = inUse();
 		setButton.replaceChildren(set ? set.name : 'No set', icon('chevron'));
 		stationsButton.disabled = !view.section.on;
-		stationsButton.title = view.section.on ? 'Probes at stations evenly spaced along the section' : 'Turn the section on to place probes along it';
+		stationsButton.title = view.section.on
+			? 'Probes at stations evenly spaced along the section'
+			: 'Turn the section on to place probes along it';
 		clear.disabled = !set || set.probes.length === 0;
 		return actionsEl;
 	}

@@ -35,7 +35,12 @@ const QUANTITY = {
 	cp: { label: 'Cp', key: 'cp', invert: true, read: () => (q) => q.cp },
 	drag: { label: '−Cp nₓ', key: 'drag', invert: false, read: () => (q) => -q.cp * q.nx },
 	sigma: { label: 'σ', key: 'sigma', invert: false, read: () => (q) => q.sigma },
-	cfd: { label: 'Cp', key: 'cp_cfd', invert: true, read: (c) => (c.result.mesh.cfd ? (q) => interpolated(c.result.mesh.cfd, q) : null) },
+	cfd: {
+		label: 'Cp',
+		key: 'cp_cfd',
+		invert: true,
+		read: (c) => (c.result.mesh.cfd ? (q) => interpolated(c.result.mesh.cfd, q) : null),
+	},
 };
 
 /**
@@ -92,8 +97,11 @@ export function sectionStations(c, plane, count, branch) {
 	const paths = sectionRows(c, plane, 'cp')[branch];
 	const along = paths.flat().map((r) => r.along);
 	if (along.length === 0) return [];
-	const from = Math.min(...along), to = Math.max(...along);
-	return Array.from({ length: count }, (_, i) => pointAlong(paths, from + ((i + 0.5) * (to - from)) / count)).filter(Boolean);
+	const from = Math.min(...along),
+		to = Math.max(...along);
+	return Array.from({ length: count }, (_, i) => pointAlong(paths, from + ((i + 0.5) * (to - from)) / count)).filter(
+		Boolean,
+	);
 }
 
 /** A value range rounded outward to tidy ticks. */
@@ -111,7 +119,8 @@ function valueRange(lines) {
 	const values = Float64Array.from(lines.flatMap((line) => line.points.map((point) => point[1]))).sort();
 	if (values.length === 0) return [-1, 1];
 	const at = (q) => values[Math.round(q * (values.length - 1))];
-	const lo = Math.min(0, at(0.01)), hi = Math.max(0, at(0.99));
+	const lo = Math.min(0, at(0.01)),
+		hi = Math.max(0, at(0.99));
 	const pad = 0.08 * (hi - lo || 1);
 	return tidy(lo - pad, hi + pad);
 }
@@ -129,8 +138,23 @@ function plotSeries(view, shown, cases) {
 	const own = { case: shown, field, source: shown.name, ...OWN, label: null };
 	if (field !== 'cp') return [own];
 	const pair = counterpart(view, cases, shown);
-	if (pair) return [{ ...own, label: pair.mine }, { case: shown, field: COMPARED, against: true, source: pair.other?.name ?? pair.label, ...AGAINST, label: pair.label }];
-	if (shown.result.mesh.cfd) return [{ ...own, label: 'Predicted' }, { case: shown, field: 'cfd', against: true, source: `${shown.name} CFD`, ...AGAINST, label: 'CFD' }];
+	if (pair)
+		return [
+			{ ...own, label: pair.mine },
+			{
+				case: shown,
+				field: COMPARED,
+				against: true,
+				source: pair.other?.name ?? pair.label,
+				...AGAINST,
+				label: pair.label,
+			},
+		];
+	if (shown.result.mesh.cfd)
+		return [
+			{ ...own, label: 'Predicted' },
+			{ case: shown, field: 'cfd', against: true, source: `${shown.name} CFD`, ...AGAINST, label: 'CFD' },
+		];
 	return [own];
 }
 
@@ -140,9 +164,12 @@ function sectionCsv(view, shown, cases) {
 	const plane = `${AXIS_NAMES[view.section.axis]}=${view.section.offset}`;
 	const rows = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', quantityOf(plottedField(view.field, shown)).key]];
 	for (const series of plotSeries(view, shown, cases)) {
-		sectionRows(series.case, view.section, series.field).forEach((paths, branch) => paths.forEach((path) => {
-			for (const r of path) rows.push([series.source, plane, names[branch], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)]);
-		}));
+		sectionRows(series.case, view.section, series.field).forEach((paths, branch) =>
+			paths.forEach((path) => {
+				for (const r of path)
+					rows.push([series.source, plane, names[branch], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)]);
+			}),
+		);
 	}
 	return csv(rows);
 }
@@ -154,12 +181,18 @@ export function defineSectionOperations({ session, update }) {
 
 	defineOperation({
 		name: 'set_section',
-		description: 'Place the section: a plane normal to x, y or z at a position in metres, its line drawn on the car and the shown field plotted along the outer surface it cuts (Cp with negative values up). Beside the predicted Cp the plot draws the car or CFD it is compared with (set_comparison), or else the CFD when the file carries CFD. y = 0 is the car\'s centreline. Turning it on brings its plot up in the dock. Every car is seen through the same section.',
+		description:
+			"Place the section: a plane normal to x, y or z at a position in metres, its line drawn on the car and the shown field plotted along the outer surface it cuts (Cp with negative values up). Beside the predicted Cp the plot draws the car or CFD it is compared with (set_comparison), or else the CFD when the file carries CFD. y = 0 is the car's centreline. Turning it on brings its plot up in the dock. Every car is seen through the same section.",
 		parameters: {
 			type: 'object',
 			properties: {
 				on: { type: 'boolean', description: 'Whether the section is drawn and plotted.' },
-				axis: { type: 'string', enum: AXIS_NAMES, description: 'Axis the plane is normal to. Changing it without a position puts the plane at the car\'s middle along that axis (y = 0 for y).' },
+				axis: {
+					type: 'string',
+					enum: AXIS_NAMES,
+					description:
+						"Axis the plane is normal to. Changing it without a position puts the plane at the car's middle along that axis (y = 0 for y).",
+				},
 				position_m: { type: 'number', description: 'Where the plane crosses its axis, in metres.' },
 			},
 			additionalProperties: false,
@@ -171,7 +204,12 @@ export function defineSectionOperations({ session, update }) {
 				const index = AXIS_NAMES.indexOf(oneOf('axis', axis, AXIS_NAMES));
 				const b = c.result.geometry.bounds;
 				s.axis = index;
-				s.offset = position_m === undefined ? (index === 1 ? 0 : Number(((b[2 * index] + b[2 * index + 1]) / 2).toFixed(3))) : finite('position_m', position_m);
+				s.offset =
+					position_m === undefined
+						? index === 1
+							? 0
+							: Number(((b[2 * index] + b[2 * index + 1]) / 2).toFixed(3))
+						: finite('position_m', position_m);
 			} else if (position_m !== undefined) {
 				s.offset = finite('position_m', position_m);
 			}
@@ -192,19 +230,31 @@ export function defineSectionOperations({ session, update }) {
 
 	defineOperation({
 		name: 'read_section',
-		description: 'Numbers along the section on a case. For each branch of the outer surface it cuts (Upper and Lower, or y > 0 and y < 0 for a z section), the range it spans along the plot axis and the lowest and highest value of a field with where they are. Optionally the field at given positions along the plot axis (x for y and z sections, y for x sections). Values interpolate linearly along the working mesh\'s edges, as drawn.',
+		description:
+			"Numbers along the section on a case. For each branch of the outer surface it cuts (Upper and Lower, or y > 0 and y < 0 for a z section), the range it spans along the plot axis and the lowest and highest value of a field with where they are. Optionally the field at given positions along the plot axis (x for y and z sections, y for x sections). Values interpolate linearly along the working mesh's edges, as drawn.",
 		parameters: {
 			type: 'object',
 			properties: {
 				case_id: { type: 'integer', description: 'Default the case on screen.' },
-				field: { type: 'string', description: 'cp, drag (−Cp·nₓ), sigma, cfd (the CFD\'s Cp, on a file that carries CFD), or a field added to the case, such as a comparison\'s compared and difference; default cp.' },
-				at_m: { type: 'array', items: { type: 'number' }, description: 'Positions along the plot axis, in metres, to read the field at.' },
+				field: {
+					type: 'string',
+					description:
+						"cp, drag (−Cp·nₓ), sigma, cfd (the CFD's Cp, on a file that carries CFD), or a field added to the case, such as a comparison's compared and difference; default cp.",
+				},
+				at_m: {
+					type: 'array',
+					items: { type: 'number' },
+					description: 'Positions along the plot axis, in metres, to read the field at.',
+				},
 			},
 			additionalProperties: false,
 		},
 		run({ case_id, field = 'cp', at_m = [] }) {
 			const c = session.withResult(case_id);
-			if (!readable(field, c)) throw new Error(`Case ${c.id} has no field ${JSON.stringify(field)}. It has ${[...Object.keys(QUANTITY), ...Object.keys(FIELDS).filter((key) => !QUANTITY[key])].filter((key) => readable(key, c)).join(', ')}.`);
+			if (!readable(field, c))
+				throw new Error(
+					`Case ${c.id} has no field ${JSON.stringify(field)}. It has ${[...Object.keys(QUANTITY), ...Object.keys(FIELDS).filter((key) => !QUANTITY[key])].filter((key) => readable(key, c)).join(', ')}.`,
+				);
 			at_m.forEach((x, i) => finite(`at_m[${i}]`, x));
 			if (!view.section.on) throw new Error('The section is off. Turn it on with set_section first.');
 			const plane = view.section;
@@ -227,7 +277,14 @@ export function defineSectionOperations({ session, update }) {
 						to_m: round(Math.max(...rows.map((r) => r.along)), 4),
 						min: { value: round(low.value), at_m: point(low) },
 						max: { value: round(high.value), at_m: point(high) },
-						...(at_m.length ? { at: at_m.map((x) => ({ position_m: x, value: valueOn(paths, x) === null ? null : round(valueOn(paths, x)) })) } : {}),
+						...(at_m.length
+							? {
+									at: at_m.map((x) => ({
+										position_m: x,
+										value: valueOn(paths, x) === null ? null : round(valueOn(paths, x)),
+									})),
+								}
+							: {}),
 					};
 				}),
 			};
@@ -238,7 +295,7 @@ export function defineSectionOperations({ session, update }) {
 		name: 'section',
 		label: 'Section',
 		format: 'CSV',
-		title: 'The section plot\'s points: what each curve shows, the section, branch, x, y, z and the value',
+		title: "The section plot's points: what each curve shows, the section, branch, x, y, z and the value",
 		unavailable: () => (view.section.on ? null : 'The section is off. Turn it on to export its plot.'),
 		make: async (c) => new Blob([sectionCsv(view, c, session.cases)], { type: 'text/csv' }),
 		fileName: (c) => `${baseName(c)}-section.csv`,
@@ -261,15 +318,20 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	/** Distance in pixels from a client point to the cut line on screen, and the cut point nearest to it. */
 	function nearestOnScreen(clientX, clientY) {
 		const rect = viewport.getBoundingClientRect();
-		const x = clientX - rect.left, y = clientY - rect.top;
+		const x = clientX - rect.left,
+			y = clientY - rect.top;
 		let best = { d: Infinity, point: null };
 		for (const line of sectionOf(active(), view.section).lines) {
 			let previous = null;
 			for (const q of line.points) {
 				const s = viewer.project(q.p);
 				if (previous && s.visible) {
-					const dx = s.x - previous.x, dy = s.y - previous.y;
-					const t = Math.max(0, Math.min(1, ((x - previous.x) * dx + (y - previous.y) * dy) / (dx * dx + dy * dy || 1)));
+					const dx = s.x - previous.x,
+						dy = s.y - previous.y;
+					const t = Math.max(
+						0,
+						Math.min(1, ((x - previous.x) * dx + (y - previous.y) * dy) / (dx * dx + dy * dy || 1)),
+					);
 					const d = Math.hypot(previous.x + t * dx - x, previous.y + t * dy - y);
 					if (d < best.d) best = { d, point: q.p };
 				}
@@ -289,34 +351,38 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	}
 
 	let dragging = false;
-	viewport.addEventListener('pointerdown', (e) => {
-		if (e.button !== 0 || !enabled()) return;
-		const near = nearestOnScreen(e.clientX, e.clientY);
-		if (near.d > (GRAB_PX[e.pointerType] ?? GRAB_PX.mouse)) return;
-		const n = screenNormal(near.point);
-		const squared = n.x * n.x + n.y * n.y;
-		if (squared < MIN_PLANE_PX_PER_M ** 2) return;
-		e.stopPropagation();
-		e.preventDefault();
-		dragging = true;
-		viewport.setPointerCapture(e.pointerId);
-		const start = { x: e.clientX, y: e.clientY, offset: view.section.offset };
-		viewer.setSection({ ...view.section, plane: true });
-		const move = (ev) => {
-			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / squared;
-			run('set_section', { position_m: Number(offset.toFixed(3)) });
-		};
-		const end = () => {
-			dragging = false;
-			viewport.removeEventListener('pointermove', move);
-			viewport.removeEventListener('pointerup', end);
-			viewport.removeEventListener('pointercancel', end);
-			run('set_section', {});
-		};
-		viewport.addEventListener('pointermove', move);
-		viewport.addEventListener('pointerup', end);
-		viewport.addEventListener('pointercancel', end);
-	}, { capture: true });
+	viewport.addEventListener(
+		'pointerdown',
+		(e) => {
+			if (e.button !== 0 || !enabled()) return;
+			const near = nearestOnScreen(e.clientX, e.clientY);
+			if (near.d > (GRAB_PX[e.pointerType] ?? GRAB_PX.mouse)) return;
+			const n = screenNormal(near.point);
+			const squared = n.x * n.x + n.y * n.y;
+			if (squared < MIN_PLANE_PX_PER_M ** 2) return;
+			e.stopPropagation();
+			e.preventDefault();
+			dragging = true;
+			viewport.setPointerCapture(e.pointerId);
+			const start = { x: e.clientX, y: e.clientY, offset: view.section.offset };
+			viewer.setSection({ ...view.section, plane: true });
+			const move = (ev) => {
+				const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / squared;
+				run('set_section', { position_m: Number(offset.toFixed(3)) });
+			};
+			const end = () => {
+				dragging = false;
+				viewport.removeEventListener('pointermove', move);
+				viewport.removeEventListener('pointerup', end);
+				viewport.removeEventListener('pointercancel', end);
+				run('set_section', {});
+			};
+			viewport.addEventListener('pointermove', move);
+			viewport.addEventListener('pointerup', end);
+			viewport.addEventListener('pointercancel', end);
+		},
+		{ capture: true },
+	);
 
 	viewport.addEventListener('pointermove', (e) => {
 		if (dragging || e.buttons) return;
@@ -359,11 +425,22 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const { along, branches: names } = CUT_AXES[view.section.axis];
 		const series = seriesNow().map((one) => ({ ...one, rows: sectionRows(one.case, view.section, one.field) }));
 		// What the car is set against is drawn first, under its own curve.
-		const lines = [...series].reverse().flatMap((one) => one.rows.flatMap((paths, b) => paths.map((path) => ({ colour: one.colour, width: one.width, opacity: one.opacity, dashed: b === 1, points: path.map((r) => [r.along, r.value]) }))));
+		const lines = [...series].reverse().flatMap((one) =>
+			one.rows.flatMap((paths, b) =>
+				paths.map((path) => ({
+					colour: one.colour,
+					width: one.width,
+					opacity: one.opacity,
+					dashed: b === 1,
+					points: path.map((r) => [r.along, r.value]),
+				})),
+			),
+		);
 		const bounds = c.result.geometry.bounds;
 		const q = quantityOf(series[0].field);
 		const frame = drawPlot(svg, {
-			width, height,
+			width,
+			height,
 			x: { domain: [bounds[2 * along] - 0.05, bounds[2 * along + 1] + 0.05], label: `${AXIS_NAMES[along]}, m` },
 			// The value axis says which way it runs where it is turned over, as pressure is.
 			y: { domain: valueRange(lines), label: q.invert ? `${q.label}, negative up` : q.label, invert: q.invert },
@@ -402,14 +479,20 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 				values.forEach((value) => value !== null && dots.push({ value, colour: one.colour }));
 				if (values.every((v) => v === null)) continue;
 				// One curve names its branches; two name what each shows, upper then lower.
-				const text = plot.series.length === 1
-					? values.map((v, b) => (v === null ? null : `${plot.names[b]} ${signed(v, 3)}`)).filter(Boolean).join('  ')
-					: `${one.label} ${values.map((v) => (v === null ? '–' : signed(v, 3))).join(' / ')}`;
+				const text =
+					plot.series.length === 1
+						? values
+								.map((v, b) => (v === null ? null : `${plot.names[b]} ${signed(v, 3)}`))
+								.filter(Boolean)
+								.join('  ')
+						: `${one.label} ${values.map((v) => (v === null ? '–' : signed(v, 3))).join(' / ')}`;
 				parts.push(h('b', { style: `color: ${one.colour}` }, text));
 			}
 		}
 		drawCursor(plot.frame, dots.length ? at : null, dots);
-		plot.readout.replaceChildren(...(dots.length ? [h('span', {}, `${AXIS_NAMES[plot.along]} ${signed(at, 3)} m`), ...parts] : []));
+		plot.readout.replaceChildren(
+			...(dots.length ? [h('span', {}, `${AXIS_NAMES[plot.along]} ${signed(at, 3)} m`), ...parts] : []),
+		);
 	}
 
 	/** The cursor follows the car: hovering the surface moves it to the hovered point's position along the plot. */
@@ -420,7 +503,13 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 
 	// The header controls are built once and updated in place: replacing them while the slider is held would end
 	// the drag after its first step.
-	const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', 'aria-label': 'Position, m', spellcheck: 'false' });
+	const position = h('input', {
+		class: 'number',
+		type: 'text',
+		inputmode: 'decimal',
+		'aria-label': 'Position, m',
+		spellcheck: 'false',
+	});
 	position.addEventListener('change', () => {
 		const value = parseNumber(position.value);
 		if (value !== null) run('set_section', { position_m: value });
@@ -429,12 +518,20 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	position.addEventListener('keydown', (e) => e.key === 'Enter' && position.blur());
 	const slider = h('input', { type: 'range', class: 'slider', step: 0.001, 'aria-label': 'Position' });
 	slider.addEventListener('input', () => run('set_section', { position_m: Number(slider.value) }));
-	const normals = segmented('Normal', AXIS_NAMES.map((name, axis) => [axis, name]), (axis) => run('set_section', { axis: AXIS_NAMES[axis] }));
+	const normals = segmented(
+		'Normal',
+		AXIS_NAMES.map((name, axis) => [axis, name]),
+		(axis) => run('set_section', { axis: AXIS_NAMES[axis] }),
+	);
 	const axisLabel = h('span', { class: 'control-label' });
-	const controlsEl = h('div', { class: 'cut-controls' },
-		h('span', { class: 'control-label' }, 'Normal'), normals.el,
+	const controlsEl = h(
+		'div',
+		{ class: 'cut-controls' },
+		h('span', { class: 'control-label' }, 'Normal'),
+		normals.el,
 		h('label', { class: 'position' }, axisLabel, position, h('span', { class: 'unit' }, 'm')),
-		slider);
+		slider,
+	);
 
 	/** Header controls for the dock, brought up to date with the section and the car: normal axis and position. */
 	function controls(c) {
@@ -467,7 +564,14 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 
 	/** The key as the dock shows it. */
 	function key() {
-		return keyItems().map(({ label, colour, width, opacity, dashed }) => h('span', { class: 'key-item' }, h('i', { style: `border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${colour}; opacity: ${opacity}` }), label));
+		return keyItems().map(({ label, colour, width, opacity, dashed }) =>
+			h(
+				'span',
+				{ class: 'key-item' },
+				h('i', { style: `border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${colour}; opacity: ${opacity}` }),
+				label,
+			),
+		);
 	}
 
 	/** The plot as a report shows it: drawn into a new SVG of the given size, with its key and the section's plane. */
@@ -483,7 +587,10 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 /** Value at a position on the first path of a branch that spans it. */
 function valueOn(paths, at) {
 	for (const path of paths) {
-		const value = valueAlong(path.map((r) => [r.along, r.value]), at);
+		const value = valueAlong(
+			path.map((r) => [r.along, r.value]),
+			at,
+		);
 		if (value !== null) return value;
 	}
 	return null;

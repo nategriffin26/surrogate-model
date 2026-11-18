@@ -47,7 +47,9 @@ export function measure(columns, { yCenter, bounds }, { position, features }) {
 	});
 	const empty = (column) => {
 		const { above, below } = reads.get(column.station);
-		return Math.abs(features[above] + features[below]) < SAME && Math.abs(position[2] + features[above] - ground) < SAME;
+		return (
+			Math.abs(features[above] + features[below]) < SAME && Math.abs(position[2] + features[above] - ground) < SAME
+		);
 	};
 	const marks = [];
 
@@ -61,9 +63,23 @@ export function measure(columns, { yCenter, bounds }, { position, features }) {
 		const key = `${column.kind}:${at.join()}`;
 		const slice = column.kind === 'slice';
 		const hollow = slice && (column.read === 'outboard' ? Math.abs(features[i] + Math.abs(sy)) < SAME : empty(column));
-		if (!readings.has(key)) readings.set(key, { type: 'reading', layer: column.kind, at, hollow, ...(slice ? { station: column.station } : {}) });
+		if (!readings.has(key))
+			readings.set(key, {
+				type: 'reading',
+				layer: column.kind,
+				at,
+				hollow,
+				...(slice ? { station: column.station } : {}),
+			});
 		if (slice) {
-			marks.push({ type: 'hairline', layer: 'slice', station: column.station, from: place, to: at, ground: hollow && column.read !== 'outboard' });
+			marks.push({
+				type: 'hairline',
+				layer: 'slice',
+				station: column.station,
+				from: place,
+				to: at,
+				ground: hollow && column.read !== 'outboard',
+			});
 		} else if (!column.offset.some(Boolean)) {
 			marks.push({ type: 'guide', layer: column.kind, from: position, to: at });
 		}
@@ -72,14 +88,26 @@ export function measure(columns, { yCenter, bounds }, { position, features }) {
 	if (reads.size) {
 		const stations = [...reads.keys()];
 		const along = (dx) => [position[0] + dx, position[1], position[2]];
-		marks.push({ type: 'stations', layer: 'slice', from: along(Math.min(...stations)), to: along(Math.max(...stations)) });
+		marks.push({
+			type: 'stations',
+			layer: 'slice',
+			from: along(Math.min(...stations)),
+			to: along(Math.max(...stations)),
+		});
 	}
 
 	// Nearby surface: per size, the mean normal of the surface about the point, its first three inputs.
 	const sizes = new Map();
 	columns.forEach((column, i) => {
 		if (column.kind !== 'surface') return;
-		if (!sizes.has(column.scale)) sizes.set(column.scale, { type: 'neighbourhood', layer: 'surface', at: position, scale: column.scale, normal: [] });
+		if (!sizes.has(column.scale))
+			sizes.set(column.scale, {
+				type: 'neighbourhood',
+				layer: 'surface',
+				at: position,
+				scale: column.scale,
+				normal: [],
+			});
 		const size = sizes.get(column.scale);
 		if (column.part === 'whole' && size.normal.length < 3) size.normal.push(features[i]);
 	});

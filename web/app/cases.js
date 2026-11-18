@@ -25,7 +25,8 @@ export function caseSummary(c, active) {
 export const sampled = (c) => c.kind === 'file' && c.result.form === 'full' && !c.exact;
 
 /** What whole-car totals are summed over, as operations report it. */
-export const totalsOver = (fromSample) => (fromSample ? 'an even area sample of the polygons; every polygon replaces it when ready' : 'every polygon');
+export const totalsOver = (fromSample) =>
+	fromSample ? 'an even area sample of the polygons; every polygon replaces it when ready' : 'every polygon';
 
 /** The dimensions of a Result's car outside the training cars' range. */
 export const outsideTraining = (r) => r.coverage.dimensions.filter((d) => d.value < d.trainMin || d.value > d.trainMax);
@@ -53,12 +54,24 @@ export function resultSummary(r, fromSample) {
 		cx_by_network: r.forces.cdPModels,
 		cp_min: extreme(t.cpMin),
 		cp_max: extreme(t.cpMax),
-		outside_training: outsideTraining(r).map((d) => ({ dimension: d.name, value_m: d.value, training_min_m: d.trainMin, training_max_m: d.trainMax })),
-		reference: r.reference ? {
-			file: r.reference.file, array: r.reference.array, mapping: r.reference.mapping,
-			mean_cp: r.referenceTotals.meanCp, cx: r.referenceTotals.coefficients[0], cy: r.referenceTotals.coefficients[1], cz: r.referenceTotals.coefficients[2],
-			r2: r.accuracy?.r2 ?? null,
-		} : null,
+		outside_training: outsideTraining(r).map((d) => ({
+			dimension: d.name,
+			value_m: d.value,
+			training_min_m: d.trainMin,
+			training_max_m: d.trainMax,
+		})),
+		reference: r.reference
+			? {
+					file: r.reference.file,
+					array: r.reference.array,
+					mapping: r.reference.mapping,
+					mean_cp: r.referenceTotals.meanCp,
+					cx: r.referenceTotals.coefficients[0],
+					cy: r.referenceTotals.coefficients[1],
+					cz: r.referenceTotals.coefficients[2],
+					r2: r.accuracy?.r2 ?? null,
+				}
+			: null,
 	};
 }
 
@@ -66,7 +79,8 @@ export function resultSummary(r, fromSample) {
 export function defineCaseOperations({ session }) {
 	defineOperation({
 		name: 'list_cases',
-		description: 'The open cases, one per tab: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed; variant: a changed copy of an open car, predicted on its working mesh), status (queued, analysing, loading, ready or failed) and whether it is on screen. Once ready, the numbers the result card shows: polygon count, size, reference (frontal) area, and summed over the polygons named in totals_over the surface area, area-weighted mean Cp, the pressure force coefficients cx (pressure drag), cy and cz on the reference area (no wall shear), cx from each network, the lowest and highest Cp with the centre and outward normal of their polygon, the dimensions outside the training cars\' range, and the reference field when there is one (its file, array, how it was mapped, its own mean Cp, cx, cy and cz summed over every polygon, and the area-weighted r2 against it). Field data of a case is reached by its case_id.',
+		description:
+			"The open cases, one per tab: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed; variant: a changed copy of an open car, predicted on its working mesh), status (queued, analysing, loading, ready or failed) and whether it is on screen. Once ready, the numbers the result card shows: polygon count, size, reference (frontal) area, and summed over the polygons named in totals_over the surface area, area-weighted mean Cp, the pressure force coefficients cx (pressure drag), cy and cz on the reference area (no wall shear), cx from each network, the lowest and highest Cp with the centre and outward normal of their polygon, the dimensions outside the training cars' range, and the reference field when there is one (its file, array, how it was mapped, its own mean Cp, cx, cy and cz summed over every polygon, and the area-weighted r2 against it). Field data of a case is reached by its case_id.",
 		parameters: { type: 'object', properties: {}, additionalProperties: false },
 		run: () => ({ cases: session.cases.map((c) => caseSummary(c, session.active)) }),
 	});
@@ -81,7 +95,15 @@ export function defineCaseOperations({ session }) {
 			additionalProperties: false,
 		},
 		async run({ example }) {
-			const { id, label } = EXAMPLES.find((e) => e.id === oneOf('example', example, EXAMPLES.map((e) => e.id)));
+			const { id, label } = EXAMPLES.find(
+				(e) =>
+					e.id ===
+					oneOf(
+						'example',
+						example,
+						EXAMPLES.map((e) => e.id),
+					),
+			);
 			const opening = session.openExample(id, label);
 			const c = session.active;
 			await opening;
@@ -92,7 +114,8 @@ export function defineCaseOperations({ session }) {
 
 	defineOperation({
 		name: 'show_case',
-		description: 'Put an open case on screen, as clicking its tab does. The camera, field, colour scale and section stay as they are, so cars compare from the same view.',
+		description:
+			'Put an open case on screen, as clicking its tab does. The camera, field, colour scale and section stay as they are, so cars compare from the same view.',
 		parameters: {
 			type: 'object',
 			properties: { case_id: { type: 'integer', description: 'From list_cases.' } },
@@ -107,7 +130,8 @@ export function defineCaseOperations({ session }) {
 
 	defineOperation({
 		name: 'close_case',
-		description: 'Close an open case: its tab goes, its analysis stops if it is still running, and its memory is released. Its file stays in the workspace and can be opened again.',
+		description:
+			'Close an open case: its tab goes, its analysis stops if it is still running, and its memory is released. Its file stays in the workspace and can be opened again.',
 		parameters: {
 			type: 'object',
 			properties: { case_id: { type: 'integer', description: 'From list_cases.' } },

@@ -27,7 +27,10 @@ export async function availability() {
  *   other callbacks follow one request as it streams: sent, a piece of its thinking ('' when the thinking arrives
  *   without text), a piece of its reply, a tool call begun, and over (whole, stopped or failed).
  */
-export async function respond(messages, { tools, execute, signal, onRequest, onReasoning, onText, onToolCall, onRequestEnd }) {
+export async function respond(
+	messages,
+	{ tools, execute, signal, onRequest, onReasoning, onText, onToolCall, onRequestEnd },
+) {
 	for (;;) {
 		const message = { role: 'assistant', content: '', tool_calls: [], reasoning_details: [] };
 		let whole = false;
@@ -43,7 +46,9 @@ export async function respond(messages, { tools, execute, signal, onRequest, onR
 		}
 		if (message.tool_calls.length === 0) return;
 		for (const call of message.tool_calls) {
-			const content = signal.aborted ? JSON.stringify({ error: 'The engineer stopped the run before this call ran.' }) : await execute(call);
+			const content = signal.aborted
+				? JSON.stringify({ error: 'The engineer stopped the run before this call ran.' })
+				: await execute(call);
 			messages.push({ role: 'tool', tool_call_id: call.id, content });
 		}
 		signal.throwIfAborted();
@@ -62,12 +67,16 @@ function sendable({ content, tool_calls, reasoning_details }) {
 
 /** One request: read the server-sent events into `message` as they arrive. */
 async function stream(messages, tools, message, { onReasoning, onText, onToolCall, signal }) {
-	const response = await reach(() => fetch(ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ messages, tools }),
-		signal,
-	}), "The tool's server did not answer, so the message did not reach the model.");
+	const response = await reach(
+		() =>
+			fetch(ENDPOINT, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ messages, tools }),
+				signal,
+			}),
+		"The tool's server did not answer, so the message did not reach the model.",
+	);
 	if (!response.ok) throw new Error(await refusal(response));
 	const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
 	let buffer = '';
@@ -99,7 +108,11 @@ async function stream(messages, tools, message, { onReasoning, onText, onToolCal
 				onText(content);
 			}
 			for (const part of tool_calls ?? []) {
-				const call = (message.tool_calls[part.index ?? 0] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+				const call = (message.tool_calls[part.index ?? 0] ??= {
+					id: '',
+					type: 'function',
+					function: { name: '', arguments: '' },
+				});
 				const named = !call.function.name && part.function?.name;
 				if (part.id) call.id = part.id;
 				if (part.function?.name) call.function.name += part.function.name;

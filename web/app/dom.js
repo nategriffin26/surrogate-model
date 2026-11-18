@@ -33,9 +33,12 @@ export function put(element, ...children) {
  * the option chosen. `buttons` are the buttons in option order.
  */
 export function segmented(label, options, choose) {
-	const buttons = options.map(([value, text, title]) => h('button', { type: 'button', role: 'radio', class: 'segment', title, onclick: () => choose(value) }, text));
+	const buttons = options.map(([value, text, title]) =>
+		h('button', { type: 'button', role: 'radio', class: 'segment', title, onclick: () => choose(value) }, text),
+	);
 	const el = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons);
-	const show = (chosen) => options.forEach(([value], k) => buttons[k].setAttribute('aria-checked', String(value === chosen)));
+	const show = (chosen) =>
+		options.forEach(([value], k) => buttons[k].setAttribute('aria-checked', String(value === chosen)));
 	return { el, buttons, show };
 }
 

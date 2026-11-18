@@ -189,7 +189,8 @@ export class Surface {
 	/** Upload up to `budget` bytes, the working mesh first; returns whether an array finished arriving. */
 	upload(renderer, budget) {
 		const working = this.working.upload(renderer, budget);
-		const full = this.full && this.full !== this.working ? this.full.upload(renderer, working.left) : { finished: false };
+		const full =
+			this.full && this.full !== this.working ? this.full.upload(renderer, working.left) : { finished: false };
 		return working.finished || full.finished;
 	}
 
@@ -217,7 +218,9 @@ async function buildEdges({ positions, indices }) {
 	const triangles = indices.length / 3;
 	let count = 0;
 	for (let t = 0; t < triangles; t++) {
-		const a = indices[3 * t], b = indices[3 * t + 1], c = indices[3 * t + 2];
+		const a = indices[3 * t],
+			b = indices[3 * t + 1],
+			c = indices[3 * t + 2];
 		count += (a < b) + (b < c) + (c < a);
 		if (t % CHUNK === CHUNK - 1) await yieldToPage();
 	}
@@ -229,14 +232,20 @@ async function buildEdges({ positions, indices }) {
 	const add = (a, b) => {
 		index[k++] = a;
 		index[k++] = b;
-		const length = Math.hypot(positions[3 * a] - positions[3 * b], positions[3 * a + 1] - positions[3 * b + 1], positions[3 * a + 2] - positions[3 * b + 2]);
+		const length = Math.hypot(
+			positions[3 * a] - positions[3 * b],
+			positions[3 * a + 1] - positions[3 * b + 1],
+			positions[3 * a + 2] - positions[3 * b + 2],
+		);
 		edge[a] += length;
 		edge[b] += length;
 		meeting[a]++;
 		meeting[b]++;
 	};
 	for (let t = 0; t < triangles; t++) {
-		const a = indices[3 * t], b = indices[3 * t + 1], c = indices[3 * t + 2];
+		const a = indices[3 * t],
+			b = indices[3 * t + 1],
+			c = indices[3 * t + 2];
 		if (a < b) add(a, b);
 		if (b < c) add(b, c);
 		if (c < a) add(c, a);

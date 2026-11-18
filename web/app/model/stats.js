@@ -31,13 +31,20 @@ function regionOf({ centers, normals }, bounds, yCenter) {
 	for (let t = 0; t < count; t++) {
 		const [x, y, z] = [centers[3 * t], centers[3 * t + 1] - yCenter, centers[3 * t + 2]];
 		const [nx, ny, nz] = [normals[3 * t], normals[3 * t + 1], normals[3 * t + 2]];
-		const wheel = axles.some((a) => Math.abs(x - a) < WHEEL.reach) && Math.abs(y) > WHEEL.outboard && z < zmin + WHEEL.height;
-		region[t] = wheel ? index.wheels
-			: nz < -FACING ? index.underbody
-				: nx > FACING ? index.base
-					: nx < -FACING ? index.front
-						: Math.abs(ny) > FACING ? index.sides
-							: nz > FACING ? index.top
+		const wheel =
+			axles.some((a) => Math.abs(x - a) < WHEEL.reach) && Math.abs(y) > WHEEL.outboard && z < zmin + WHEEL.height;
+		region[t] = wheel
+			? index.wheels
+			: nz < -FACING
+				? index.underbody
+				: nx > FACING
+					? index.base
+					: nx < -FACING
+						? index.front
+						: Math.abs(ny) > FACING
+							? index.sides
+							: nz > FACING
+								? index.top
 								: -1;
 	}
 	return region;
@@ -90,7 +97,11 @@ export function caseStats(cells, bounds, yCenter) {
 	const regions = REGIONS.map((id, i) => ({ id, share: regionArea[i] / total, error: regionError[i] / regionArea[i] }));
 
 	// Spread against error: cells in bins of equal area by σ, each bin's mean σ and root-mean-square error.
-	const edges = areaQuantiles(sigma, areas, Array.from({ length: CALIBRATION_BINS - 1 }, (_, k) => (k + 1) / CALIBRATION_BINS));
+	const edges = areaQuantiles(
+		sigma,
+		areas,
+		Array.from({ length: CALIBRATION_BINS - 1 }, (_, k) => (k + 1) / CALIBRATION_BINS),
+	);
 	const bins = Array.from({ length: CALIBRATION_BINS }, () => ({ area: 0, sigma: 0, squared: 0 }));
 	for (let t = 0; t < count; t++) {
 		let b = 0;
@@ -100,7 +111,9 @@ export function caseStats(cells, bounds, yCenter) {
 		bin.sigma += areas[t] * sigma[t];
 		bin.squared += areas[t] * (cp[t] - cfd[t]) ** 2;
 	}
-	const calibration = bins.filter((b) => b.area > 0).map((b) => ({ sigma: b.sigma / b.area, error: Math.sqrt(b.squared / b.area) }));
+	const calibration = bins
+		.filter((b) => b.area > 0)
+		.map((b) => ({ sigma: b.sigma / b.area, error: Math.sqrt(b.squared / b.area) }));
 
 	// Predicted against CFD: area per cell of a square grid over the range that holds 99 % of the surface's CFD.
 	const [low, high] = areaQuantiles(cfd, areas, [0.005, 0.995]);

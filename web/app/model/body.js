@@ -14,13 +14,22 @@ function monotone(knots) {
 	const ys = knots.map((k) => k[1]);
 	const n = xs.length;
 	const d = xs.slice(1).map((x, i) => (ys[i + 1] - ys[i]) / (x - xs[i]));
-	const m = xs.map((_, i) => (i === 0 ? d[0] : i === n - 1 ? d[n - 2] : d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2));
+	const m = xs.map((_, i) =>
+		i === 0 ? d[0] : i === n - 1 ? d[n - 2] : d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2,
+	);
 	for (let i = 0; i < n - 1; i++) {
-		if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+		if (d[i] === 0) {
+			m[i] = 0;
+			m[i + 1] = 0;
+			continue;
+		}
 		const a = m[i] / d[i];
 		const b = m[i + 1] / d[i];
 		const q = a * a + b * b;
-		if (q > 9) { m[i] = (3 * a * d[i]) / Math.sqrt(q); m[i + 1] = (3 * b * d[i]) / Math.sqrt(q); }
+		if (q > 9) {
+			m[i] = (3 * a * d[i]) / Math.sqrt(q);
+			m[i + 1] = (3 * b * d[i]) / Math.sqrt(q);
+		}
 	}
 	return (x) => {
 		const t0 = Math.min(Math.max(x, xs[0]), xs[n - 1]);
@@ -30,14 +39,44 @@ function monotone(knots) {
 		const t = (t0 - xs[i]) / hh;
 		const t2 = t * t;
 		const t3 = t2 * t;
-		return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * hh * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * hh * m[i + 1];
+		return (
+			(2 * t3 - 3 * t2 + 1) * ys[i] +
+			(t3 - 2 * t2 + t) * hh * m[i] +
+			(-2 * t3 + 3 * t2) * ys[i + 1] +
+			(t3 - t2) * hh * m[i + 1]
+		);
 	};
 }
 
 // Side profile (top and bottom above the lowest point) and half-width, by distance s back from the nose.
-const TOP = monotone([[0, 0.6], [0.3, 0.68], [0.75, 0.75], [1.3, 0.8], [1.95, 1.27], [2.45, 1.34], [3.0, 1.31], [3.6, 1.0], [4.1, 0.97], [4.4, 0.92]]);
-const BOTTOM = monotone([[0, 0.2], [0.3, 0.12], [0.65, 0.04], [1.0, 0], [3.7, 0], [4.15, 0.1], [4.4, 0.3]]);
-const HALF_WIDTH = monotone([[0, 0.8], [0.6, 0.89], [1.2, 0.92], [3.4, 0.92], [4.4, 0.86]]);
+const TOP = monotone([
+	[0, 0.6],
+	[0.3, 0.68],
+	[0.75, 0.75],
+	[1.3, 0.8],
+	[1.95, 1.27],
+	[2.45, 1.34],
+	[3.0, 1.31],
+	[3.6, 1.0],
+	[4.1, 0.97],
+	[4.4, 0.92],
+]);
+const BOTTOM = monotone([
+	[0, 0.2],
+	[0.3, 0.12],
+	[0.65, 0.04],
+	[1.0, 0],
+	[3.7, 0],
+	[4.15, 0.1],
+	[4.4, 0.3],
+]);
+const HALF_WIDTH = monotone([
+	[0, 0.8],
+	[0.6, 0.89],
+	[1.2, 0.92],
+	[3.4, 0.92],
+	[4.4, 0.86],
+]);
 const NOSE_ROUND = 0.42;
 const TAIL_ROUND = 0.16;
 const EXPONENT = 4;
@@ -84,7 +123,8 @@ export function outline(x, count) {
 	const fine = [];
 	const along = [0];
 	for (let i = 0; i <= FINE; i++) fine.push(outlinePoint(p, (2 * Math.PI * i) / FINE));
-	for (let i = 1; i <= FINE; i++) along.push(along[i - 1] + Math.hypot(fine[i][0] - fine[i - 1][0], fine[i][1] - fine[i - 1][1]));
+	for (let i = 1; i <= FINE; i++)
+		along.push(along[i - 1] + Math.hypot(fine[i][0] - fine[i - 1][0], fine[i][1] - fine[i - 1][1]));
 	const length = along[FINE];
 	const points = [];
 	let j = 0;
@@ -134,7 +174,11 @@ export function bodySurface() {
 	for (let x = NOSE_X; x < end - 1e-9; ringXs.push(x)) {
 		const here = ring(x, MATCH);
 		let dx = Math.min(CELL, end - x);
-		while (dx > 1e-5 && Math.max(...ring(x + dx, MATCH).map((p, k) => Math.hypot(dx, p[0] - here[k][0], p[1] - here[k][1]))) > CELL) dx /= 2;
+		while (
+			dx > 1e-5 &&
+			Math.max(...ring(x + dx, MATCH).map((p, k) => Math.hypot(dx, p[0] - here[k][0], p[1] - here[k][1]))) > CELL
+		)
+			dx /= 2;
 		x = Math.min(x + dx, end);
 	}
 	const lengths = ringXs.map((rx) => outline(rx, 4).length);
@@ -145,10 +189,16 @@ export function bodySurface() {
 		let m = Math.ceil(Math.max(lengths[i], lengths[i + 1]) / CELL);
 		m += m % 2;
 		const first = points.length / 3;
-		for (const [x, around] of [[ringXs[i], ring(ringXs[i], m)], [ringXs[i + 1], ring(ringXs[i + 1], m)]]) {
+		for (const [x, around] of [
+			[ringXs[i], ring(ringXs[i], m)],
+			[ringXs[i + 1], ring(ringXs[i + 1], m)],
+		]) {
 			for (const [y, z] of around) points.push(x, y, z);
 		}
-		const same = (a, b) => points[3 * a + 1] === points[3 * b + 1] && points[3 * a + 2] === points[3 * b + 2] && points[3 * a] === points[3 * b];
+		const same = (a, b) =>
+			points[3 * a + 1] === points[3 * b + 1] &&
+			points[3 * a + 2] === points[3 * b + 2] &&
+			points[3 * a] === points[3 * b];
 		for (let k = 0; k < m; k++) {
 			// Round the outline, then back along x: the order that faces out of the body.
 			const corners = [first + k, first + ((k + 1) % m), first + m + ((k + 1) % m), first + m + k];
@@ -173,7 +223,10 @@ export function bodySurface() {
 export function sideLookup(positions) {
 	const step = 0.01;
 	let [xmin, zmin] = [Infinity, Infinity];
-	for (let v = 0; v < positions.length; v += 3) { xmin = Math.min(xmin, positions[v]); zmin = Math.min(zmin, positions[v + 2]); }
+	for (let v = 0; v < positions.length; v += 3) {
+		xmin = Math.min(xmin, positions[v]);
+		zmin = Math.min(zmin, positions[v + 2]);
+	}
 	const cols = Math.ceil(LENGTH / step) + 2;
 	const rows = Math.ceil(2 / step);
 	const best = new Int32Array(cols * rows).fill(-1);
@@ -192,13 +245,17 @@ export function sideLookup(positions) {
 		let found = -1;
 		let bestD = Infinity;
 		for (let radius = 0; radius < 40 && found < 0; radius++) {
-			for (let i = i0 - radius; i <= i0 + radius; i++) for (let j = j0 - radius; j <= j0 + radius; j++) {
-				if (i < 0 || j < 0 || i >= cols || j >= rows) continue;
-				const v = best[i * rows + j];
-				if (v < 0) continue;
-				const d = Math.hypot(positions[3 * v] - x, positions[3 * v + 2] - z);
-				if (d < bestD) { bestD = d; found = v; }
-			}
+			for (let i = i0 - radius; i <= i0 + radius; i++)
+				for (let j = j0 - radius; j <= j0 + radius; j++) {
+					if (i < 0 || j < 0 || i >= cols || j >= rows) continue;
+					const v = best[i * rows + j];
+					if (v < 0) continue;
+					const d = Math.hypot(positions[3 * v] - x, positions[3 * v + 2] - z);
+					if (d < bestD) {
+						bestD = d;
+						found = v;
+					}
+				}
 		}
 		return found;
 	};
@@ -212,7 +269,10 @@ export function aroundLookup(positions, v, y, z) {
 	for (let k = 0; k < positions.length / 3; k++) {
 		if (positions[3 * k] !== x) continue;
 		const d = Math.hypot(positions[3 * k + 1] - y, positions[3 * k + 2] - z);
-		if (d < bestD) { bestD = d; found = k; }
+		if (d < bestD) {
+			bestD = d;
+			found = k;
+		}
 	}
 	return found;
 }

@@ -14,7 +14,11 @@ export class VertexGrid {
 		const keys = new Uint32Array(count);
 		const start = new Uint32Array(size + 1);
 		for (let v = 0; v < count; v++) {
-			const key = this.key(Math.floor(positions[3 * v] / CELL), Math.floor(positions[3 * v + 1] / CELL), Math.floor(positions[3 * v + 2] / CELL));
+			const key = this.key(
+				Math.floor(positions[3 * v] / CELL),
+				Math.floor(positions[3 * v + 1] / CELL),
+				Math.floor(positions[3 * v + 2] / CELL),
+			);
 			keys[v] = key;
 			start[key + 1]++;
 		}
@@ -33,7 +37,9 @@ export class VertexGrid {
 	/** Index of the vertex nearest to p, searching outward shell by shell until no nearer one can exist. */
 	nearest(p) {
 		const P = this.positions;
-		const ci = Math.floor(p[0] / CELL), cj = Math.floor(p[1] / CELL), ck = Math.floor(p[2] / CELL);
+		const ci = Math.floor(p[0] / CELL),
+			cj = Math.floor(p[1] / CELL),
+			ck = Math.floor(p[2] / CELL);
 		let best = -1;
 		let bestD = Infinity;
 		for (let r = 0; r < 64; r++) {
@@ -103,12 +109,19 @@ export class FaceIndex {
 
 	/** Squared distance from p to face f: to its plane when p projects inside it, else to its nearest edge. */
 	distance(p, f) {
-		const P = this.positions, I = this.indices;
-		const a = 3 * I[3 * f], b = 3 * I[3 * f + 1], c = 3 * I[3 * f + 2];
+		const P = this.positions,
+			I = this.indices;
+		const a = 3 * I[3 * f],
+			b = 3 * I[3 * f + 1],
+			c = 3 * I[3 * f + 2];
 		const e0 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
 		const e1 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
 		const q = [p[0] - P[a], p[1] - P[a + 1], p[2] - P[a + 2]];
-		const d00 = dot(e0, e0), d01 = dot(e0, e1), d11 = dot(e1, e1), d20 = dot(q, e0), d21 = dot(q, e1);
+		const d00 = dot(e0, e0),
+			d01 = dot(e0, e1),
+			d11 = dot(e1, e1),
+			d20 = dot(q, e0),
+			d21 = dot(q, e1);
 		const denom = d00 * d11 - d01 * d01;
 		const v = (d11 * d20 - d01 * d21) / denom;
 		const w = (d00 * d21 - d01 * d20) / denom;
@@ -117,7 +130,11 @@ export class FaceIndex {
 			return dot(r, r);
 		}
 		const corner = (i) => [P[i], P[i + 1], P[i + 2]];
-		return Math.min(segment(p, corner(a), corner(b)), segment(p, corner(b), corner(c)), segment(p, corner(c), corner(a)));
+		return Math.min(
+			segment(p, corner(a), corner(b)),
+			segment(p, corner(b), corner(c)),
+			segment(p, corner(c), corner(a)),
+		);
 	}
 }
 

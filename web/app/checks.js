@@ -2,12 +2,16 @@
 // these messages and corrects its call, so each names the argument, what it got and what it accepts.
 
 export function oneOf(name, value, options) {
-	if (!options.includes(value)) throw new Error(`${name} must be one of ${options.map((o) => JSON.stringify(o)).join(', ')}; got ${JSON.stringify(value)}.`);
+	if (!options.includes(value))
+		throw new Error(
+			`${name} must be one of ${options.map((o) => JSON.stringify(o)).join(', ')}; got ${JSON.stringify(value)}.`,
+		);
 	return value;
 }
 
 export function finite(name, value) {
-	if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${name} must be a number; got ${JSON.stringify(value)}.`);
+	if (typeof value !== 'number' || !Number.isFinite(value))
+		throw new Error(`${name} must be a number; got ${JSON.stringify(value)}.`);
 	return value;
 }
 

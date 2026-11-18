@@ -90,10 +90,28 @@ function crop(viewer, bounds) {
 	const width = Math.max(...corners.map((p) => p.x)) - left;
 	const height = Math.max(...corners.map((p) => p.y)) - top;
 	const canvas = h('canvas', { width: Math.round(width * ratio), height: Math.round(height * ratio) });
-	canvas.getContext('2d').drawImage(viewer.canvas, left * ratio, top * ratio, width * ratio, height * ratio, 0, 0, canvas.width, canvas.height);
+	canvas
+		.getContext('2d')
+		.drawImage(
+			viewer.canvas,
+			left * ratio,
+			top * ratio,
+			width * ratio,
+			height * ratio,
+			0,
+			0,
+			canvas.width,
+			canvas.height,
+		);
 	// The camera is orthographic, so a world point's place is affine in it: read the map off three axis steps.
 	const origin = viewer.project([0, 0, 0]);
-	const axes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map((a) => viewer.project(a)).map((p) => [p.x - origin.x, p.y - origin.y]);
+	const axes = [
+		[1, 0, 0],
+		[0, 1, 0],
+		[0, 0, 1],
+	]
+		.map((a) => viewer.project(a))
+		.map((p) => [p.x - origin.x, p.y - origin.y]);
 	const place = (point) => {
 		const x = origin.x + point[0] * axes[0][0] + point[1] * axes[1][0] + point[2] * axes[2][0];
 		const y = origin.y + point[0] * axes[0][1] + point[1] * axes[1][1] + point[2] * axes[2][1];

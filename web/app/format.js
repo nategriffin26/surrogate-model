@@ -55,6 +55,7 @@ export function niceTicks(lo, hi, target = 6) {
 	const multiple = [1, 2, 2.5, 5, 10].find((m) => m * power >= raw);
 	const step = multiple * power;
 	const ticks = [];
-	for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+	for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step)
+		ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
 	return { step, ticks, digits: Math.max(0, -exponent - (multiple === 10 ? 1 : 0) + (multiple === 2.5 ? 1 : 0)) };
 }

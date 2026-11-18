@@ -13,7 +13,8 @@ const PYTHON = 'run_python';
 /** Characters of a tool's result the model is sent; more is cut from the middle. */
 const RESULT_LIMIT = 16000;
 /** What the panel says it does, before the first message. */
-const PURPOSE = 'Works this tool for you: reads the pressure, cuts sections, places probes, compares cars and makes variants.';
+const PURPOSE =
+	'Works this tool for you: reads the pressure, cuts sections, places probes, compares cars and makes variants.';
 
 /**
  * The requests offered before the first message, about the car on screen (`car`, a case, or none). Comparing with
@@ -38,10 +39,13 @@ const PYTHON_TOOL = {
 	type: 'function',
 	function: {
 		name: PYTHON,
-		description: 'Run Python in the persistent kernel (numpy, scipy, pandas, matplotlib, and the `pressure` module that reaches the open cases, every operation and the model). Variables persist between calls; top-level await works. Returns what the code printed, the tables shown, the titles of the figures shown to the engineer, the workspace files written, and the traceback if it failed.',
+		description:
+			'Run Python in the persistent kernel (numpy, scipy, pandas, matplotlib, and the `pressure` module that reaches the open cases, every operation and the model). Variables persist between calls; top-level await works. Returns what the code printed, the tables shown, the titles of the figures shown to the engineer, the workspace files written, and the traceback if it failed.',
 		parameters: {
 			type: 'object',
-			properties: { code: { type: 'string', description: 'Python source to run as one cell; the value of its last line is shown.' } },
+			properties: {
+				code: { type: 'string', description: 'Python source to run as one cell; the value of its last line is shown.' },
+			},
 			required: ['code'],
 			additionalProperties: false,
 		},
@@ -54,7 +58,10 @@ const PYTHON_TOOL = {
  *   operations: Map<string, import('../app/operations.js').Operation>, runOperation: (name: string, args: object) => Promise<object>,
  *   onOperation: Function, workspace: import('../app/workspace.js').Workspace, close: () => void }} tool
  */
-export async function mountAssistant(host, { session, engine, viewer, operations, runOperation, onOperation, workspace, close }) {
+export async function mountAssistant(
+	host,
+	{ session, engine, viewer, operations, runOperation, onOperation, workspace, close },
+) {
 	await stylesheet();
 
 	/** 'checking' | 'unavailable' | 'unreachable' | 'idle' | 'running' */
@@ -71,20 +78,71 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 
 	const thread = h('div', { class: 'assistant-thread' });
 	// A log for navigation, but not read out as it streams: the announcer below says each turn's outcome once.
-	const log = h('div', { class: 'assistant-log', role: 'log', 'aria-live': 'off', 'aria-label': 'Conversation' }, thread);
-	const latest = h('button', { type: 'button', class: 'assistant-latest', hidden: true, title: 'Scroll to the latest', 'aria-label': 'Scroll to the latest' }, downIcon());
+	const log = h(
+		'div',
+		{ class: 'assistant-log', role: 'log', 'aria-live': 'off', 'aria-label': 'Conversation' },
+		thread,
+	);
+	const latest = h(
+		'button',
+		{
+			type: 'button',
+			class: 'assistant-latest',
+			hidden: true,
+			title: 'Scroll to the latest',
+			'aria-label': 'Scroll to the latest',
+		},
+		downIcon(),
+	);
 	const announcer = h('p', { class: 'assistant-announcer', role: 'status' });
-	const input = h('textarea', { class: 'assistant-input', rows: 1, placeholder: 'Ask about the cars, or describe a study', 'aria-label': 'Message to the assistant' });
+	const input = h('textarea', {
+		class: 'assistant-input',
+		rows: 1,
+		placeholder: 'Ask about the cars, or describe a study',
+		'aria-label': 'Message to the assistant',
+	});
 	const sendButton = h('button', { type: 'submit', class: 'assistant-send', 'aria-label': 'Send' });
 	const form = h('form', { class: 'assistant-composer' }, input, sendButton);
-	const newButton = h('button', { type: 'button', class: 'icon-button', title: 'New conversation', 'aria-label': 'New conversation', onclick: newConversation }, icon('plus'));
-	const closeButton = h('button', { type: 'button', class: 'icon-button', title: 'Close', 'aria-label': 'Close the assistant', onclick: close }, icon('close'));
-	host.append(h('div', { class: 'assistant' },
-		h('header', { class: 'assistant-head' }, h('h2', { class: 'assistant-title' }, 'Assistant'), newButton, closeButton),
-		h('div', { class: 'assistant-view' }, log, latest),
-		form, announcer));
+	const newButton = h(
+		'button',
+		{
+			type: 'button',
+			class: 'icon-button',
+			title: 'New conversation',
+			'aria-label': 'New conversation',
+			onclick: newConversation,
+		},
+		icon('plus'),
+	);
+	const closeButton = h(
+		'button',
+		{ type: 'button', class: 'icon-button', title: 'Close', 'aria-label': 'Close the assistant', onclick: close },
+		icon('close'),
+	);
+	host.append(
+		h(
+			'div',
+			{ class: 'assistant' },
+			h(
+				'header',
+				{ class: 'assistant-head' },
+				h('h2', { class: 'assistant-title' }, 'Assistant'),
+				newButton,
+				closeButton,
+			),
+			h('div', { class: 'assistant-view' }, log, latest),
+			form,
+			announcer,
+		),
+	);
 
-	const kernel = createKernel({ workspace, engine, session, approve, operate: (name, args) => operate(name, args, exchange?.python) });
+	const kernel = createKernel({
+		workspace,
+		engine,
+		session,
+		approve,
+		operate: (name, args) => operate(name, args, exchange?.python),
+	});
 
 	onOperation(({ name, args, by }) => {
 		if (by !== 'engineer') return;
@@ -96,19 +154,26 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	// below brings them back; reaching the bottom again resumes it.
 	let following = true;
 	let lastTop = 0;
-	log.addEventListener('scroll', () => {
-		if (log.scrollHeight - log.scrollTop - log.clientHeight < 24) following = true;
-		else if (log.scrollTop < lastTop) following = false;
-		lastTop = log.scrollTop;
-		latest.hidden = following;
-	}, { passive: true });
+	log.addEventListener(
+		'scroll',
+		() => {
+			if (log.scrollHeight - log.scrollTop - log.clientHeight < 24) following = true;
+			else if (log.scrollTop < lastTop) following = false;
+			lastTop = log.scrollTop;
+			latest.hidden = following;
+		},
+		{ passive: true },
+	);
 	new ResizeObserver(() => {
 		if (following) log.scrollTop = log.scrollHeight;
 	}).observe(thread);
 	latest.addEventListener('click', () => {
 		following = true;
 		latest.hidden = true;
-		log.scrollTo({ top: log.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+		log.scrollTo({
+			top: log.scrollHeight,
+			behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+		});
 	});
 
 	form.addEventListener('submit', (event) => {
@@ -141,13 +206,35 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		newButton.disabled = running || messages.length === 0;
 		form.hidden = !['idle', 'running'].includes(next);
 		if (next === 'unavailable') {
-			put(thread, h('div', { class: 'assistant-note' },
-				h('p', { class: 'assistant-note-title' }, 'The assistant is not available in this copy.'),
-				h('p', {}, 'To use it here, set ', h('code', {}, 'OPENROUTER_API_KEY'), ' in ', h('code', {}, 'local/secrets/assistant.env'), ' and restart ', h('code', {}, 'uv run surrogate app'), '.')));
+			put(
+				thread,
+				h(
+					'div',
+					{ class: 'assistant-note' },
+					h('p', { class: 'assistant-note-title' }, 'The assistant is not available in this copy.'),
+					h(
+						'p',
+						{},
+						'To use it here, set ',
+						h('code', {}, 'OPENROUTER_API_KEY'),
+						' in ',
+						h('code', {}, 'local/secrets/assistant.env'),
+						' and restart ',
+						h('code', {}, 'uv run surrogate app'),
+						'.',
+					),
+				),
+			);
 		} else if (next === 'unreachable') {
-			put(thread, h('div', { class: 'assistant-note' },
-				h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
-				h('button', { type: 'button', class: 'button', onclick: check }, 'Try again')));
+			put(
+				thread,
+				h(
+					'div',
+					{ class: 'assistant-note' },
+					h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
+					h('button', { type: 'button', class: 'button', onclick: check }, 'Try again'),
+				),
+			);
 		} else if (next === 'idle' && messages.length === 0) {
 			showStart();
 		}
@@ -165,10 +252,26 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		const key = JSON.stringify([requests, waiting]);
 		if (key === shownStart && thread.querySelector('.assistant-start')) return;
 		shownStart = key;
-		put(thread, h('div', { class: 'assistant-start' },
-			h('p', { class: 'assistant-purpose' }, PURPOSE),
-			h('div', { class: 'assistant-offers' }, requests.map((text) => h('button', { type: 'button', class: 'offer', disabled: waiting, onclick: () => send(text) },
-				h('span', {}, text), forwardIcon())))));
+		put(
+			thread,
+			h(
+				'div',
+				{ class: 'assistant-start' },
+				h('p', { class: 'assistant-purpose' }, PURPOSE),
+				h(
+					'div',
+					{ class: 'assistant-offers' },
+					requests.map((text) =>
+						h(
+							'button',
+							{ type: 'button', class: 'offer', disabled: waiting, onclick: () => send(text) },
+							h('span', {}, text),
+							forwardIcon(),
+						),
+					),
+				),
+			),
+		);
 	}
 	session.addEventListener('change', () => {
 		if (status === 'idle' && messages.length === 0) showStart();
@@ -202,8 +305,13 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 			before = messages.length;
 			// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
 			const { cases } = await runOperation('list_cases', {});
-			const extents = session.cases.filter((c) => c.result).map((c) => ({ case_id: c.id, bounds_m: c.result.geometry.bounds.map((v) => Math.round(v * 1000) / 1000) }));
-			messages.push({ role: 'user', content: `${describeState({ cases, extents, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
+			const extents = session.cases
+				.filter((c) => c.result)
+				.map((c) => ({ case_id: c.id, bounds_m: c.result.geometry.bounds.map((v) => Math.round(v * 1000) / 1000) }));
+			messages.push({
+				role: 'user',
+				content: `${describeState({ cases, extents, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}`,
+			});
 			actions.clear();
 			await respond(messages, {
 				tools: toolList,
@@ -248,7 +356,10 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	}
 
 	function toolList() {
-		const defined = [...operations.values()].map(({ name, description, parameters }) => ({ type: 'function', function: { name, description, parameters } }));
+		const defined = [...operations.values()].map(({ name, description, parameters }) => ({
+			type: 'function',
+			function: { name, description, parameters },
+		}));
 		return [...defined, PYTHON_TOOL];
 	}
 
@@ -269,10 +380,14 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 			const items = [];
 			current.python = step;
 			try {
-				const outcome = await kernel.run(String(args.code ?? ''), (item) => {
-					items.push(item);
-					step.output(item);
-				}, controller.signal);
+				const outcome = await kernel.run(
+					String(args.code ?? ''),
+					(item) => {
+						items.push(item);
+						step.output(item);
+					},
+					controller.signal,
+				);
 				step.finish(outcome.status === 'finished' ? 'done' : outcome.status, outcome.error);
 				return JSON.stringify(pythonResult(outcome, items));
 			} catch (error) {
@@ -296,7 +411,10 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		const operation = operations.get(name);
 		if (!operation) return { error: `There is no operation named ${name}.`, outcome: 'failed' };
 		const sub = within?.sub(name, args);
-		const asks = typeof operation.confirm === 'function' ? operation.confirm(args, { session, viewer, engine, by: 'assistant' }) : operation.confirm;
+		const asks =
+			typeof operation.confirm === 'function'
+				? operation.confirm(args, { session, viewer, engine, by: 'assistant' })
+				: operation.confirm;
 		if (asks && !(await approve(`${sentence(name)}${subject(args)}?`, sentence(name)))) {
 			sub?.finish('declined');
 			return { error: 'The engineer declined.', outcome: 'declined' };
@@ -316,13 +434,24 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		return new Promise((resolve) => {
 			const yes = h('button', { type: 'button', class: 'button button-primary' }, action);
 			const no = h('button', { type: 'button', class: 'button' }, 'Decline');
-			const row = h('div', { class: 'approval', role: 'group', 'aria-label': question }, h('p', { class: 'approval-question' }, question), h('div', { class: 'approval-actions' }, yes, no));
+			const row = h(
+				'div',
+				{ class: 'approval', role: 'group', 'aria-label': question },
+				h('p', { class: 'approval-question' }, question),
+				h('div', { class: 'approval-actions' }, yes, no),
+			);
 			// A question from code still running after its turn ended opens an exchange of its own.
 			const into = exchange ?? createExchange(null);
 			const settle = (approved) => {
 				waiting.delete(settle);
 				into.asking(false);
-				row.replaceWith(h('p', { class: 'approval-decided' }, `${question.replace(/\?$/, '')}: ${approved ? 'approved' : 'declined'}`));
+				row.replaceWith(
+					h(
+						'p',
+						{ class: 'approval-decided' },
+						`${question.replace(/\?$/, '')}: ${approved ? 'approved' : 'declined'}`,
+					),
+				);
 				resolve(approved);
 			};
 			yes.addEventListener('click', () => settle(true));
@@ -344,7 +473,9 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	function createExchange(text) {
 		const reply = h('div', { class: 'reply' });
 		const working = h('p', { class: 'working', hidden: true }, h('span', { class: 'shimmer' }, 'Working'));
-		thread.append(h('section', { class: 'exchange' }, text ? h('p', { class: 'question' }, text) : null, reply, working));
+		thread.append(
+			h('section', { class: 'exchange' }, text ? h('p', { class: 'question' }, text) : null, reply, working),
+		);
 		let thought = null;
 		let answer = null;
 		let lastAnswer = '';
@@ -401,9 +532,14 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 					reply.append(h('p', { class: 'reply-note' }, 'Stopped.'));
 					announcer.textContent = 'Stopped.';
 				} else if (outcome === 'failed') {
-					reply.append(h('div', { class: 'reply-failed', role: 'alert' },
-						h('p', { class: 'reply-error' }, message),
-						h('button', { type: 'button', class: 'button reply-retry', onclick: retry }, 'Try again')));
+					reply.append(
+						h(
+							'div',
+							{ class: 'reply-failed', role: 'alert' },
+							h('p', { class: 'reply-error' }, message),
+							h('button', { type: 'button', class: 'button reply-retry', onclick: retry }, 'Try again'),
+						),
+					);
 				} else {
 					announcer.textContent = lastAnswer;
 				}
@@ -417,7 +553,11 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 /** Settles with an error when `signal` aborts: what an operation still running is reported as after a stop. */
 function whenStopped(signal) {
 	return new Promise((resolve) => {
-		const stopped = () => resolve({ error: 'The engineer stopped the run while this operation ran; it may still finish on screen.', outcome: 'stopped' });
+		const stopped = () =>
+			resolve({
+				error: 'The engineer stopped the run while this operation ran; it may still finish on screen.',
+				outcome: 'stopped',
+			});
 		if (signal.aborted) stopped();
 		else signal.addEventListener('abort', stopped, { once: true });
 	});
@@ -425,7 +565,9 @@ function whenStopped(signal) {
 
 /** What the model is told of a Python run: its printed output and tables, the figures shown, the files and decisions. */
 function pythonResult(outcome, items) {
-	const printed = items.map((item) => (item.kind === 'text' ? item.text : item.kind === 'table' ? `${item.text}\n` : '')).join('');
+	const printed = items
+		.map((item) => (item.kind === 'text' ? item.text : item.kind === 'table' ? `${item.text}\n` : ''))
+		.join('');
 	const figures = items.filter((item) => item.kind === 'figure').map((item) => item.title);
 	return {
 		status: outcome.status,
@@ -441,7 +583,13 @@ function pythonResult(outcome, items) {
 
 /** The thing an operation acts on, for its approval question. */
 function subject(args) {
-	const value = args.path ?? args.from ?? args.export ?? args.example ?? args.layer ?? (args.case_id != null ? `case ${args.case_id}` : null);
+	const value =
+		args.path ??
+		args.from ??
+		args.export ??
+		args.example ??
+		args.layer ??
+		(args.case_id != null ? `case ${args.case_id}` : null);
 	return value != null ? ` ${value}` : '';
 }
 

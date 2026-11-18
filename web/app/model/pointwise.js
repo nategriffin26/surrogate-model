@@ -17,23 +17,40 @@ export function createPointwise({ card, training }) {
 	const wholeCars = h('div', { class: 'example-grid' });
 	const cells = h('div', { class: 'example-cells' });
 
-	const el = section('point', { cars: count(cars) },
-		h('div', { class: 'figure-pair' },
-			h('figure', { class: 'figure' },
+	const el = section(
+		'point',
+		{ cars: count(cars) },
+		h(
+			'div',
+			{ class: 'figure-pair' },
+			h(
+				'figure',
+				{ class: 'figure' },
 				copied(h('figcaption'), 'point.cars.caption'),
 				wholeCars,
-				h('p', { class: 'big-number num' }, count(cars))),
-			h('figure', { class: 'figure' },
+				h('p', { class: 'big-number num' }, count(cars)),
+			),
+			h(
+				'figure',
+				{ class: 'figure' },
 				copied(h('figcaption'), 'point.cells.caption'),
 				cells,
 				h('p', { class: 'big-number num' }, count(examples)),
-				copied(h('p', { class: 'small-number num' }), 'point.cells.note', { cells: count(card.samplesPerCar), cars: count(cars) }))));
+				copied(h('p', { class: 'small-number num' }), 'point.cells.note', {
+					cells: count(card.samplesPerCar),
+					cars: count(cars),
+				}),
+			),
+		),
+	);
 	el.prepend(locator('point'));
 
 	return {
 		el,
 		setCar({ maps }) {
-			wholeCars.replaceChildren(...training.cars.map((car) => h('span', { class: 'example' }, trainingCarImage(car, maps.cp))));
+			wholeCars.replaceChildren(
+				...training.cars.map((car) => h('span', { class: 'example' }, trainingCarImage(car, maps.cp))),
+			);
 			cells.replaceChildren(trainingCarDots(training.cars[0], maps.cp));
 		},
 		setPoint() {},

@@ -143,26 +143,55 @@ export class Stencil {
 		this.point = null;
 		this.car = null;
 		const pixelRatio = viewer.renderer.getPixelRatio();
-		const line = (linewidth, opacity, hidden) => new LineMaterial({
-			vertexColors: true, transparent: true, depthWrite: false, linewidth, opacity,
-			...(hidden ? { depthFunc: THREE.GreaterDepth, opacity: opacity * 0.2 } : {}),
-		});
+		const line = (linewidth, opacity, hidden) =>
+			new LineMaterial({
+				vertexColors: true,
+				transparent: true,
+				depthWrite: false,
+				linewidth,
+				opacity,
+				...(hidden ? { depthFunc: THREE.GreaterDepth, opacity: opacity * 0.2 } : {}),
+			});
 		// Per width: the part of a line in view, then the part the car hides.
 		this.lines = {};
-		for (const [name, width] of [['major', 2.5], ['minor', 1.5]]) this.lines[name] = [line(width, 1, false), line(width * 0.7, 1, true)];
+		for (const [name, width] of [
+			['major', 2.5],
+			['minor', 1.5],
+		])
+			this.lines[name] = [line(width, 1, false), line(width * 0.7, 1, true)];
 		// A hairline is faint and drawn over the car, never hidden by it; the shown station's are bold.
-		const over = (linewidth, opacity) => new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, depthTest: false, linewidth, opacity });
+		const over = (linewidth, opacity) =>
+			new LineMaterial({
+				vertexColors: true,
+				transparent: true,
+				depthWrite: false,
+				depthTest: false,
+				linewidth,
+				opacity,
+			});
 		this.lines.hair = [over(1, 0.55)];
 		this.lines.shown = [over(2.4, 0.95)];
 		// The shown station's slice, fainter where the car hides it.
 		this.lines.slice = [
 			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.6, opacity: 0.85 }),
-			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.2, opacity: 0.22, depthFunc: THREE.GreaterDepth }),
+			new LineMaterial({
+				vertexColors: true,
+				transparent: true,
+				depthWrite: false,
+				linewidth: 1.2,
+				opacity: 0.22,
+				depthFunc: THREE.GreaterDepth,
+			}),
 		];
-		const dots = (opacity, depthFunc) => new THREE.ShaderMaterial({
-			uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: DOT_LIFT } },
-			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
-		});
+		const dots = (opacity, depthFunc) =>
+			new THREE.ShaderMaterial({
+				uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: DOT_LIFT } },
+				vertexShader: DOT_VERTEX,
+				fragmentShader: DOT_FRAGMENT,
+				transparent: true,
+				depthWrite: false,
+				depthFunc,
+			});
 		this.dots = [dots(1, THREE.LessEqualDepth), dots(0.3, THREE.GreaterDepth)];
 		this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.04, 20), new THREE.MeshBasicMaterial({ color: INK }));
 		this.cone.renderOrder = ORDER.handle;
@@ -174,8 +203,13 @@ export class Stencil {
 				uStrength: { value: new Array(SIZES).fill(1) },
 				uLift: { value: 0.002 },
 			},
-			vertexShader: RING_VERTEX, fragmentShader: RING_FRAGMENT, transparent: true, depthWrite: false,
-			polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
+			vertexShader: RING_VERTEX,
+			fragmentShader: RING_FRAGMENT,
+			transparent: true,
+			depthWrite: false,
+			polygonOffset: true,
+			polygonOffsetFactor: -1,
+			polygonOffsetUnits: -4,
 		});
 	}
 
@@ -212,7 +246,10 @@ export class Stencil {
 		const dots = [];
 		const color = new THREE.Color(hex);
 		const ink = new THREE.Color(INK);
-		const sizes = marks.filter((m) => m.type === 'neighbourhood').sort((p, q) => p.scale - q.scale).slice(0, SIZES);
+		const sizes = marks
+			.filter((m) => m.type === 'neighbourhood')
+			.sort((p, q) => p.scale - q.scale)
+			.slice(0, SIZES);
 		const shades = sizeShades(hex, sizes.length).map((shade) => new THREE.Color(shade));
 
 		for (const mark of marks) {
@@ -232,7 +269,8 @@ export class Stencil {
 		// The shown station's slice, the one its area is read from.
 		if (marks.some((m) => m.type === 'stations') && shown !== null) {
 			const { positions } = this.car.cutter.cut(0, point.position[0] + shown);
-			for (let i = 0; i < positions.length; i += 6) addLine('slice', positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6), color);
+			for (let i = 0; i < positions.length; i += 6)
+				addLine('slice', positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6), color);
 		}
 		// Nearby surface: a ring at each size's radius, the shown size's strong and the others' faint; under the shown
 		// size, its mean normal as an arrow from the point, and across it the line between the part ahead and the part
@@ -249,12 +287,23 @@ export class Stencil {
 				if (!isShown) return;
 				const length = Math.hypot(...size.normal);
 				const reach = MEAN_NORMAL[0] + MEAN_NORMAL[1] * k;
-				if (length > 0) addLine('major', size.at, size.at.map((p, c) => p + (size.normal[c] / length) * reach), shades[k]);
+				if (length > 0)
+					addLine(
+						'major',
+						size.at,
+						size.at.map((p, c) => p + (size.normal[c] / length) * reach),
+						shades[k],
+					);
 				const [, ny, nz] = point.normal;
 				const across = Math.hypot(ny, nz);
 				if (across > 1e-3) {
 					const t = [0, nz / across, -ny / across];
-					addLine('hair', size.at.map((p, c) => p - t[c] * size.scale), size.at.map((p, c) => p + t[c] * size.scale), ink);
+					addLine(
+						'hair',
+						size.at.map((p, c) => p - t[c] * size.scale),
+						size.at.map((p, c) => p + t[c] * size.scale),
+						ink,
+					);
 				}
 			});
 			group.add(this.car.rings);
@@ -266,7 +315,11 @@ export class Stencil {
 		this.cone.position.fromArray(tip);
 		this.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...point.normal));
 		group.add(this.cone);
-		dots.push(sizes.length ? { at: point.position, size: SMALL_HANDLE, style: 0, color: ink } : { at: point.position, size: DOT.handle, style: 2, color: ink });
+		dots.push(
+			sizes.length
+				? { at: point.position, size: SMALL_HANDLE, style: 0, color: ink }
+				: { at: point.position, size: DOT.handle, style: 2, color: ink },
+		);
 
 		for (const [key, { positions, colors }] of Object.entries(lines)) {
 			const geometry = new LineSegmentsGeometry().setPositions(positions).setColors(colors);
@@ -285,10 +338,34 @@ export class Stencil {
 
 	addDots(group, dots) {
 		const geometry = new THREE.BufferGeometry();
-		geometry.setAttribute('position', new THREE.Float32BufferAttribute(dots.flatMap((d) => d.at), 3));
-		geometry.setAttribute('color', new THREE.Float32BufferAttribute(dots.flatMap((d) => d.color.toArray()), 3));
-		geometry.setAttribute('size', new THREE.Float32BufferAttribute(dots.map((d) => d.size), 1));
-		geometry.setAttribute('style', new THREE.Float32BufferAttribute(dots.map((d) => d.style), 1));
+		geometry.setAttribute(
+			'position',
+			new THREE.Float32BufferAttribute(
+				dots.flatMap((d) => d.at),
+				3,
+			),
+		);
+		geometry.setAttribute(
+			'color',
+			new THREE.Float32BufferAttribute(
+				dots.flatMap((d) => d.color.toArray()),
+				3,
+			),
+		);
+		geometry.setAttribute(
+			'size',
+			new THREE.Float32BufferAttribute(
+				dots.map((d) => d.size),
+				1,
+			),
+		);
+		geometry.setAttribute(
+			'style',
+			new THREE.Float32BufferAttribute(
+				dots.map((d) => d.style),
+				1,
+			),
+		);
 		for (const material of this.dots) {
 			const points = new THREE.Points(geometry, material);
 			points.frustumCulled = false;

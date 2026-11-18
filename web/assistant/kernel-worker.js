@@ -83,7 +83,15 @@ async function start({ modules, files }) {
 
 /** Take away every way to make a request: the policy already confines them to the CDN, and now not even that. */
 function removeNetwork() {
-	for (const name of ['fetch', 'XMLHttpRequest', 'importScripts', 'WebSocket', 'EventSource', 'WebTransport', 'Worker']) {
+	for (const name of [
+		'fetch',
+		'XMLHttpRequest',
+		'importScripts',
+		'WebSocket',
+		'EventSource',
+		'WebTransport',
+		'Worker',
+	]) {
 		for (let scope = self; scope; scope = Object.getPrototypeOf(scope)) delete scope[name];
 	}
 }
@@ -250,7 +258,8 @@ function compare() {
 	for (const [path, entry] of now) {
 		if (entry.link) continue;
 		const before = held.get(path);
-		if (!before || before.size !== entry.size || before.modified !== entry.modified) written.push({ path, bytes: FS.readFile(`${WORK}/${path}`) });
+		if (!before || before.size !== entry.size || before.modified !== entry.modified)
+			written.push({ path, bytes: FS.readFile(`${WORK}/${path}`) });
 	}
 	for (const [path, entry] of held) if (!entry.link && !now.has(path)) removed.push(path);
 	held = now;

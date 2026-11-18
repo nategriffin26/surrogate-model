@@ -6,7 +6,8 @@ const VARIABLES = {
 	cp: (cells) => cells.cp,
 	sigma: (cells) => cells.sigma,
 	cfd: (cells) => {
-		if (!cells.cfd) throw new Error('This case has no reference field, so cfd is not defined. Attach one, or leave cfd out.');
+		if (!cells.cfd)
+			throw new Error('This case has no reference field, so cfd is not defined. Attach one, or leave cfd out.');
 		return cells.cfd;
 	},
 	drag: (cells) => cells.cp.map((cp, f) => -cp * cells.normals[3 * f]),
@@ -21,11 +22,31 @@ const VARIABLES = {
 const component = (array, k) => Float32Array.from({ length: array.length / 3 }, (_, f) => array[3 * f + k]);
 
 const FUNCTIONS = {
-	abs: [1, Math.abs], sqrt: [1, Math.sqrt], exp: [1, Math.exp], log: [1, Math.log], log10: [1, Math.log10], sign: [1, Math.sign],
-	min: [2, Math.min], max: [2, Math.max], clip: [3, (v, lo, hi) => Math.min(hi, Math.max(lo, v))],
+	abs: [1, Math.abs],
+	sqrt: [1, Math.sqrt],
+	exp: [1, Math.exp],
+	log: [1, Math.log],
+	log10: [1, Math.log10],
+	sign: [1, Math.sign],
+	min: [2, Math.min],
+	max: [2, Math.max],
+	clip: [3, (v, lo, hi) => Math.min(hi, Math.max(lo, v))],
 };
-const COMPARE = { '<': (a, b) => +(a < b), '<=': (a, b) => +(a <= b), '>': (a, b) => +(a > b), '>=': (a, b) => +(a >= b), '==': (a, b) => +(a === b), '!=': (a, b) => +(a !== b) };
-const ARITHMETIC = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b, '^': (a, b) => a ** b };
+const COMPARE = {
+	'<': (a, b) => +(a < b),
+	'<=': (a, b) => +(a <= b),
+	'>': (a, b) => +(a > b),
+	'>=': (a, b) => +(a >= b),
+	'==': (a, b) => +(a === b),
+	'!=': (a, b) => +(a !== b),
+};
+const ARITHMETIC = {
+	'+': (a, b) => a + b,
+	'-': (a, b) => a - b,
+	'*': (a, b) => a * b,
+	'/': (a, b) => a / b,
+	'^': (a, b) => a ** b,
+};
 
 /**
  * An expression over the faces, evaluated for each: numbers, the names in VARIABLES, + − * / ^ (or **), comparisons
@@ -33,7 +54,8 @@ const ARITHMETIC = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => 
  */
 export function evaluate(text, cells) {
 	const tokens = [];
-	const pattern = /\s*(?:(\d+\.?\d*(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)|([A-Za-z_]\w*)|(\*\*|<=|>=|==|!=|[-+*/^()<>,]))/iy;
+	const pattern =
+		/\s*(?:(\d+\.?\d*(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)|([A-Za-z_]\w*)|(\*\*|<=|>=|==|!=|[-+*/^()<>,]))/iy;
 	let at = 0;
 	const source = String(text);
 	while (at < source.length) {
@@ -41,7 +63,13 @@ export function evaluate(text, cells) {
 		pattern.lastIndex = at;
 		const m = pattern.exec(source);
 		if (!m) throw new Error(`The expression cannot be read at "${source.slice(at).trim().slice(0, 20)}".`);
-		tokens.push(m[1] !== undefined ? { number: Number(m[1]) } : m[2] !== undefined ? { name: m[2] } : { op: m[3] === '**' ? '^' : m[3] });
+		tokens.push(
+			m[1] !== undefined
+				? { number: Number(m[1]) }
+				: m[2] !== undefined
+					? { name: m[2] }
+					: { op: m[3] === '**' ? '^' : m[3] },
+		);
 		at = pattern.lastIndex;
 	}
 	const faces = cells.areas.length;
@@ -51,7 +79,10 @@ export function evaluate(text, cells) {
 	const isOp = (op) => tokens[i]?.op === op;
 	const isWord = (word) => tokens[i]?.name === word;
 	const expect = (op) => {
-		if (!isOp(op)) throw new Error(`The expression needs "${op}" ${tokens[i] ? 'before' : 'at the end'}${tokens[i] ? ` "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}"` : ''}.`);
+		if (!isOp(op))
+			throw new Error(
+				`The expression needs "${op}" ${tokens[i] ? 'before' : 'at the end'}${tokens[i] ? ` "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}"` : ''}.`,
+			);
 		i++;
 	};
 	// Each node is a number or a Float32Array with one value per face.
@@ -63,12 +94,12 @@ export function evaluate(text, cells) {
 	};
 	const either = () => {
 		let left = both();
-		while (isWord('or')) i++, (left = map((a, b) => +(a !== 0 || b !== 0), left, both()));
+		while (isWord('or')) (i++, (left = map((a, b) => +(a !== 0 || b !== 0), left, both())));
 		return left;
 	};
 	const both = () => {
 		let left = negation();
-		while (isWord('and')) i++, (left = map((a, b) => +(a !== 0 && b !== 0), left, negation()));
+		while (isWord('and')) (i++, (left = map((a, b) => +(a !== 0 && b !== 0), left, negation())));
 		return left;
 	};
 	const negation = () => (isWord('not') ? (i++, map((a) => +(a === 0), negation())) : comparison());
@@ -109,21 +140,26 @@ export function evaluate(text, cells) {
 				const [arity, f] = FUNCTIONS[name];
 				expect('(');
 				const args = [either()];
-				while (isOp(',')) i++, args.push(either());
+				while (isOp(',')) (i++, args.push(either()));
 				expect(')');
-				if (args.length !== arity) throw new Error(`${name} takes ${arity} argument${arity > 1 ? 's' : ''}; got ${args.length}.`);
+				if (args.length !== arity)
+					throw new Error(`${name} takes ${arity} argument${arity > 1 ? 's' : ''}; got ${args.length}.`);
 				return map(f, ...args);
 			}
 			if (VARIABLES[name]) {
 				if (!known.has(name)) known.set(name, VARIABLES[name](cells));
 				return known.get(name);
 			}
-			throw new Error(`The expression names "${token.name}", which is not known. Names: ${Object.keys(VARIABLES).join(', ')}; functions: ${Object.keys(FUNCTIONS).join(', ')}.`);
+			throw new Error(
+				`The expression names "${token.name}", which is not known. Names: ${Object.keys(VARIABLES).join(', ')}; functions: ${Object.keys(FUNCTIONS).join(', ')}.`,
+			);
 		}
 		throw new Error(`The expression has "${token.op}" where a value should be.`);
 	};
 	const value = either();
-	if (i < tokens.length) throw new Error(`The expression has more after its end, from "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}".`);
+	if (i < tokens.length)
+		throw new Error(
+			`The expression has more after its end, from "${tokens[i].op ?? tokens[i].name ?? tokens[i].number}".`,
+		);
 	return typeof value === 'number' ? new Float32Array(faces).fill(value) : value;
 }
-

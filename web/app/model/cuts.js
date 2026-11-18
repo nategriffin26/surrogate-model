@@ -33,7 +33,9 @@ export class SurfaceCutter {
 		const last = new Int32Array(triangles);
 		const start = new Uint32Array(bins + 1);
 		for (let t = 0; t < triangles; t++) {
-			const a = P[3 * I[3 * t] + axis], b = P[3 * I[3 * t + 1] + axis], c = P[3 * I[3 * t + 2] + axis];
+			const a = P[3 * I[3 * t] + axis],
+				b = P[3 * I[3 * t + 1] + axis],
+				c = P[3 * I[3 * t + 2] + axis];
 			first[t] = Math.floor((Math.min(a, b, c) - lo) / step);
 			last[t] = Math.floor((Math.max(a, b, c) - lo) / step);
 			for (let k = first[t]; k <= last[t]; k++) start[k + 1]++;
@@ -71,8 +73,9 @@ export class SurfaceCutter {
 				const above = (d[0] >= 0) + (d[1] >= 0) + (d[2] >= 0);
 				if (above === 0 || above === 3) continue;
 				for (let k = 0; k < 3; k++) {
-					const a = k, b = (k + 1) % 3;
-					if ((d[a] >= 0) === (d[b] >= 0)) continue;
+					const a = k,
+						b = (k + 1) % 3;
+					if (d[a] >= 0 === d[b] >= 0) continue;
 					const s = d[a] / (d[a] - d[b]);
 					for (let c = 0; c < 3; c++) points.push(P[3 * v[a] + c] + s * (P[3 * v[b] + c] - P[3 * v[a] + c]));
 				}

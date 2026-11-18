@@ -139,147 +139,166 @@ fn last(@builtin(global_invocation_id) id: vec3u) {
  * @returns {Promise<GpuNetworks | null>}
  */
 export async function createGpuNetworks(ensemble) {
-  const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
-  // A software adapter (SwiftShader, where the browser has no usable GPU) runs the kernels on the
-  // CPU far slower than the helpers' own path.
-  if (!adapter || adapter.info.isFallbackAdapter) return null;
-  const packed = packNetworks(ensemble);
-  const { stride, width } = packed;
-  const networks = ensemble.folds.length;
-  // A chunk's activations stay within 64 MiB, inside WebGPU's default binding limit.
-  const chunk = Math.max(TILE, Math.floor((64 << 20) / (4 * Math.max(width, stride)) / TILE) * TILE);
-  // The car's lookups (`lookups.js`) are built on this device too, from buffers holding every polygon
-  // centre and file point, 106 MB each on a DrivAerML car: past WebGPU's default binding limit for a
-  // larger file, so the device takes the most the adapter allows.
-  const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
-  const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize, maxStorageBufferBindingSize } });
-  // The browser can reset the GPU under it (a driver reset, its graphics process restarting); the
-  // device is then gone for good and the engine makes a new one for the next file.
-  let lost = false;
-  device.lost.then(() => {
-    lost = true;
-  });
+	const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
+	// A software adapter (SwiftShader, where the browser has no usable GPU) runs the kernels on the
+	// CPU far slower than the helpers' own path.
+	if (!adapter || adapter.info.isFallbackAdapter) return null;
+	const packed = packNetworks(ensemble);
+	const { stride, width } = packed;
+	const networks = ensemble.folds.length;
+	// A chunk's activations stay within 64 MiB, inside WebGPU's default binding limit.
+	const chunk = Math.max(TILE, Math.floor((64 << 20) / (4 * Math.max(width, stride)) / TILE) * TILE);
+	// The car's lookups (`lookups.js`) are built on this device too, from buffers holding every polygon
+	// centre and file point, 106 MB each on a DrivAerML car: past WebGPU's default binding limit for a
+	// larger file, so the device takes the most the adapter allows.
+	const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
+	const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize, maxStorageBufferBindingSize } });
+	// The browser can reset the GPU under it (a driver reset, its graphics process restarting); the
+	// device is then gone for good and the engine makes a new one for the next file.
+	let lost = false;
+	device.lost.then(() => {
+		lost = true;
+	});
 
-  device.pushErrorScope('validation');
-  const module = device.createShaderModule({ code: SHADER });
-  const densePipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'dense' } });
-  const lastPipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'last' } });
-  const invalid = await device.popErrorScope();
-  if (invalid) throw new Error(`The WebGPU networks failed to compile: ${invalid.message}`);
+	device.pushErrorScope('validation');
+	const module = device.createShaderModule({ code: SHADER });
+	const densePipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'dense' } });
+	const lastPipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'last' } });
+	const invalid = await device.popErrorScope();
+	if (invalid) throw new Error(`The WebGPU networks failed to compile: ${invalid.message}`);
 
-  const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
-  const weights = device.createBuffer({ size: packed.weights.byteLength, usage: storage });
-  device.queue.writeBuffer(weights, 0, packed.weights);
-  const features = device.createBuffer({ size: chunk * stride * 4, usage: storage });
-  const hidden = [0, 1].map(() => device.createBuffer({ size: chunk * width * 4, usage: storage }));
-  const models = device.createBuffer({ size: networks * chunk * 4, usage: storage });
-  const readback = device.createBuffer({ size: networks * chunk * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+	const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+	const weights = device.createBuffer({ size: packed.weights.byteLength, usage: storage });
+	device.queue.writeBuffer(weights, 0, packed.weights);
+	const features = device.createBuffer({ size: chunk * stride * 4, usage: storage });
+	const hidden = [0, 1].map(() => device.createBuffer({ size: chunk * width * 4, usage: storage }));
+	const models = device.createBuffer({ size: networks * chunk * 4, usage: storage });
+	const readback = device.createBuffer({
+		size: networks * chunk * 4,
+		usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+	});
 
-  const uniform = (words) => {
-    const buffer = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const data = new ArrayBuffer(32);
-    const u32 = new Uint32Array(data);
-    const f32 = new Float32Array(data);
-    words.forEach(([kind, value], i) => {
-      if (kind === 'u32') u32[i] = value;
-      else f32[i] = value;
-    });
-    device.queue.writeBuffer(buffer, 0, data);
-    return buffer;
-  };
+	const uniform = (words) => {
+		const buffer = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+		const data = new ArrayBuffer(32);
+		const u32 = new Uint32Array(data);
+		const f32 = new Float32Array(data);
+		words.forEach(([kind, value], i) => {
+			if (kind === 'u32') u32[i] = value;
+			else f32[i] = value;
+		});
+		device.queue.writeBuffer(buffer, 0, data);
+		return buffer;
+	};
 
-  // Every dispatch's bindings are fixed, so they are made once: per network, each hidden layer and the output.
-  const passes = packed.folds.map((fold, f) => {
-    const hiddenLayers = fold.layers.slice(0, -1);
-    const steps = hiddenLayers.map((layer, l) => {
-      const params = uniform([
-        ['u32', layer.inputs], ['u32', layer.outputs], ['u32', layer.weight], ['u32', layer.bias],
-        ['u32', fold.xMean], ['u32', fold.xStd], ['u32', l === 0 ? 1 : 0], ['f32', ensemble.zClip],
-      ]);
-      return {
-        outputs: layer.outputs,
-        bindGroup: device.createBindGroup({
-          layout: densePipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: { buffer: weights } },
-            { binding: 1, resource: { buffer: l === 0 ? features : hidden[(l - 1) % 2] } },
-            { binding: 2, resource: { buffer: hidden[l % 2] } },
-            { binding: 3, resource: { buffer: params } },
-          ],
-        }),
-      };
-    });
-    const last = fold.layers.at(-1);
-    const params = uniform([
-      ['u32', last.inputs], ['u32', last.weight], ['u32', last.bias], ['u32', f * chunk],
-      ['f32', fold.yStd], ['f32', fold.yMean],
-    ]);
-    const lastBindGroup = device.createBindGroup({
-      layout: lastPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: weights } },
-        { binding: 1, resource: { buffer: hidden[(hiddenLayers.length - 1) % 2] } },
-        { binding: 4, resource: { buffer: params } },
-        { binding: 5, resource: { buffer: models } },
-      ],
-    });
-    return { steps, lastBindGroup };
-  });
+	// Every dispatch's bindings are fixed, so they are made once: per network, each hidden layer and the output.
+	const passes = packed.folds.map((fold, f) => {
+		const hiddenLayers = fold.layers.slice(0, -1);
+		const steps = hiddenLayers.map((layer, l) => {
+			const params = uniform([
+				['u32', layer.inputs],
+				['u32', layer.outputs],
+				['u32', layer.weight],
+				['u32', layer.bias],
+				['u32', fold.xMean],
+				['u32', fold.xStd],
+				['u32', l === 0 ? 1 : 0],
+				['f32', ensemble.zClip],
+			]);
+			return {
+				outputs: layer.outputs,
+				bindGroup: device.createBindGroup({
+					layout: densePipeline.getBindGroupLayout(0),
+					entries: [
+						{ binding: 0, resource: { buffer: weights } },
+						{ binding: 1, resource: { buffer: l === 0 ? features : hidden[(l - 1) % 2] } },
+						{ binding: 2, resource: { buffer: hidden[l % 2] } },
+						{ binding: 3, resource: { buffer: params } },
+					],
+				}),
+			};
+		});
+		const last = fold.layers.at(-1);
+		const params = uniform([
+			['u32', last.inputs],
+			['u32', last.weight],
+			['u32', last.bias],
+			['u32', f * chunk],
+			['f32', fold.yStd],
+			['f32', fold.yMean],
+		]);
+		const lastBindGroup = device.createBindGroup({
+			layout: lastPipeline.getBindGroupLayout(0),
+			entries: [
+				{ binding: 0, resource: { buffer: weights } },
+				{ binding: 1, resource: { buffer: hidden[(hiddenLayers.length - 1) % 2] } },
+				{ binding: 4, resource: { buffer: params } },
+				{ binding: 5, resource: { buffer: models } },
+			],
+		});
+		return { steps, lastBindGroup };
+	});
 
-  async function run(input, count, out) {
-    for (let start = 0; start < count; start += chunk) {
-      const rows = Math.min(chunk, count - start);
-      const tiles = Math.ceil(rows / TILE);
-      device.queue.writeBuffer(features, 0, input, start * stride, rows * stride);
-      const encoder = device.createCommandEncoder();
-      for (const { steps, lastBindGroup } of passes) {
-        for (const step of steps) {
-          const pass = encoder.beginComputePass();
-          pass.setPipeline(densePipeline);
-          pass.setBindGroup(0, step.bindGroup);
-          pass.dispatchWorkgroups(tiles, step.outputs / TILE);
-          pass.end();
-        }
-        const pass = encoder.beginComputePass();
-        pass.setPipeline(lastPipeline);
-        pass.setBindGroup(0, lastBindGroup);
-        pass.dispatchWorkgroups(Math.ceil(rows / 64));
-        pass.end();
-      }
-      encoder.copyBufferToBuffer(models, 0, readback, 0, networks * chunk * 4);
-      device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ);
-      const result = new Float32Array(readback.getMappedRange());
-      for (let f = 0; f < networks; f++) out.set(result.subarray(f * chunk, f * chunk + rows), f * count + start);
-      readback.unmap();
-    }
-  }
+	async function run(input, count, out) {
+		for (let start = 0; start < count; start += chunk) {
+			const rows = Math.min(chunk, count - start);
+			const tiles = Math.ceil(rows / TILE);
+			device.queue.writeBuffer(features, 0, input, start * stride, rows * stride);
+			const encoder = device.createCommandEncoder();
+			for (const { steps, lastBindGroup } of passes) {
+				for (const step of steps) {
+					const pass = encoder.beginComputePass();
+					pass.setPipeline(densePipeline);
+					pass.setBindGroup(0, step.bindGroup);
+					pass.dispatchWorkgroups(tiles, step.outputs / TILE);
+					pass.end();
+				}
+				const pass = encoder.beginComputePass();
+				pass.setPipeline(lastPipeline);
+				pass.setBindGroup(0, lastBindGroup);
+				pass.dispatchWorkgroups(Math.ceil(rows / 64));
+				pass.end();
+			}
+			encoder.copyBufferToBuffer(models, 0, readback, 0, networks * chunk * 4);
+			device.queue.submit([encoder.finish()]);
+			await readback.mapAsync(GPUMapMode.READ);
+			const result = new Float32Array(readback.getMappedRange());
+			for (let f = 0; f < networks; f++) out.set(result.subarray(f * chunk, f * chunk + rows), f * count + start);
+			readback.unmap();
+		}
+	}
 
-  // Calls share the device buffers, so each waits for the one before it.
-  let previous = Promise.resolve();
-  function predict(input, count, out) {
-    const call = previous.then(() => run(input, count, out)).catch(async (error) => {
-      // Work cut off by a reset fails before or after `lost` settles; give it a moment to say which.
-      await Promise.race([device.lost, new Promise((resolve) => setTimeout(resolve, 100))]);
-      throw lost ? new Error('The browser reset the graphics processor during the analysis. Drop the file again to restart it.') : error;
-    });
-    previous = call.catch(() => {});
-    return call;
-  }
+	// Calls share the device buffers, so each waits for the one before it.
+	let previous = Promise.resolve();
+	function predict(input, count, out) {
+		const call = previous
+			.then(() => run(input, count, out))
+			.catch(async (error) => {
+				// Work cut off by a reset fails before or after `lost` settles; give it a moment to say which.
+				await Promise.race([device.lost, new Promise((resolve) => setTimeout(resolve, 100))]);
+				throw lost
+					? new Error(
+							'The browser reset the graphics processor during the analysis. Drop the file again to restart it.',
+						)
+					: error;
+			});
+		previous = call.catch(() => {});
+		return call;
+	}
 
-  // One pass over a tile of zeros compiles the pipelines now rather than on the first car.
-  await predict(new Float32Array(TILE * stride), TILE, new Float32Array(networks * TILE));
+	// One pass over a tile of zeros compiles the pipelines now rather than on the first car.
+	await predict(new Float32Array(TILE * stride), TILE, new Float32Array(networks * TILE));
 
-  const info = adapter.info;
-  return {
-    device,
-    name: info.description || vendorName(info.vendor),
-    stride,
-    predict,
-    get lost() {
-      return lost;
-    },
-  };
+	const info = adapter.info;
+	return {
+		device,
+		name: info.description || vendorName(info.vendor),
+		stride,
+		predict,
+		get lost() {
+			return lost;
+		},
+	};
 }
 
 /**
@@ -289,50 +308,50 @@ export async function createGpuNetworks(ensemble) {
  * @param {import('./network.js').Ensemble} ensemble
  */
 function packNetworks(ensemble) {
-  const pad = (n, to) => Math.ceil(n / to) * to;
-  const inputs = ensemble.features.count;
-  const stride = pad(inputs, 16);
-  const blocks = [];
-  let offset = 0;
-  const place = (array) => {
-    blocks.push(array);
-    const at = offset;
-    offset += array.length;
-    return at;
-  };
-  let width = 0;
-  const folds = ensemble.folds.map((fold) => {
-    const xMean = new Float32Array(stride);
-    const xStd = new Float32Array(stride).fill(1);
-    xMean.set(fold.xMean);
-    xStd.set(fold.xStd);
-    let previous = stride;
-    const layers = fold.layers.map((layer, l) => {
-      const isLast = l === fold.layers.length - 1;
-      const outputs = isLast ? 1 : pad(layer.outputs, TILE);
-      const weight = new Float32Array(Math.max(outputs, 4) * previous);
-      for (let o = 0; o < layer.outputs; o++) {
-        weight.set(layer.weight.subarray(o * layer.inputs, (o + 1) * layer.inputs), o * previous);
-      }
-      const bias = new Float32Array(Math.max(outputs, 4));
-      bias.set(layer.bias);
-      const packedLayer = { inputs: previous, outputs, weight: place(weight), bias: place(bias) };
-      if (!isLast) width = Math.max(width, outputs);
-      previous = outputs;
-      return packedLayer;
-    });
-    return { xMean: place(xMean), xStd: place(xStd), yMean: fold.yMean, yStd: fold.yStd, layers };
-  });
-  const weights = new Float32Array(offset);
-  let at = 0;
-  for (const block of blocks) {
-    weights.set(block, at);
-    at += block.length;
-  }
-  return { stride, width, folds, weights };
+	const pad = (n, to) => Math.ceil(n / to) * to;
+	const inputs = ensemble.features.count;
+	const stride = pad(inputs, 16);
+	const blocks = [];
+	let offset = 0;
+	const place = (array) => {
+		blocks.push(array);
+		const at = offset;
+		offset += array.length;
+		return at;
+	};
+	let width = 0;
+	const folds = ensemble.folds.map((fold) => {
+		const xMean = new Float32Array(stride);
+		const xStd = new Float32Array(stride).fill(1);
+		xMean.set(fold.xMean);
+		xStd.set(fold.xStd);
+		let previous = stride;
+		const layers = fold.layers.map((layer, l) => {
+			const isLast = l === fold.layers.length - 1;
+			const outputs = isLast ? 1 : pad(layer.outputs, TILE);
+			const weight = new Float32Array(Math.max(outputs, 4) * previous);
+			for (let o = 0; o < layer.outputs; o++) {
+				weight.set(layer.weight.subarray(o * layer.inputs, (o + 1) * layer.inputs), o * previous);
+			}
+			const bias = new Float32Array(Math.max(outputs, 4));
+			bias.set(layer.bias);
+			const packedLayer = { inputs: previous, outputs, weight: place(weight), bias: place(bias) };
+			if (!isLast) width = Math.max(width, outputs);
+			previous = outputs;
+			return packedLayer;
+		});
+		return { xMean: place(xMean), xStd: place(xStd), yMean: fold.yMean, yStd: fold.yStd, layers };
+	});
+	const weights = new Float32Array(offset);
+	let at = 0;
+	for (const block of blocks) {
+		weights.set(block, at);
+		at += block.length;
+	}
+	return { stride, width, folds, weights };
 }
 
 function vendorName(vendor) {
-  const names = { apple: 'Apple', nvidia: 'NVIDIA', amd: 'AMD', intel: 'Intel', qualcomm: 'Qualcomm', arm: 'Arm' };
-  return names[vendor] ?? vendor;
+	const names = { apple: 'Apple', nvidia: 'NVIDIA', amd: 'AMD', intel: 'Intel', qualcomm: 'Qualcomm', arm: 'Arm' };
+	return names[vendor] ?? vendor;
 }

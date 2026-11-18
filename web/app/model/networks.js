@@ -93,41 +93,99 @@ export function createNetworks({ card, groups }) {
 	const state = { network: 0, point: null };
 	const runs = card.trainRuns;
 	const cpCells = card.networks.map(() => h('span', { class: 'fold-cp num' }));
-	const foldRows = card.networks.map((network, k) => h('div', {
-		class: 'fold-row', role: 'radio', tabindex: 0, 'aria-checked': String(k === 0),
-		onclick: () => choose(k),
-		onkeydown: (e) => {
-			if (e.key !== 'Enter' && e.key !== ' ') return;
-			e.preventDefault();
-			choose(k);
-		},
-	},
-	copied(h('span', { class: 'fold-name' }), 'networks.folds.name', { network: k + 1 }),
-	runs.map((run) => h('i', { class: `fold-car${network.validationRuns.includes(run) ? ' held' : ''}`, title: text('networks.folds.run', { run }) })),
-	cpCells[k]));
+	const foldRows = card.networks.map((network, k) =>
+		h(
+			'div',
+			{
+				class: 'fold-row',
+				role: 'radio',
+				tabindex: 0,
+				'aria-checked': String(k === 0),
+				onclick: () => choose(k),
+				onkeydown: (e) => {
+					if (e.key !== 'Enter' && e.key !== ' ') return;
+					e.preventDefault();
+					choose(k);
+				},
+			},
+			copied(h('span', { class: 'fold-name' }), 'networks.folds.name', { network: k + 1 }),
+			runs.map((run) =>
+				h('i', {
+					class: `fold-car${network.validationRuns.includes(run) ? ' held' : ''}`,
+					title: text('networks.folds.run', { run }),
+				}),
+			),
+			cpCells[k],
+		),
+	);
 
 	const network = card.networks[0];
 
-	const el = section('networks', { heldOut: network.validationRuns.length },
-		h('div', { class: 'networks-layout' },
-			h('figure', { class: 'figure' },
-				h('div', { class: 'network-holder' }, canvas, copied(h('span', { class: 'network-output' }), 'networks.network.output')),
+	const el = section(
+		'networks',
+		{ heldOut: network.validationRuns.length },
+		h(
+			'div',
+			{ class: 'networks-layout' },
+			h(
+				'figure',
+				{ class: 'figure' },
+				h(
+					'div',
+					{ class: 'network-holder' },
+					canvas,
+					copied(h('span', { class: 'network-output' }), 'networks.network.output'),
+				),
 				copied(h('p', { class: 'small-number num' }), 'networks.network.note', {
-					layers: network.layers.join(' → '), weights: count(parameters(network.layers)),
-				})),
-			h('figure', { class: 'figure' },
-				h('div', { class: 'folds', role: 'radiogroup', 'aria-label': text('networks.folds.label') },
-					h('div', { class: 'fold-row fold-head' }, h('span'), runs.map((run) => h('span', { class: 'fold-run num' }, run)), copied(h('span', { class: 'fold-cp' }), 'networks.folds.cp')),
-					foldRows),
-				h('p', { class: 'fold-key copy-block' },
-					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car' }), copied(h('span'), 'networks.folds.trained')),
-					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car held' }), copied(h('span'), 'networks.folds.held'))))));
+					layers: network.layers.join(' → '),
+					weights: count(parameters(network.layers)),
+				}),
+			),
+			h(
+				'figure',
+				{ class: 'figure' },
+				h(
+					'div',
+					{ class: 'folds', role: 'radiogroup', 'aria-label': text('networks.folds.label') },
+					h(
+						'div',
+						{ class: 'fold-row fold-head' },
+						h('span'),
+						runs.map((run) => h('span', { class: 'fold-run num' }, run)),
+						copied(h('span', { class: 'fold-cp' }), 'networks.folds.cp'),
+					),
+					foldRows,
+				),
+				h(
+					'p',
+					{ class: 'fold-key copy-block' },
+					h(
+						'span',
+						{ class: 'copy-block' },
+						h('i', { class: 'fold-car' }),
+						copied(h('span'), 'networks.folds.trained'),
+					),
+					h(
+						'span',
+						{ class: 'copy-block' },
+						h('i', { class: 'fold-car held' }),
+						copied(h('span'), 'networks.folds.held'),
+					),
+				),
+			),
+		),
+	);
 	el.prepend(locator('networks'));
 
 	function draw() {
 		const explanation = state.point?.explanation;
 		if (!explanation) return;
-		drawNetwork(canvas, { card, groups, layers: explanation.activations[state.network], cp: explanation.cpModels[state.network] });
+		drawNetwork(canvas, {
+			card,
+			groups,
+			layers: explanation.activations[state.network],
+			cp: explanation.cpModels[state.network],
+		});
 		explanation.cpModels.forEach((cp, k) => (cpCells[k].textContent = signed(cp, 3)));
 	}
 

@@ -10,7 +10,8 @@ import { readSet } from './probes.js';
 
 const PLOT = { width: 900, height: 300 };
 
-const escapeHtml = (text) => String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
+const escapeHtml = (text) =>
+	String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 const number = (v, digits = 3) => (v === null || v === undefined ? '' : signed(v, digits));
 /** Markup set into a table as it is, for a coefficient's name; every other cell is text. */
 const markup = (html) => ({ html });
@@ -18,7 +19,8 @@ const markup = (html) => ({ html });
 const coefficient = (axis) => `C<sub>${axis}</sub>`;
 const cell = (content) => content.html ?? escapeHtml(content);
 /** A table; with a null head, rows of a label and its value. */
-const table = (head, rows) => `<table>${head ? `<thead><tr>${head.map((content) => `<th>${cell(content)}</th>`).join('')}</tr></thead>` : ''}<tbody>${rows.map((row) => `<tr>${row.map((content) => `<td>${cell(content)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+const table = (head, rows) =>
+	`<table>${head ? `<thead><tr>${head.map((content) => `<th>${cell(content)}</th>`).join('')}</tr></thead>` : ''}<tbody>${rows.map((row) => `<tr>${row.map((content) => `<td>${cell(content)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 const note = (text) => `<p class="basis">${escapeHtml(text)}</p>`;
 
 const STYLE = `
@@ -38,29 +40,38 @@ th:first-child, td:first-child { text-align: left; padding-left: 0; }
 `;
 
 /** The app's own stylesheets; the report reads nothing it could not reach offline. */
-const ownSheets = () => [...document.styleSheets].filter((sheet) => !sheet.href || new URL(sheet.href).origin === location.origin);
+const ownSheets = () =>
+	[...document.styleSheets].filter((sheet) => !sheet.href || new URL(sheet.href).origin === location.origin);
 
 /** The theme's colours and fonts, and the plot's styles, as the page has them: one source for the tool and the report. */
 function carriedStyles() {
 	const rules = ownSheets().flatMap((sheet) => [...sheet.cssRules]);
-	return rules.filter((rule) => rule.selectorText === ':root' || rule.selectorText?.startsWith('svg ')).map((rule) => rule.cssText).join('\n');
+	return rules
+		.filter((rule) => rule.selectorText === ':root' || rule.selectorText?.startsWith('svg '))
+		.map((rule) => rule.cssText)
+		.join('\n');
 }
 
-const dataUrl = (blob) => new Promise((resolve, reject) => {
-	const reader = new FileReader();
-	reader.onload = () => resolve(reader.result);
-	reader.onerror = () => reject(reader.error);
-	reader.readAsDataURL(blob);
-});
+const dataUrl = (blob) =>
+	new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(reader.result);
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(blob);
+	});
 
 /** The theme's @font-face rules with each vendored file inlined as a data URL, so the report keeps its faces offline. */
 async function carriedFaces() {
-	const faces = ownSheets().flatMap((sheet) => [...sheet.cssRules].filter((rule) => rule instanceof CSSFontFaceRule).map((rule) => ({ rule, base: sheet.href })));
-	const inlined = await Promise.all(faces.map(async ({ rule, base }) => {
-		const [, file] = rule.style.getPropertyValue('src').match(/url\("?([^")]+)"?\)/);
-		const data = await dataUrl(await (await fetch(new URL(file, base))).blob());
-		return rule.cssText.replace(file, data);
-	}));
+	const faces = ownSheets().flatMap((sheet) =>
+		[...sheet.cssRules].filter((rule) => rule instanceof CSSFontFaceRule).map((rule) => ({ rule, base: sheet.href })),
+	);
+	const inlined = await Promise.all(
+		faces.map(async ({ rule, base }) => {
+			const [, file] = rule.style.getPropertyValue('src').match(/url\("?([^")]+)"?\)/);
+			const data = await dataUrl(await (await fetch(new URL(file, base))).blob());
+			return rule.cssText.replace(file, data);
+		}),
+	);
 	return inlined.join('\n');
 }
 
@@ -72,22 +83,40 @@ export function defineReport({ session, engine, section, comparison, variants })
 		const s = caseSummary(c, null);
 		const point = (p) => `(${p.map((v) => signed(v, 2)).join(', ')}) m`;
 		const rows = [
-			[markup(coefficient('x')), number(s.cx)], [markup(coefficient('y')), number(s.cy)], [markup(coefficient('z')), number(s.cz)], ['Mean Cp', number(s.mean_cp)],
-			['Area', `${s.area_m2.toFixed(2)} m²`], ['Frontal area', `${s.reference_area_m2.toFixed(2)} m²`],
+			[markup(coefficient('x')), number(s.cx)],
+			[markup(coefficient('y')), number(s.cy)],
+			[markup(coefficient('z')), number(s.cz)],
+			['Mean Cp', number(s.mean_cp)],
+			['Area', `${s.area_m2.toFixed(2)} m²`],
+			['Frontal area', `${s.reference_area_m2.toFixed(2)} m²`],
 			['Length × width × height', `${[s.length_m, s.width_m, s.height_m].map((v) => v.toFixed(2)).join(' × ')} m`],
-			[markup(`${coefficient('x')} by network`), `${number(Math.min(...s.cx_by_network))} to ${number(Math.max(...s.cx_by_network))}`],
+			[
+				markup(`${coefficient('x')} by network`),
+				`${number(Math.min(...s.cx_by_network))} to ${number(Math.max(...s.cx_by_network))}`,
+			],
 			['Cp max', `${number(s.cp_max.value, 2)} at ${point(s.cp_max.center_m)}`],
 			['Cp min', `${number(s.cp_min.value, 2)} at ${point(s.cp_min.center_m)}`],
-			...(s.reference ? [[markup(`${coefficient('x')} of the CFD`), number(s.reference.cx)], ['R² against the CFD', number(s.reference.r2)]] : []),
+			...(s.reference
+				? [
+						[markup(`${coefficient('x')} of the CFD`), number(s.reference.cx)],
+						['R² against the CFD', number(s.reference.r2)],
+					]
+				: []),
 		];
-		const outside = s.outside_training.map((d) => `${d.dimension} ${d.value_m.toFixed(3)} m (training ${d.training_min_m.toFixed(3)} to ${d.training_max_m.toFixed(3)} m)`);
+		const outside = s.outside_training.map(
+			(d) =>
+				`${d.dimension} ${d.value_m.toFixed(3)} m (training ${d.training_min_m.toFixed(3)} to ${d.training_max_m.toFixed(3)} m)`,
+		);
 		return `<h2>Whole car</h2>${table(null, rows)}${note(`Summed over ${s.totals_over}.`)}${outside.length ? note(`Outside the training range: ${outside.join('; ')}.`) : ''}`;
 	}
 
 	function sectionPart() {
 		if (!view.section.on) return '';
 		const { svg, key, plane } = section.picture(PLOT.width, PLOT.height);
-		const items = key.map(({ label, colour, width, opacity, dashed }) => `<span><i style="border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${escapeHtml(colour)}; opacity: ${opacity}"></i>${escapeHtml(label)}</span>`);
+		const items = key.map(
+			({ label, colour, width, opacity, dashed }) =>
+				`<span><i style="border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${escapeHtml(colour)}; opacity: ${opacity}"></i>${escapeHtml(label)}</span>`,
+		);
 		return `<h2>Section ${escapeHtml(plane)}</h2>${new XMLSerializer().serializeToString(svg)}<div class="key">${items.join('')}</div>`;
 	}
 
@@ -95,7 +124,12 @@ export function defineReport({ session, engine, section, comparison, variants })
 		const set = session.probeSets.find((x) => x.id === view.probeSet);
 		if (!set?.probes.length) return '';
 		const sites = await readSet(engine, c, set);
-		const rows = set.probes.map((p, i) => [p.n, ...sites[i].point.map((v) => signed(v, 3)), number(sites[i].cp), number(sites[i].sigma)]);
+		const rows = set.probes.map((p, i) => [
+			p.n,
+			...sites[i].point.map((v) => signed(v, 3)),
+			number(sites[i].cp),
+			number(sites[i].sigma),
+		]);
 		return `<h2>Probes: ${escapeHtml(set.name)}</h2>${table(['Probe', 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
 	}
 
@@ -104,10 +138,32 @@ export function defineReport({ session, engine, section, comparison, variants })
 		if (!out) return '';
 		const other = out.compared_with === 'cfd' ? 'CFD' : out.compared_with.name;
 		const mine = out.compared_with === 'cfd' ? 'Predicted' : c.name;
-		const columns = [['cx', coefficient('x')], ['cz', coefficient('z')], ['mean_cp', 'Mean Cp']];
-		const head = ['', ...columns.flatMap(([, name]) => [markup(`${name}, ${escapeHtml(mine)}`), markup(`${name}, ${escapeHtml(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
+		const columns = [
+			['cx', coefficient('x')],
+			['cz', coefficient('z')],
+			['mean_cp', 'Mean Cp'],
+		];
+		const head = [
+			'',
+			...columns.flatMap(([, name]) => [
+				markup(`${name}, ${escapeHtml(mine)}`),
+				markup(`${name}, ${escapeHtml(other)}`),
+				markup(`Δ${name}`),
+			]),
+			'RMS ΔCp',
+		];
 		const whole = out.whole_car;
-		const rows = [['Whole car', ...columns.flatMap(([key]) => [number(whole.this_car[key]), number(whole.other[key]), number(whole.difference[key])]), number(whole.rms_dcp)]];
+		const rows = [
+			[
+				'Whole car',
+				...columns.flatMap(([key]) => [
+					number(whole.this_car[key]),
+					number(whole.other[key]),
+					number(whole.difference[key]),
+				]),
+				number(whole.rms_dcp),
+			],
+		];
 		return `<h2>Compared with ${escapeHtml(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
 	}
 
@@ -116,8 +172,26 @@ export function defineReport({ session, engine, section, comparison, variants })
 		if (!study) return '';
 		const unchanged = study.car.predicted_unchanged;
 		const rows = [
-			[`${study.car.name}, unchanged`, number(unchanged.cx), '', number(unchanged.cz), '', number(unchanged.mean_cp), '', unchanged.frontal_area_m2.toFixed(3)],
-			...study.variants.map((v) => [v.name, number(v.cx), number(v.difference.cx), number(v.cz), number(v.difference.cz), number(v.mean_cp), number(v.difference.mean_cp), v.frontal_area_m2.toFixed(3)]),
+			[
+				`${study.car.name}, unchanged`,
+				number(unchanged.cx),
+				'',
+				number(unchanged.cz),
+				'',
+				number(unchanged.mean_cp),
+				'',
+				unchanged.frontal_area_m2.toFixed(3),
+			],
+			...study.variants.map((v) => [
+				v.name,
+				number(v.cx),
+				number(v.difference.cx),
+				number(v.cz),
+				number(v.difference.cz),
+				number(v.mean_cp),
+				number(v.difference.mean_cp),
+				v.frontal_area_m2.toFixed(3),
+			]),
 		];
 		return `<h2>Study</h2>${table(['Variant', markup(coefficient('x')), markup(`Δ${coefficient('x')}`), markup(coefficient('z')), markup(`Δ${coefficient('z')}`), 'Mean Cp', 'ΔMean Cp', 'Frontal area, m²'], rows)}${note(study.predicted_on)}`;
 	}
@@ -125,7 +199,13 @@ export function defineReport({ session, engine, section, comparison, variants })
 	async function reportOf(c) {
 		const picture = await dataUrl(await EXPORTS.get('picture').make(c));
 		const r = c.result;
-		const made = new Date().toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+		const made = new Date().toLocaleString('en-GB', {
+			day: 'numeric',
+			month: 'short',
+			year: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+		});
 		const meta = [
 			c.variant ? `Variant of ${c.variant.root.name}` : 'Predicted surface pressure',
 			made,
@@ -157,7 +237,8 @@ ${parts.join('\n')}
 		name: 'report',
 		label: 'Report',
 		format: 'HTML',
-		title: 'The analysis on screen as one page: the view, the whole car, the section, probes, the comparison and the study',
+		title:
+			'The analysis on screen as one page: the view, the whole car, the section, probes, the comparison and the study',
 		unavailable: () => null,
 		make: async (c) => new Blob([await reportOf(c)], { type: 'text/html' }),
 		fileName: (c) => `${baseName(c)}-report.html`,

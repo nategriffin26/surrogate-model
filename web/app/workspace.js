@@ -37,7 +37,10 @@
 /** A path as the workspace keeps it, or an error saying what is wrong with it. */
 export function normalPath(path) {
 	if (typeof path !== 'string') throw new Error('A path is a string such as "study/variants.csv".');
-	const parts = path.replaceAll('\\', '/').split('/').filter((part) => part !== '' && part !== '.');
+	const parts = path
+		.replaceAll('\\', '/')
+		.split('/')
+		.filter((part) => part !== '' && part !== '.');
 	if (parts.length === 0) throw new Error('The path is empty. Give a file name such as "notes.txt".');
 	if (parts.includes('..')) throw new Error(`"${path}" climbs out of the workspace with "..". Give a path inside it.`);
 	return parts.join('/');
@@ -56,7 +59,8 @@ export function createWorkspace() {
 
 	function write(path, blob, by) {
 		path = normalPath(path);
-		if ([...entries.keys()].some((p) => p.startsWith(`${path}/`))) throw new Error(`"${path}" is a folder. Give a file name inside it.`);
+		if ([...entries.keys()].some((p) => p.startsWith(`${path}/`)))
+			throw new Error(`"${path}" is a folder. Give a file name inside it.`);
 		const file = { path, blob, size: blob.size, modified: Date.now(), by };
 		entries.set(path, file);
 		emit({ kind: 'write', path, by });

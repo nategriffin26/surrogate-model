@@ -73,4 +73,3 @@ export function markup(tag, key, values = {}, attributes = '') {
 	const filled = text(key, values).replace(/[&<>"]/g, (c) => ESCAPES[c]);
 	return `<${tag} data-copy="${key}"${attributes ? ` ${attributes}` : ''}${filled === '' ? ' hidden' : ''}>${filled}</${tag}>`;
 }
-

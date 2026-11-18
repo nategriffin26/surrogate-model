@@ -6,7 +6,21 @@ import { niceTicks } from '../format.js';
 import { rampCss } from '../ramps.js';
 import { copied, hasCopy } from './copy.js';
 
-const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const NUMBER_WORDS = [
+	'no',
+	'one',
+	'two',
+	'three',
+	'four',
+	'five',
+	'six',
+	'seven',
+	'eight',
+	'nine',
+	'ten',
+	'eleven',
+	'twelve',
+];
 /** A count as a word, or as digits beyond twelve; a placeholder written capitalised ({CarsWord}) begins a sentence with it. */
 export const countWord = (n) => NUMBER_WORDS[n] ?? n.toLocaleString('en-US');
 
@@ -21,19 +35,31 @@ export function runOf(result) {
  * (`<id>.lede`), and its figures.
  */
 export function section(id, values, ...figures) {
-	return h('section', { class: 'model-section', id: `model-${id}`, 'data-section': id },
+	return h(
+		'section',
+		{ class: 'model-section', id: `model-${id}`, 'data-section': id },
 		copied(h('h2'), `${id}.title`, values),
 		hasCopy(`${id}.lede`) ? copied(h('p', { class: 'lede' }), `${id}.lede`, values) : null,
-		...figures);
+		...figures,
+	);
 }
 
 /** A colour map's ramp with ticks under it, named by the words at `labelKey`. */
 export function colorBar({ ramp, lo, hi }, labelKey) {
 	const { ticks, digits } = niceTicks(lo, hi, 4);
-	return h('div', { class: 'color-bar' },
+	return h(
+		'div',
+		{ class: 'color-bar' },
 		copied(h('span', { class: 'color-bar-label' }), labelKey),
 		h('span', { class: 'color-bar-ramp', style: `background: ${rampCss(ramp)}` }),
-		h('span', { class: 'color-bar-ticks num' }, ticks.map((t) => h('span', { style: `left: ${(100 * (t - lo)) / (hi - lo)}%` }, t.toFixed(digits).replace('-', '−')))));
+		h(
+			'span',
+			{ class: 'color-bar-ticks num' },
+			ticks.map((t) =>
+				h('span', { style: `left: ${(100 * (t - lo)) / (hi - lo)}%` }, t.toFixed(digits).replace('-', '−')),
+			),
+		),
+	);
 }
 
 const NEGATIVE = [163, 91, 26];

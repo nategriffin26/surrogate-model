@@ -21,7 +21,11 @@ export function createDock({ section, probes, panels, active, view, actions, res
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
-	const collapse = h('button', { type: 'button', class: 'icon-button dock-collapse', title: 'Collapse plots', onclick: () => actions.collapse() }, icon('chevron'));
+	const collapse = h(
+		'button',
+		{ type: 'button', class: 'icon-button dock-collapse', title: 'Collapse plots', onclick: () => actions.collapse() },
+		icon('chevron'),
+	);
 	const svg = s('svg', { class: 'plot' });
 	const readout = h('div', { class: 'plot-readout' });
 	const table = h('div', { class: 'dock-table' });
@@ -36,7 +40,10 @@ export function createDock({ section, probes, panels, active, view, actions, res
 		document.body.classList.add('resizing');
 		const move = (ev) => {
 			const bottom = el.parentElement.getBoundingClientRect().bottom;
-			document.body.style.setProperty('--dock', `${Math.min(innerHeight * DOCK_MAX_SHARE, Math.max(DOCK_MIN_PX, bottom - ev.clientY))}px`);
+			document.body.style.setProperty(
+				'--dock',
+				`${Math.min(innerHeight * DOCK_MAX_SHARE, Math.max(DOCK_MIN_PX, bottom - ev.clientY))}px`,
+			);
 		};
 		const end = () => {
 			document.body.classList.remove('resizing');
@@ -53,7 +60,7 @@ export function createDock({ section, probes, panels, active, view, actions, res
 	/** Where the section plot is drawn: the whole dock on the Section tab, beside a panel's numbers, or nowhere. */
 	function sectionHost() {
 		if (view.dock === 'section') return body;
-		return view.section.on ? panelShown()?.sectionSlot ?? null : null;
+		return view.section.on ? (panelShown()?.sectionSlot ?? null) : null;
 	}
 
 	function drawPlotNow() {
@@ -86,9 +93,28 @@ export function createDock({ section, probes, panels, active, view, actions, res
 		const c = active();
 		const result = Boolean(c?.result);
 		const counted = (label, count) => (count ? `${label} (${count})` : label);
-		const names = [['section', 'Section'], ['probes', counted('Probes', result ? probes.count() : 0)], ...panels.map((p) => [p.name, counted(p.label, result ? p.count?.() : 0)])];
-		tabs.replaceChildren(...names.map(([name, label]) =>
-			h('button', { type: 'button', role: 'tab', class: 'dock-tab', 'data-tab': name, disabled: !result, 'aria-selected': String(result && name === view.dock), onclick: () => actions.tab(name) }, label)));
+		const names = [
+			['section', 'Section'],
+			['probes', counted('Probes', result ? probes.count() : 0)],
+			...panels.map((p) => [p.name, counted(p.label, result ? p.count?.() : 0)]),
+		];
+		tabs.replaceChildren(
+			...names.map(([name, label]) =>
+				h(
+					'button',
+					{
+						type: 'button',
+						role: 'tab',
+						class: 'dock-tab',
+						'data-tab': name,
+						disabled: !result,
+						'aria-selected': String(result && name === view.dock),
+						onclick: () => actions.tab(name),
+					},
+					label,
+				),
+			),
+		);
 		collapse.disabled = !result;
 		el.classList.toggle('collapsed', view.dockCollapsed);
 		collapse.title = view.dockCollapsed ? 'Expand plots' : 'Collapse plots';
@@ -100,7 +126,12 @@ export function createDock({ section, probes, panels, active, view, actions, res
 			svg.replaceChildren();
 			return;
 		}
-		const wanted = view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : panelShown().controls;
+		const wanted =
+			view.dock === 'section'
+				? section.controls(c)
+				: view.dock === 'probes'
+					? probes.actions(c)
+					: panelShown().controls;
 		// The section controls are one element updated in place; detaching it would end a drag on its slider.
 		if (!wanted) controls.replaceChildren();
 		else if (controls.firstChild !== wanted || controls.childNodes.length !== 1) controls.replaceChildren(wanted);

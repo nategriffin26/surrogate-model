@@ -40,8 +40,23 @@ const LABEL_CHARS = 80;
 /** Arrows given no scale are drawn with the longest this share of the car's length. */
 const ARROW_SHARE = 0.06;
 /** A layer called by no name takes its kind's. */
-const DEFAULT_NAMES = { labels: 'Labels', points: 'Points', lines: 'Lines', arrows: 'Arrows', box: 'Boxes', plane: 'Planes', paint: 'Paint' };
-const KIND_WORDS = { labels: ['label', 'labels'], points: ['point', 'points'], lines: ['line', 'lines'], arrows: ['arrow', 'arrows'], box: ['box', 'boxes'], plane: ['plane', 'planes'] };
+const DEFAULT_NAMES = {
+	labels: 'Labels',
+	points: 'Points',
+	lines: 'Lines',
+	arrows: 'Arrows',
+	box: 'Boxes',
+	plane: 'Planes',
+	paint: 'Paint',
+};
+const KIND_WORDS = {
+	labels: ['label', 'labels'],
+	points: ['point', 'points'],
+	lines: ['line', 'lines'],
+	arrows: ['arrow', 'arrows'],
+	box: ['box', 'boxes'],
+	plane: ['plane', 'planes'],
+};
 
 /**
  * @typedef {Object} Layer
@@ -65,11 +80,16 @@ const storeOf = (c) => stores.get(c) ?? stores.set(c, { layers: [], version: 0, 
 /** Points as a flat (N, 3) array: a typed array from Python, a list of [x, y, z], or one [x, y, z]. */
 function pointsOf(name, value) {
 	if (ArrayBuffer.isView(value)) {
-		if (value.length === 0 || value.length % 3) throw new Error(`${name} must hold three numbers per point; got ${value.length} numbers.`);
+		if (value.length === 0 || value.length % 3)
+			throw new Error(`${name} must hold three numbers per point; got ${value.length} numbers.`);
 		return Float32Array.from(value);
 	}
-	if (Array.isArray(value) && value.length === 3 && value.every((v) => typeof v === 'number')) return Float32Array.from(triple(name, value));
-	if (!Array.isArray(value) || value.length === 0) throw new Error(`${name} must be a list of points [x, y, z] in metres; got ${JSON.stringify(value)?.slice(0, 80)}.`);
+	if (Array.isArray(value) && value.length === 3 && value.every((v) => typeof v === 'number'))
+		return Float32Array.from(triple(name, value));
+	if (!Array.isArray(value) || value.length === 0)
+		throw new Error(
+			`${name} must be a list of points [x, y, z] in metres; got ${JSON.stringify(value)?.slice(0, 80)}.`,
+		);
 	const out = new Float32Array(3 * value.length);
 	value.forEach((p, i) => out.set(triple(`${name}[${i}]`, p), 3 * i));
 	return out;
@@ -82,7 +102,9 @@ function colourOf(name, value) {
 		if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
 		if (/^#[0-9a-f]{3}$/i.test(value)) return `#${[...value.slice(1)].map((d) => d + d).join('')}`.toLowerCase();
 	}
-	throw new Error(`${name} must be a colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; got ${JSON.stringify(value)}.`);
+	throw new Error(
+		`${name} must be a colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; got ${JSON.stringify(value)}.`,
+	);
 }
 
 function widthOf(name, value) {
@@ -93,7 +115,10 @@ function widthOf(name, value) {
 
 /** RGBA bytes per item, from Python: `count` items. */
 function itemColours(name, value, items) {
-	if (!(value instanceof Uint8Array) || value.length !== 4 * items) throw new Error(`${name} must be RGBA bytes, four per item (${4 * items}); got ${value?.length ?? JSON.stringify(value)}.`);
+	if (!(value instanceof Uint8Array) || value.length !== 4 * items)
+		throw new Error(
+			`${name} must be RGBA bytes, four per item (${4 * items}); got ${value?.length ?? JSON.stringify(value)}.`,
+		);
 	return value;
 }
 
@@ -194,7 +219,10 @@ function scaleFor(values) {
 
 /** Area-weighted mean, lowest and highest of per-face values. */
 function statistics(values, areas) {
-	let sum = 0, area = 0, lo = Infinity, hi = -Infinity;
+	let sum = 0,
+		area = 0,
+		lo = Infinity,
+		hi = -Infinity;
 	for (let f = 0; f < values.length; f++) {
 		sum += values[f] * areas[f];
 		area += areas[f];
@@ -222,7 +250,14 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	const layerOn = (store, name) => store.layers.find((layer) => layer.name === name);
 	const needLayer = (c, name) => {
 		const layer = layerOn(storeOf(c), name);
-		if (!layer) throw new Error(`Case ${c.id} has no layer "${name}". Its layers: ${storeOf(c).layers.map((l) => `"${l.name}"`).join(', ') || 'none'}.`);
+		if (!layer)
+			throw new Error(
+				`Case ${c.id} has no layer "${name}". Its layers: ${
+					storeOf(c)
+						.layers.map((l) => `"${l.name}"`)
+						.join(', ') || 'none'
+				}.`,
+			);
 		return layer;
 	};
 	const fieldLayer = (c, key) => storeOf(c).layers.find((layer) => layer.field?.key === key) ?? null;
@@ -240,9 +275,20 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	function drawingLayer(c, name, by, style) {
 		const store = storeOf(c);
 		let layer = layerOn(store, name);
-		if (layer?.kind === 'field') throw new Error(`"${name}" is a field layer on case ${c.id}; draw in a layer of another name.`);
+		if (layer?.kind === 'field')
+			throw new Error(`"${name}" is a field layer on case ${c.id}; draw in a layer of another name.`);
 		if (!layer) {
-			layer = { name, kind: 'drawing', by, visible: true, colour: PALETTE.ink, width: LINE_PX, marks: [], paint: null, field: null };
+			layer = {
+				name,
+				kind: 'drawing',
+				by,
+				visible: true,
+				colour: PALETTE.ink,
+				width: LINE_PX,
+				marks: [],
+				paint: null,
+				field: null,
+			};
 			store.layers.push(layer);
 		}
 		if (style.colour !== undefined) layer.colour = colourOf('colour', style.colour);
@@ -252,7 +298,10 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	/** Add a mark to a layer of case c and show it. */
 	function draw(c, args, by, kind, mark) {
-		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES[kind]), by, { colour: args.colour, width_px: args.width_px });
+		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES[kind]), by, {
+			colour: args.colour,
+			width_px: args.width_px,
+		});
 		layer.marks.push(mark);
 		layer.visible = true;
 		changed(c);
@@ -265,8 +314,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	/** Make sure the field `key` is offered while any case has it, at the scale given. */
 	function offerField(key, name, unit, source, start, diverging) {
-		const values = (c) => (c?.result && stores.has(c) ? fieldLayer(c, key)?.field.vertices ?? null : null);
-		addField(key, { label: name, title: unit ? `${name} (${unit})` : name, symbol: name, tip: source, values }, { ramps: [start.ramp, ...RAMP_NAMES.filter((r) => r !== start.ramp)], diverging, start });
+		const values = (c) => (c?.result && stores.has(c) ? (fieldLayer(c, key)?.field.vertices ?? null) : null);
+		addField(
+			key,
+			{ label: name, title: unit ? `${name} (${unit})` : name, symbol: name, tip: source, values },
+			{ ramps: [start.ramp, ...RAMP_NAMES.filter((r) => r !== start.ramp)], diverging, start },
+		);
 		view.maps ??= {};
 		view.maps[key] = { ...start };
 	}
@@ -281,24 +334,33 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	function showField(c, { name, expression, values, unit = '', ramp, min, max }, by) {
 		const label = nameOf(name, undefined);
-		if (label === undefined) throw new Error('name is needed: the field\'s name, as the toolbar shows it.');
-		if ((expression === undefined) === (values === undefined)) throw new Error('Give expression or values, one of them.');
+		if (label === undefined) throw new Error("name is needed: the field's name, as the toolbar shows it.");
+		if ((expression === undefined) === (values === undefined))
+			throw new Error('Give expression or values, one of them.');
 		const mesh = c.result.mesh;
 		const cells = cellsOf(c.result);
-		const faceCount = cells.areas.length, vertexCount = mesh.positions.length / 3;
+		const faceCount = cells.areas.length,
+			vertexCount = mesh.positions.length / 3;
 		let faces, vertices;
 		if (expression !== undefined) {
 			faces = evaluate(expression, cells);
 			vertices = toVertices(mesh, cells, faces);
 		} else {
-			if (!ArrayBuffer.isView(values) && !Array.isArray(values)) throw new Error('values must be an array with one number per face or per vertex of the working mesh.');
+			if (!ArrayBuffer.isView(values) && !Array.isArray(values))
+				throw new Error('values must be an array with one number per face or per vertex of the working mesh.');
 			const given = Float32Array.from(values);
 			if (given.length === faceCount) [faces, vertices] = [given, toVertices(mesh, cells, given)];
 			else if (given.length === vertexCount) [faces, vertices] = [toFaces(mesh, given), given];
-			else throw new Error(`values must hold one number per face (${faceCount}) or per vertex (${vertexCount}) of case ${c.id}'s working mesh; got ${given.length}.`);
+			else
+				throw new Error(
+					`values must hold one number per face (${faceCount}) or per vertex (${vertexCount}) of case ${c.id}'s working mesh; got ${given.length}.`,
+				);
 		}
 		const bad = faces.reduce((n, v) => n + !Number.isFinite(v), 0);
-		if (bad) throw new Error(`${count(bad)} of ${count(faceCount)} faces have no finite value (a division by zero, a log of a negative). Guard the expression or fill those values.`);
+		if (bad)
+			throw new Error(
+				`${count(bad)} of ${count(faceCount)} faces have no finite value (a division by zero, a log of a negative). Guard the expression or fill those values.`,
+			);
 		const auto = scaleFor(faces);
 		const lo = min === undefined ? auto.lo : finite('min', min);
 		const hi = max === undefined ? auto.hi : finite('max', max);
@@ -308,9 +370,20 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		const store = storeOf(c);
 		const key = keyOf(label);
 		let layer = layerOn(store, label);
-		if (layer && layer.kind !== 'field') throw new Error(`"${label}" is a drawing layer on case ${c.id}; give the field another name.`);
+		if (layer && layer.kind !== 'field')
+			throw new Error(`"${label}" is a drawing layer on case ${c.id}; give the field another name.`);
 		if (!layer) {
-			layer = { name: label, kind: 'field', by, visible: true, colour: PALETTE.ink, width: LINE_PX, marks: [], paint: null, field: null };
+			layer = {
+				name: label,
+				kind: 'field',
+				by,
+				visible: true,
+				colour: PALETTE.ink,
+				width: LINE_PX,
+				marks: [],
+				paint: null,
+				field: null,
+			};
 			store.layers.push(layer);
 		}
 		const source = expression !== undefined ? String(expression) : 'From Python';
@@ -318,7 +391,13 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		offerField(key, label, layer.field.unit, source, { ramp: chosen, lo, hi, bands: 0 }, diverging);
 		view.field = key;
 		changed(c, 'legend', 'markers');
-		return { layer: label, field: key, faces: faceCount, values: statistics(faces, cells.areas), scale: { min: lo, max: hi, ramp: chosen } };
+		return {
+			layer: label,
+			field: key,
+			faces: faceCount,
+			values: statistics(faces, cells.areas),
+			scale: { min: lo, max: hi, ramp: chosen },
+		};
 	}
 
 	// ---- paint ----
@@ -337,7 +416,10 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			let picked;
 			if (where !== undefined) picked = evaluate(where, cells);
 			else {
-				if (!ArrayBuffer.isView(mask) || mask.length !== faces) throw new Error(`mask must hold one value per face of the working mesh (${faces}); got ${mask?.length ?? JSON.stringify(mask)}.`);
+				if (!ArrayBuffer.isView(mask) || mask.length !== faces)
+					throw new Error(
+						`mask must hold one value per face of the working mesh (${faces}); got ${mask?.length ?? JSON.stringify(mask)}.`,
+					);
 				picked = mask;
 			}
 			const [r, g, b] = rgbOf(colour);
@@ -349,7 +431,9 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		if (!layer.paint) layer.paint = rgba;
 		else for (let f = 0; f < faces; f++) if (rgba[4 * f + 3]) layer.paint.set(rgba.subarray(4 * f, 4 * f + 4), 4 * f);
 		layer.visible = true;
-		let painted = 0, area = 0, whole = 0;
+		let painted = 0,
+			area = 0,
+			whole = 0;
 		for (let f = 0; f < faces; f++) {
 			whole += cells.areas[f];
 			if (!rgba[4 * f + 3]) continue;
@@ -357,7 +441,13 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			area += cells.areas[f];
 		}
 		changed(c);
-		return { layer: layer.name, faces: painted, area_m2: round(area, 5), share_of_area: round(area / whole, 5), summed_over: `the ${count(faces)} faces of the working mesh` };
+		return {
+			layer: layer.name,
+			faces: painted,
+			area_m2: round(area, 5),
+			share_of_area: round(area / whole, 5),
+			summed_over: `the ${count(faces)} faces of the working mesh`,
+		};
 	}
 
 	// ---- what the viewer draws ----
@@ -379,22 +469,42 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		if (marks !== pushed.marks) {
 			pushed.marks = marks;
 			const layers = store ? store.layers.filter((layer) => layer.kind === 'drawing' && layer.visible) : [];
-			drawing.show(layers.map(({ colour, width, marks }) => ({ colour, width, marks })), shown?.result.mesh ?? null);
+			drawing.show(
+				layers.map(({ colour, width, marks }) => ({ colour, width, marks })),
+				shown?.result.mesh ?? null,
+			);
 		}
 	}
 
 	// ---- operations ----
 
 	const caseId = { type: 'integer', description: 'Default the case on screen.' };
-	const layerArg = (kind) => ({ type: 'string', description: `Layer to draw in: made if new, added to if it exists. Default "${DEFAULT_NAMES[kind]}".` });
-	const colourArg = { type: 'string', description: `A colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb". Sets the layer's colour.` };
+	const layerArg = (kind) => ({
+		type: 'string',
+		description: `Layer to draw in: made if new, added to if it exists. Default "${DEFAULT_NAMES[kind]}".`,
+	});
+	const colourArg = {
+		type: 'string',
+		description: `A colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb". Sets the layer's colour.`,
+	};
 	const widthArg = { type: 'number', description: `Line width in px (default ${LINE_PX}). Sets the layer's.` };
-	const pointsArg = (what) => ({ type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 }, description: `${what}, each [x, y, z] in metres.` });
-	const fromPython = (what) => ({ description: `${what}, sent from Python as a typed array (pressure.py); not for typing out.` });
+	const pointsArg = (what) => ({
+		type: 'array',
+		items: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+		description: `${what}, each [x, y, z] in metres.`,
+	});
+	const fromPython = (what) => ({
+		description: `${what}, sent from Python as a typed array (pressure.py); not for typing out.`,
+	});
 	const layerSummary = (layer) => {
 		const counts = {};
 		for (const mark of layer.marks) {
-			const n = mark.kind === 'lines' ? mark.starts.length - 1 : mark.kind === 'box' || mark.kind === 'plane' ? 1 : mark.points.length / 3;
+			const n =
+				mark.kind === 'lines'
+					? mark.starts.length - 1
+					: mark.kind === 'box' || mark.kind === 'plane'
+						? 1
+						: mark.points.length / 3;
 			counts[mark.kind] = (counts[mark.kind] ?? 0) + n;
 		}
 		const painted = layer.paint ? layer.paint.reduce((n, v, i) => n + (i % 4 === 3 && v > 0), 0) : 0;
@@ -403,22 +513,42 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			kind: layer.kind,
 			made_by: layer.by,
 			visible: layer.kind === 'field' ? view.field === layer.field.key : layer.visible,
-			...(layer.kind === 'field' ? { field: layer.field.key, unit: layer.field.unit, source: layer.field.source } : { colour: layer.colour, width_px: layer.width, marks: counts, ...(painted ? { painted_faces: painted } : {}) }),
+			...(layer.kind === 'field'
+				? { field: layer.field.key, unit: layer.field.unit, source: layer.field.source }
+				: {
+						colour: layer.colour,
+						width_px: layer.width,
+						marks: counts,
+						...(painted ? { painted_faces: painted } : {}),
+					}),
 		};
 	};
 
 	defineOperation({
 		name: 'show_field',
-		description: 'Colour the car by a field of your own, shown and offered beside Pressure, Drag and Spread with its own legend, colour scale and probe readout; computed from an expression over the faces of the working mesh, or from an array sent from Python (case.show). Names: cp, sigma, cfd (the reference field), drag (−Cp·nx), x, y, z (face centre, m), nx, ny, nz (outward unit normal), area (m²); functions abs, sqrt, exp, log, log10, sign, min, max, clip; comparisons give 1 or 0. A field of the same name on another car shares its colour scale. Returns its key, the values\' lowest, highest and area-weighted mean, and the scale.',
+		description:
+			"Colour the car by a field of your own, shown and offered beside Pressure, Drag and Spread with its own legend, colour scale and probe readout; computed from an expression over the faces of the working mesh, or from an array sent from Python (case.show). Names: cp, sigma, cfd (the reference field), drag (−Cp·nx), x, y, z (face centre, m), nx, ny, nz (outward unit normal), area (m²); functions abs, sqrt, exp, log, log10, sign, min, max, clip; comparisons give 1 or 0. A field of the same name on another car shares its colour scale. Returns its key, the values' lowest, highest and area-weighted mean, and the scale.",
 		parameters: {
 			type: 'object',
 			properties: {
 				name: { type: 'string', description: 'Short name, as the toolbar and legend show it, e.g. "Spread / |Cp|".' },
 				expression: { type: 'string', description: 'Per face, e.g. "sigma / max(abs(cp), 0.05)".' },
-				values: { type: 'array', items: { type: 'number' }, ...fromPython('One number per face or per vertex of the working mesh') },
+				values: {
+					type: 'array',
+					items: { type: 'number' },
+					...fromPython('One number per face or per vertex of the working mesh'),
+				},
 				unit: { type: 'string', description: 'Unit shown in the legend title; empty for none.' },
-				ramp: { type: 'string', enum: RAMP_NAMES, description: 'Colour ramp; default coolwarm for values either side of zero, else viridis.' },
-				min: { type: 'number', description: 'Value at the low end of the scale; default from the values (1st percentile, or symmetric about zero).' },
+				ramp: {
+					type: 'string',
+					enum: RAMP_NAMES,
+					description: 'Colour ramp; default coolwarm for values either side of zero, else viridis.',
+				},
+				min: {
+					type: 'number',
+					description:
+						'Value at the low end of the scale; default from the values (1st percentile, or symmetric about zero).',
+				},
 				max: { type: 'number', description: 'Value at the high end of the scale.' },
 				case_id: caseId,
 			},
@@ -430,14 +560,18 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'paint_faces',
-		description: 'Paint faces of the working mesh in a colour over the field shown: those where an expression is true (show_field\'s names), or a mask or colours per face sent from Python (case.paint). Painting adds to a layer\'s paint. Returns the faces painted, their area and their share of the car\'s area.',
+		description:
+			"Paint faces of the working mesh in a colour over the field shown: those where an expression is true (show_field's names), or a mask or colours per face sent from Python (case.paint). Painting adds to a layer's paint. Returns the faces painted, their area and their share of the car's area.",
 		parameters: {
 			type: 'object',
 			properties: {
 				where: { type: 'string', description: 'Faces where this is true, e.g. "cp < -1".' },
 				mask: fromPython('One 0 or 1 per face'),
 				colours: fromPython('RGBA bytes per face; alpha 0 leaves a face unpainted'),
-				colour: { type: 'string', description: `Colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; default orange.` },
+				colour: {
+					type: 'string',
+					description: `Colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; default orange.`,
+				},
 				opacity: { type: 'number', description: 'How strongly the colour covers the field, above 0 to 1 (default 1).' },
 				layer: layerArg('paint'),
 				case_id: caseId,
@@ -449,13 +583,25 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'draw_labels',
-		description: 'Label places on the car: text in a small box beside a dot at each point, kept in place as the camera moves, moved clear of other labels with a leader where needed, and faded where the car hides the point. Batches: many points and texts in one call. Returns the layer and the count.',
+		description:
+			'Label places on the car: text in a small box beside a dot at each point, kept in place as the camera moves, moved clear of other labels with a leader where needed, and faded where the car hides the point. Batches: many points and texts in one call. Returns the layer and the count.',
 		parameters: {
 			type: 'object',
 			properties: {
 				points: pointsArg('Where each label points'),
-				texts: { type: 'array', items: { type: 'string' }, description: `One text per point, at most ${LABEL_CHARS} characters, e.g. "Cp −2.73".` },
-				offset_px: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Where to put the boxes first, [right, down] in px from their points, with a leader; default beside them.' },
+				texts: {
+					type: 'array',
+					items: { type: 'string' },
+					description: `One text per point, at most ${LABEL_CHARS} characters, e.g. "Cp −2.73".`,
+				},
+				offset_px: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 2,
+					maxItems: 2,
+					description:
+						'Where to put the boxes first, [right, down] in px from their points, with a leader; default beside them.',
+				},
 				layer: layerArg('labels'),
 				colour: colourArg,
 				case_id: caseId,
@@ -466,9 +612,15 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		run(args, { by }) {
 			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
-			if (!Array.isArray(args.texts) || args.texts.length !== points.length / 3) throw new Error(`texts must hold one text per point (${points.length / 3}); got ${Array.isArray(args.texts) ? args.texts.length : JSON.stringify(args.texts)}.`);
+			if (!Array.isArray(args.texts) || args.texts.length !== points.length / 3)
+				throw new Error(
+					`texts must hold one text per point (${points.length / 3}); got ${Array.isArray(args.texts) ? args.texts.length : JSON.stringify(args.texts)}.`,
+				);
 			const texts = args.texts.map((t) => String(t).slice(0, LABEL_CHARS));
-			const offset = args.offset_px === undefined ? null : [finite('offset_px[0]', args.offset_px[0]), finite('offset_px[1]', args.offset_px[1])];
+			const offset =
+				args.offset_px === undefined
+					? null
+					: [finite('offset_px[0]', args.offset_px[0]), finite('offset_px[1]', args.offset_px[1])];
 			const layer = draw(c, args, by, 'labels', { kind: 'labels', points, texts, offset });
 			return { layer: layer.name, labels: texts.length };
 		},
@@ -494,19 +646,29 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
 			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
-			const layer = draw(c, args, by, 'points', { kind: 'points', points, size: args.size_px === undefined ? POINT_PX : widthOf('size_px', args.size_px), colours });
+			const layer = draw(c, args, by, 'points', {
+				kind: 'points',
+				points,
+				size: args.size_px === undefined ? POINT_PX : widthOf('size_px', args.size_px),
+				colours,
+			});
 			return { layer: layer.name, points: points.length / 3 };
 		},
 	});
 
 	defineOperation({
 		name: 'draw_lines',
-		description: 'Draw lines through points, on or off the surface: one polyline or many in one call, straight between consecutive points. Returns the layer and the count.',
+		description:
+			'Draw lines through points, on or off the surface: one polyline or many in one call, straight between consecutive points. Returns the layer and the count.',
 		parameters: {
 			type: 'object',
 			properties: {
-				lines: { type: 'array', items: pointsArg('A polyline\'s points'), description: 'Polylines, each a list of [x, y, z] in metres (from Python, each may be a typed array).' },
-				closed: { type: 'boolean', description: 'Join each polyline\'s last point to its first.' },
+				lines: {
+					type: 'array',
+					items: pointsArg("A polyline's points"),
+					description: 'Polylines, each a list of [x, y, z] in metres (from Python, each may be a typed array).',
+				},
+				closed: { type: 'boolean', description: "Join each polyline's last point to its first." },
 				layer: layerArg('lines'),
 				colour: colourArg,
 				width_px: widthArg,
@@ -517,7 +679,8 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		},
 		run(args, { by }) {
 			const c = session.withResult(args.case_id);
-			if (!Array.isArray(args.lines) || args.lines.length === 0) throw new Error('lines must be a list of polylines, each a list of points [x, y, z].');
+			if (!Array.isArray(args.lines) || args.lines.length === 0)
+				throw new Error('lines must be a list of polylines, each a list of points [x, y, z].');
 			const polylines = args.lines.map((line, i) => pointsOf(`lines[${i}]`, line));
 			const starts = new Uint32Array(polylines.length + 1);
 			polylines.forEach((line, i) => (starts[i + 1] = starts[i] + line.length / 3));
@@ -530,12 +693,13 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'draw_arrows',
-		description: 'Draw arrows from points along vectors, vector × scale long in metres: a vector plot of thousands in one call. With no scale the longest arrow is drawn 6 % of the car\'s length. Returns the layer, the count, the scale used and the longest arrow in metres.',
+		description:
+			"Draw arrows from points along vectors, vector × scale long in metres: a vector plot of thousands in one call. With no scale the longest arrow is drawn 6 % of the car's length. Returns the layer, the count, the scale used and the longest arrow in metres.",
 		parameters: {
 			type: 'object',
 			properties: {
 				points: pointsArg('Where each arrow starts'),
-				vectors: pointsArg('Each arrow\'s direction and size'),
+				vectors: pointsArg("Each arrow's direction and size"),
 				scale: { type: 'number', description: 'Metres drawn per unit of vector.' },
 				colours: fromPython('RGBA bytes per arrow'),
 				layer: layerArg('arrows'),
@@ -550,44 +714,102 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
 			const vectors = pointsOf('vectors', args.vectors);
-			if (vectors.length !== points.length) throw new Error(`vectors must hold one vector per point (${points.length / 3}); got ${vectors.length / 3}.`);
+			if (vectors.length !== points.length)
+				throw new Error(`vectors must hold one vector per point (${points.length / 3}); got ${vectors.length / 3}.`);
 			let longest = 0;
-			for (let i = 0; i < vectors.length; i += 3) longest = Math.max(longest, Math.hypot(vectors[i], vectors[i + 1], vectors[i + 2]));
+			for (let i = 0; i < vectors.length; i += 3)
+				longest = Math.max(longest, Math.hypot(vectors[i], vectors[i + 1], vectors[i + 2]));
 			if (!(longest > 0)) throw new Error('Every vector is zero; there is nothing to draw.');
-			const scale = args.scale === undefined ? (ARROW_SHARE * c.result.geometry.length) / longest : finite('scale', args.scale);
+			const scale =
+				args.scale === undefined ? (ARROW_SHARE * c.result.geometry.length) / longest : finite('scale', args.scale);
 			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
-			const layer = draw(c, args, by, 'arrows', { kind: 'arrows', points, vectors: vectors.map((v) => v * scale), colours });
-			return { layer: layer.name, arrows: points.length / 3, scale: round(scale, 8), longest_m: round(longest * scale, 4) };
+			const layer = draw(c, args, by, 'arrows', {
+				kind: 'arrows',
+				points,
+				vectors: vectors.map((v) => v * scale),
+				colours,
+			});
+			return {
+				layer: layer.name,
+				arrows: points.length / 3,
+				scale: round(scale, 8),
+				longest_m: round(longest * scale, 4),
+			};
 		},
 	});
 
 	defineOperation({
 		name: 'draw_box',
-		description: 'Draw a box with its edges along the axes, from its lowest to its highest corner, faces lightly washed: for a reference volume or a part of the car. Returns the layer.',
+		description:
+			'Draw a box with its edges along the axes, from its lowest to its highest corner, faces lightly washed: for a reference volume or a part of the car. Returns the layer.',
 		parameters: {
 			type: 'object',
-			properties: { min: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Lowest corner [x, y, z] in metres.' }, max: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Highest corner [x, y, z] in metres.' }, layer: layerArg('box'), colour: colourArg, width_px: widthArg, case_id: caseId },
+			properties: {
+				min: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 3,
+					maxItems: 3,
+					description: 'Lowest corner [x, y, z] in metres.',
+				},
+				max: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 3,
+					maxItems: 3,
+					description: 'Highest corner [x, y, z] in metres.',
+				},
+				layer: layerArg('box'),
+				colour: colourArg,
+				width_px: widthArg,
+				case_id: caseId,
+			},
 			required: ['min', 'max'],
 			additionalProperties: false,
 		},
 		run(args, { by }) {
 			const c = session.withResult(args.case_id);
-			const lo = triple('min', args.min), hi = triple('max', args.max);
-			if (!lo.every((v, k) => v < hi[k])) throw new Error(`min must be below max on every axis; got ${JSON.stringify(lo)} and ${JSON.stringify(hi)}.`);
+			const lo = triple('min', args.min),
+				hi = triple('max', args.max);
+			if (!lo.every((v, k) => v < hi[k]))
+				throw new Error(`min must be below max on every axis; got ${JSON.stringify(lo)} and ${JSON.stringify(hi)}.`);
 			return { layer: draw(c, args, by, 'box', { kind: 'box', min: [...lo], max: [...hi] }).name };
 		},
 	});
 
 	defineOperation({
 		name: 'draw_plane',
-		description: 'Draw a rectangle of a plane through a point, square to a normal, lightly washed: for a reference plane, a cut, a ground line. Returns the layer.',
+		description:
+			'Draw a rectangle of a plane through a point, square to a normal, lightly washed: for a reference plane, a cut, a ground line. Returns the layer.',
 		parameters: {
 			type: 'object',
 			properties: {
-				point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Its centre [x, y, z] in metres.' },
-				normal: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: 'Its normal [x, y, z].' },
-				size_m: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Its sides in metres, the first along the frame\'s axis the normal points least along; default the car\'s length both ways.' },
-				layer: layerArg('plane'), colour: colourArg, width_px: widthArg, case_id: caseId,
+				point: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 3,
+					maxItems: 3,
+					description: 'Its centre [x, y, z] in metres.',
+				},
+				normal: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 3,
+					maxItems: 3,
+					description: 'Its normal [x, y, z].',
+				},
+				size_m: {
+					type: 'array',
+					items: { type: 'number' },
+					minItems: 2,
+					maxItems: 2,
+					description:
+						"Its sides in metres, the first along the frame's axis the normal points least along; default the car's length both ways.",
+				},
+				layer: layerArg('plane'),
+				colour: colourArg,
+				width_px: widthArg,
+				case_id: caseId,
 			},
 			required: ['point', 'normal'],
 			additionalProperties: false,
@@ -597,14 +819,25 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const normal = triple('normal', args.normal);
 			if (Math.hypot(...normal) === 0) throw new Error('normal must not be zero.');
 			const length = c.result.geometry.length;
-			const size = args.size_m === undefined ? [length, length] : [finite('size_m[0]', args.size_m[0]), finite('size_m[1]', args.size_m[1])];
-			return { layer: draw(c, args, by, 'plane', { kind: 'plane', point: [...triple('point', args.point)], normal: [...normal], size }).name };
+			const size =
+				args.size_m === undefined
+					? [length, length]
+					: [finite('size_m[0]', args.size_m[0]), finite('size_m[1]', args.size_m[1])];
+			return {
+				layer: draw(c, args, by, 'plane', {
+					kind: 'plane',
+					point: [...triple('point', args.point)],
+					normal: [...normal],
+					size,
+				}).name,
+			};
 		},
 	});
 
 	defineOperation({
 		name: 'list_layers',
-		description: 'The layers on a car, in drawing order: each one\'s name, kind (field or drawing), who made it, whether it shows, and its colour, width, marks and painted faces or its field.',
+		description:
+			"The layers on a car, in drawing order: each one's name, kind (field or drawing), who made it, whether it shows, and its colour, width, marks and painted faces or its field.",
 		parameters: { type: 'object', properties: { case_id: caseId }, additionalProperties: false },
 		run({ case_id }) {
 			const c = session.withResult(case_id);
@@ -614,11 +847,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'set_layer',
-		description: 'Show, hide, rename or restyle a layer. Showing a field layer colours the car by its field; hiding it goes back to pressure. A new colour repaints the faces the layer paints.',
+		description:
+			'Show, hide, rename or restyle a layer. Showing a field layer colours the car by its field; hiding it goes back to pressure. A new colour repaints the faces the layer paints.',
 		parameters: {
 			type: 'object',
 			properties: {
-				layer: { type: 'string', description: 'The layer\'s name.' },
+				layer: { type: 'string', description: "The layer's name." },
 				visible: { type: 'boolean' },
 				name: { type: 'string', description: 'A new name.' },
 				colour: colourArg,
@@ -649,7 +883,8 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 				layer.name = next;
 			}
 			if (colour !== undefined || width_px !== undefined) {
-				if (layer.kind === 'field') throw new Error(`"${layer.name}" is a field; change its colours with set_colour_scale.`);
+				if (layer.kind === 'field')
+					throw new Error(`"${layer.name}" is a field; change its colours with set_colour_scale.`);
 				if (colour !== undefined) {
 					layer.colour = colourOf('colour', colour);
 					if (layer.paint) repaint(layer.paint, layer.colour);
@@ -672,13 +907,23 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	/** The layers a removal takes: the one named, or with none named every layer the assistant made. */
 	const removing = (c, name) => {
 		const layers = storeOf(c).layers;
-		return name === undefined ? layers.filter((layer) => layer.by === 'assistant') : layers.filter((layer) => layer.name === name);
+		return name === undefined
+			? layers.filter((layer) => layer.by === 'assistant')
+			: layers.filter((layer) => layer.name === name);
 	};
 
 	defineOperation({
 		name: 'remove_layer',
-		description: 'Remove a layer from a car, or with no layer named every layer the assistant made on it. Removing a layer the engineer made asks them first. Returns the names removed.',
-		parameters: { type: 'object', properties: { layer: { type: 'string', description: 'The layer\'s name; default every layer the assistant made.' }, case_id: caseId }, additionalProperties: false },
+		description:
+			'Remove a layer from a car, or with no layer named every layer the assistant made on it. Removing a layer the engineer made asks them first. Returns the names removed.',
+		parameters: {
+			type: 'object',
+			properties: {
+				layer: { type: 'string', description: "The layer's name; default every layer the assistant made." },
+				case_id: caseId,
+			},
+			additionalProperties: false,
+		},
 		confirm({ layer, case_id }) {
 			const c = case_id === undefined ? session.active : session.cases.find((each) => each.id === case_id);
 			return Boolean(c && stores.has(c) && removing(c, layer).some((each) => each.by === 'engineer'));
@@ -697,7 +942,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	return {
 		apply,
-		fields: (c) => (c && stores.has(c) ? storeOf(c).layers.filter((layer) => layer.kind === 'field').map((layer) => layer.field.key) : []),
+		fields: (c) =>
+			c && stores.has(c)
+				? storeOf(c)
+						.layers.filter((layer) => layer.kind === 'field')
+						.map((layer) => layer.field.key)
+				: [],
 		paintLabels: (ctx, scale) => drawing.paintLabels(ctx, scale),
 		layers: createLayersMenu({ session, view, run, storeOf, stores, layerSummary }),
 	};
@@ -710,7 +960,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
  * by its eye and removed by its cross, and every one removed at once.
  */
 function createLayersMenu({ session, view, run, storeOf, stores, layerSummary }) {
-	const button = h('button', { type: 'button', class: 'tool', title: 'Layers on this car' }, icon('layers'), h('span', { class: 'tool-label' }, 'Layers'));
+	const button = h(
+		'button',
+		{ type: 'button', class: 'tool', title: 'Layers on this car' },
+		icon('layers'),
+		h('span', { class: 'tool-label' }, 'Layers'),
+	);
 	const list = h('div', { class: 'menu-list layers-list' });
 	const layersMenu = menu(button, list, { align: 'right' });
 	const active = () => (session.active?.result ? session.active : null);
@@ -743,14 +998,53 @@ function createLayersMenu({ session, view, run, storeOf, stores, layerSummary })
 		list.replaceChildren(
 			...layers.map((layer) => {
 				const shown = layer.kind === 'field' ? view.field === layer.field.key : layer.visible;
-				return h('div', { class: 'layer-row', 'data-layer': layer.name },
-					h('button', { type: 'button', class: 'icon-button layer-eye', 'aria-pressed': String(shown), title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`, onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }) }, icon(shown ? 'eye' : 'eye-off')),
+				return h(
+					'div',
+					{ class: 'layer-row', 'data-layer': layer.name },
+					h(
+						'button',
+						{
+							type: 'button',
+							class: 'icon-button layer-eye',
+							'aria-pressed': String(shown),
+							title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`,
+							onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }),
+						},
+						icon(shown ? 'eye' : 'eye-off'),
+					),
 					swatch(layer),
-					h('span', { class: 'layer-text' }, h('span', { class: 'layer-name' }, layer.name), h('span', { class: 'layer-holds' }, holds(layer))),
-					h('button', { type: 'button', class: 'icon-button', title: `Remove ${layer.name}`, onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }) }, icon('close')));
+					h(
+						'span',
+						{ class: 'layer-text' },
+						h('span', { class: 'layer-name' }, layer.name),
+						h('span', { class: 'layer-holds' }, holds(layer)),
+					),
+					h(
+						'button',
+						{
+							type: 'button',
+							class: 'icon-button',
+							title: `Remove ${layer.name}`,
+							onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }),
+						},
+						icon('close'),
+					),
+				);
 			}),
 			h('hr', { class: 'menu-rule' }),
-			h('button', { type: 'button', role: 'menuitem', class: 'menu-item danger', onclick: () => { for (const layer of [...layers]) run('remove_layer', { case_id: c.id, layer: layer.name }); } }, 'Remove all'));
+			h(
+				'button',
+				{
+					type: 'button',
+					role: 'menuitem',
+					class: 'menu-item danger',
+					onclick: () => {
+						for (const layer of [...layers]) run('remove_layer', { case_id: c.id, layer: layer.name });
+					},
+				},
+				'Remove all',
+			),
+		);
 	}
 
 	return { el: layersMenu.el, render };

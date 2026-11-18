@@ -105,7 +105,12 @@ defineExport({
 	format: 'PNG',
 	title: 'The view as drawn, with the colour legend',
 	unavailable: () => null,
-	make: (c) => pictureOf(c, viewer, { field: shownField(), map: view.maps[FIELDS[shownField()].map], marks: (ctx, scale) => annotations.paintLabels(ctx, scale) }),
+	make: (c) =>
+		pictureOf(c, viewer, {
+			field: shownField(),
+			map: view.maps[FIELDS[shownField()].map],
+			marks: (ctx, scale) => annotations.paintLabels(ctx, scale),
+		}),
 	fileName: (c) => `${baseName(c)}-${shownField().replace(/^custom:/, '')}.png`,
 });
 defineExportOperations(context);
@@ -114,14 +119,17 @@ defineExportOperations(context);
 
 const progress = createProgress({ cancel: (c) => run('close_case', { case_id: c.id }) });
 
-const toolbar = createToolbar({
-	field: (field) => run('set_field', { field }),
-	view: (name) => run('set_camera_view', { view: name }),
-	fit: () => run('fit_view', {}),
-	projection: (projection) => run('set_projection', { projection }),
-	toggle: (what) => toggle(what),
-	hasCar: () => Boolean(active()?.surface),
-}, annotations.layers.el);
+const toolbar = createToolbar(
+	{
+		field: (field) => run('set_field', { field }),
+		view: (name) => run('set_camera_view', { view: name }),
+		fit: () => run('fit_view', {}),
+		projection: (projection) => run('set_projection', { projection }),
+		toggle: (what) => toggle(what),
+		hasCar: () => Boolean(active()?.surface),
+	},
+	annotations.layers.el,
+);
 $('[data-toolbar]').append(toolbar.el);
 
 function toggle(what) {
@@ -140,7 +148,16 @@ function toggle(what) {
 const legend = createLegend({ change: (patch) => run('set_colour_scale', { field: legendField(), ...patch }) });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, engine, viewer, active, session, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
+const probes = createProbes({
+	host: overlay,
+	engine,
+	viewer,
+	active,
+	session,
+	update,
+	run,
+	fieldIn: (pane) => panes()[pane]?.field ?? shownField(),
+});
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
 defineReport({ session, engine, section, comparison, variants });
 /** The dock's panel tabs after Section and Probes. */
@@ -181,24 +198,59 @@ $('.brand').before(filesPanel.toggle);
 
 const tabs = $('[data-cases]');
 function renderTabs() {
-	tabs.replaceChildren(...session.cases.map((c) => h('div', { class: 'case-tab', role: 'tab', 'aria-selected': String(c === active()), 'data-status': c.status, title: c.name },
-		h('button', { type: 'button', class: 'case-open', onclick: () => run('show_case', { case_id: c.id }) },
-			h('span', { class: 'case-state', 'aria-hidden': 'true' }),
-			h('span', { class: 'case-name' }, shortName(c))),
-		h('button', { type: 'button', class: 'case-close', title: c.status === 'analysing' || c.status === 'queued' ? `Cancel and close ${c.name}` : `Close ${c.name}`, onclick: () => run('close_case', { case_id: c.id }) }, icon('close')))));
+	tabs.replaceChildren(
+		...session.cases.map((c) =>
+			h(
+				'div',
+				{
+					class: 'case-tab',
+					role: 'tab',
+					'aria-selected': String(c === active()),
+					'data-status': c.status,
+					title: c.name,
+				},
+				h(
+					'button',
+					{ type: 'button', class: 'case-open', onclick: () => run('show_case', { case_id: c.id }) },
+					h('span', { class: 'case-state', 'aria-hidden': 'true' }),
+					h('span', { class: 'case-name' }, shortName(c)),
+				),
+				h(
+					'button',
+					{
+						type: 'button',
+						class: 'case-close',
+						title: c.status === 'analysing' || c.status === 'queued' ? `Cancel and close ${c.name}` : `Close ${c.name}`,
+						onclick: () => run('close_case', { case_id: c.id }),
+					},
+					icon('close'),
+				),
+			),
+		),
+	);
 }
 
 /**
  * The model's own page, for reading how it is built, is one click away but not a product control: a quiet toggle in
  * the top bar that hands it the whole area under the bar and gives the tool back as it was.
  */
-const modelToggle = h('button', { type: 'button', class: 'model-toggle', 'aria-pressed': 'false', onclick: () => setMode(mode === 'model' ? 'result' : 'model') }, h('span', {}, 'Model'));
+const modelToggle = h(
+	'button',
+	{
+		type: 'button',
+		class: 'model-toggle',
+		'aria-pressed': 'false',
+		onclick: () => setMode(mode === 'model' ? 'result' : 'model'),
+	},
+	h('span', {}, 'Model'),
+);
 $('[data-model-toggle]').append(modelToggle);
 
 let modelMounted = null;
 function setMode(next) {
 	mode = next;
-	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelPage }) => mountModelPage(modelHost, { engine }));
+	if (mode === 'model')
+		modelMounted ??= import('./model/index.js').then(({ mountModelPage }) => mountModelPage(modelHost, { engine }));
 	update('layout');
 }
 
@@ -210,14 +262,37 @@ $('[data-export]').append(exportMenu.el);
 /** The assistant acts only through the operations, as the engineer's controls do; its runs are marked as its own. */
 const assistantRun = (name, args) => runOperation(name, args, { session, viewer, engine, by: 'assistant' });
 let assistantMounted = null;
-const assistantButton = h('button', { type: 'button', class: 'button assistant-button', 'aria-pressed': 'false', 'aria-controls': 'assistant', onclick: () => setAssistant(!body.classList.contains('assistant-open')) }, icon('assistant'), 'Assistant');
+const assistantButton = h(
+	'button',
+	{
+		type: 'button',
+		class: 'button assistant-button',
+		'aria-pressed': 'false',
+		'aria-controls': 'assistant',
+		onclick: () => setAssistant(!body.classList.contains('assistant-open')),
+	},
+	icon('assistant'),
+	'Assistant',
+);
 $('.topbar-end').append(assistantButton);
 
 /** The assistant's column opens beside the stage, which narrows to make room. */
 function setAssistant(open) {
 	body.classList.toggle('assistant-open', open);
 	assistantButton.setAttribute('aria-pressed', String(open));
-	if (open) assistantMounted ??= import('../assistant/index.js').then(({ mountAssistant }) => mountAssistant(assistantHost, { session, engine, viewer, workspace, operations, runOperation: assistantRun, onOperation, close: () => setAssistant(false) }));
+	if (open)
+		assistantMounted ??= import('../assistant/index.js').then(({ mountAssistant }) =>
+			mountAssistant(assistantHost, {
+				session,
+				engine,
+				viewer,
+				workspace,
+				operations,
+				runOperation: assistantRun,
+				onOperation,
+				close: () => setAssistant(false),
+			}),
+		);
 }
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
@@ -227,21 +302,43 @@ const resultCard = createResultCard({ host: card, overlay, viewer, active: descr
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
 // An example that fails to load shows why on its own card, so the first screen does not wait on the operation.
-const start = startScreen({ onFile: (file) => addFiles([file], { workspace, run }), onExample: (id) => run('open_example', { example: id }).catch(() => {}) });
+const start = startScreen({
+	onFile: (file) => addFiles([file], { workspace, run }),
+	onExample: (id) => run('open_example', { example: id }).catch(() => {}),
+});
 
 function errorCard(c) {
-	return h('div', { class: 'notice', role: 'alert' },
+	return h(
+		'div',
+		{ class: 'notice', role: 'alert' },
 		h('div', { class: 'notice-title' }, c.name),
 		h('p', { class: 'notice-text' }, c.error),
-		h('div', { class: 'notice-actions' },
-			h('button', { type: 'button', class: 'button button-primary', onclick: () => filesPanel.setOpen(true) }, 'Open another file'),
-			h('button', { type: 'button', class: 'button', onclick: () => run('close_case', { case_id: c.id }) }, 'Close')));
+		h(
+			'div',
+			{ class: 'notice-actions' },
+			h(
+				'button',
+				{ type: 'button', class: 'button button-primary', onclick: () => filesPanel.setOpen(true) },
+				'Open another file',
+			),
+			h('button', { type: 'button', class: 'button', onclick: () => run('close_case', { case_id: c.id }) }, 'Close'),
+		),
+	);
 }
 
 /** The notice an example shows while it loads and until its car is drawn: one per case, so it stays put meanwhile. */
 const loadingCards = new WeakMap();
 function loadingCard(c) {
-	if (!loadingCards.has(c)) loadingCards.set(c, h('div', { class: 'notice', role: 'status' }, h('div', { class: 'notice-title' }, c.name), h('div', { class: 'progress-bar indeterminate' }, h('span', { class: 'progress-fill' }))));
+	if (!loadingCards.has(c))
+		loadingCards.set(
+			c,
+			h(
+				'div',
+				{ class: 'notice', role: 'status' },
+				h('div', { class: 'notice-title' }, c.name),
+				h('div', { class: 'progress-bar indeterminate' }, h('span', { class: 'progress-fill' })),
+			),
+		);
 	return loadingCards.get(c);
 }
 
@@ -291,7 +388,13 @@ function placeProgress(place) {
 		center.replaceChildren(...(place === center ? [progress.el] : []));
 		strip.replaceChildren(...(place === strip ? [progress.el] : []));
 	};
-	if (place !== strip || progress.el.parentElement !== center || !document.startViewTransition || REDUCED_MOTION.matches) return move();
+	if (
+		place !== strip ||
+		progress.el.parentElement !== center ||
+		!document.startViewTransition ||
+		REDUCED_MOTION.matches
+	)
+		return move();
 	travelling = true;
 	document.startViewTransition(move).updateCallbackDone.finally(() => (travelling = false));
 }
@@ -300,7 +403,11 @@ function placeProgress(place) {
 
 function renderLayout() {
 	const c = active();
-	body.dataset.screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' || (c.status === 'ready' && !c.drawn) ? 'notice' : 'case';
+	body.dataset.screen = !c
+		? 'start'
+		: c.status === 'failed' || c.status === 'loading' || (c.status === 'ready' && !c.drawn)
+			? 'notice'
+			: 'case';
 	body.dataset.mode = mode;
 	modelToggle.setAttribute('aria-pressed', String(mode === 'model'));
 	modelToggle.title = mode === 'model' ? 'Back to the tool' : 'How the model is built';
@@ -339,11 +446,15 @@ function applyViewer() {
 	// The one field the app supplies (fields.addField), for whichever pane draws one.
 	const supplied = (c?.result && shown.map((pane) => FIELDS[pane.field].values?.(c)).find(Boolean)) || null;
 	if (supplied !== viewer.custom) viewer.setCustomField(supplied);
-	paneLabels.replaceChildren(...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
+	paneLabels.replaceChildren(
+		...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []),
+	);
 	// Two cars side by side take the whole view; the comparison table in the dock carries the card's numbers.
 	body.classList.toggle('side-by-side', shown.length > 1);
 	const s = view.section;
-	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, plane: Boolean(viewer.section?.plane) } : null);
+	viewer.setSection(
+		c?.result && s.on ? { axis: s.axis, offset: s.offset, plane: Boolean(viewer.section?.plane) } : null,
+	);
 	viewer.setDisplay(view.display);
 	annotations.apply(c);
 }

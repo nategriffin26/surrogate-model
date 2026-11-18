@@ -21,7 +21,8 @@ const KIND_LABELS = { stretch: 'Stretch', ride_height: 'Ride height' };
 /** What each change does, said once, in its control's tooltip. */
 const KIND_TITLES = {
 	stretch: 'The whole car scales along the axis, its wheels with it',
-	ride_height: 'The body moves up or down and the wheels stay on the ground: the axles are found where the tyres touch it, and the wheels taken as DrivAerML\'s, 0.318 m in radius',
+	ride_height:
+		"The body moves up or down and the wheels stay on the ground: the axles are found where the tyres touch it, and the wheels taken as DrivAerML's, 0.318 m in radius",
 };
 const AXES = ['x', 'y', 'z'];
 /** What a stretch along each axis changes. */
@@ -39,16 +40,24 @@ const WHEEL_GAP = [0.01, 0.12];
 const TYRE_SIDE = [0.03, 0.13];
 /** Bounds on a change: beyond them the surface would describe another car rather than a variant of this one. */
 const LIMITS = { percent: 20, offset_mm: 200 };
-const PREDICTED_ON = 'Each variant is predicted on the simplified mesh the car is drawn with, about 600,000 triangles, and so is its car, unchanged: differences between them are the change alone.';
+const PREDICTED_ON =
+	'Each variant is predicted on the simplified mesh the car is drawn with, about 600,000 triangles, and so is its car, unchanged: differences between them are the change alone.';
 
 const CHANGE_SCHEMA = {
 	type: 'object',
-	description: 'One change. stretch: the car scaled along an axis by percent: x (length) about its middle, y (width) about its centre plane, z (height) from the ground up. ride_height: the body moved up (positive) or down by offset_mm, the wheels staying on the ground.',
+	description:
+		'One change. stretch: the car scaled along an axis by percent: x (length) about its middle, y (width) about its centre plane, z (height) from the ground up. ride_height: the body moved up (positive) or down by offset_mm, the wheels staying on the ground.',
 	properties: {
 		kind: { type: 'string', enum: KINDS },
 		axis: { type: 'string', enum: AXES, description: 'stretch.' },
-		percent: { type: 'number', description: `stretch: the change in size, %, from −${LIMITS.percent} to ${LIMITS.percent}.` },
-		offset_mm: { type: 'number', description: `ride_height: how far, mm, from −${LIMITS.offset_mm} to ${LIMITS.offset_mm}.` },
+		percent: {
+			type: 'number',
+			description: `stretch: the change in size, %, from −${LIMITS.percent} to ${LIMITS.percent}.`,
+		},
+		offset_mm: {
+			type: 'number',
+			description: `ride_height: how far, mm, from −${LIMITS.offset_mm} to ${LIMITS.offset_mm}.`,
+		},
 	},
 	required: ['kind'],
 	additionalProperties: false,
@@ -107,7 +116,10 @@ function rideHeight(points, offset) {
 	for (let v = 0; v < count; v++) ground = Math.min(ground, points[3 * v + 2]);
 	const touching = [];
 	for (let v = 0; v < count; v++) if (points[3 * v + 2] < ground + CONTACT) touching.push(v);
-	let first = Infinity, last = -Infinity, inner = Infinity, outer = -Infinity;
+	let first = Infinity,
+		last = -Infinity,
+		inner = Infinity,
+		outer = -Infinity;
 	for (const v of touching) {
 		first = Math.min(first, points[3 * v]);
 		last = Math.max(last, points[3 * v]);
@@ -116,22 +128,32 @@ function rideHeight(points, offset) {
 	}
 	const middle = (first + last) / 2;
 	const mean = (vs) => vs.reduce((sum, v) => sum + points[3 * v], 0) / vs.length;
-	const front = touching.filter((v) => points[3 * v] < middle), rear = touching.filter((v) => points[3 * v] >= middle);
-	if (!front.length || !rear.length) throw new Error('The tyres\' contact with the ground was not found, so the body cannot be told from the wheels.');
+	const front = touching.filter((v) => points[3 * v] < middle),
+		rear = touching.filter((v) => points[3 * v] >= middle);
+	if (!front.length || !rear.length)
+		throw new Error("The tyres' contact with the ground was not found, so the body cannot be told from the wheels.");
 	const axles = [mean(front), mean(rear)];
 	const axleHeight = ground + WHEEL_RADIUS;
 	for (let v = 0; v < count; v++) {
-		const x = points[3 * v], y = Math.abs(points[3 * v + 1]), z = points[3 * v + 2];
+		const x = points[3 * v],
+			y = Math.abs(points[3 * v + 1]),
+			z = points[3 * v + 2];
 		const r = Math.min(Math.hypot(x - axles[0], z - axleHeight), Math.hypot(x - axles[1], z - axleHeight));
 		const across = y < inner ? inner - y : y > outer ? y - outer : 0;
-		const wheel = fade(r, WHEEL_RADIUS + WHEEL_GAP[0], WHEEL_RADIUS + WHEEL_GAP[1]) * fade(across, TYRE_SIDE[0], TYRE_SIDE[1]);
+		const wheel =
+			fade(r, WHEEL_RADIUS + WHEEL_GAP[0], WHEEL_RADIUS + WHEEL_GAP[1]) * fade(across, TYRE_SIDE[0], TYRE_SIDE[1]);
 		points[3 * v + 2] += offset * (1 - wheel);
 	}
 }
 
 /** A surface for the engine from points and the triangles of a mesh, each array its own buffer, as the engine takes them. */
 function surfaceOf(name, points, indices) {
-	return { name, points, connectivity: Uint32Array.from(indices), offsets: Uint32Array.from({ length: indices.length / 3 + 1 }, (_, i) => 3 * i) };
+	return {
+		name,
+		points,
+		connectivity: Uint32Array.from(indices),
+		offsets: Uint32Array.from({ length: indices.length / 3 + 1 }, (_, i) => 3 * i),
+	};
 }
 
 // ---- describing changes and studies ---------------------------------------------------------------------------------
@@ -151,7 +173,13 @@ function describe(change) {
 }
 
 /** A Result's whole-car numbers, as the study compares them. */
-const numbers = (r) => ({ cx: r.totals.coefficients[0], cy: r.totals.coefficients[1], cz: r.totals.coefficients[2], mean_cp: r.totals.meanCp, frontal_area_m2: r.geometry.frontalArea });
+const numbers = (r) => ({
+	cx: r.totals.coefficients[0],
+	cy: r.totals.coefficients[1],
+	cz: r.totals.coefficients[2],
+	mean_cp: r.totals.meanCp,
+	frontal_area_m2: r.geometry.frontalArea,
+});
 const DIFFERENCES = ['cx', 'cy', 'cz', 'mean_cp'];
 const rounded = (values) => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, round(value, 5)]));
 
@@ -167,13 +195,16 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		if (root.baseline) return root.baseline;
 		if (!baselines.has(root)) {
 			const { mesh } = root.result;
-			baselines.set(root, engine.predictQuick(surfaceOf(root.name, Float32Array.from(mesh.positions), mesh.indices)).then(
-				(result) => (root.baseline = result),
-				(error) => {
-					baselines.delete(root);
-					throw error;
-				},
-			));
+			baselines.set(
+				root,
+				engine.predictQuick(surfaceOf(root.name, Float32Array.from(mesh.positions), mesh.indices)).then(
+					(result) => (root.baseline = result),
+					(error) => {
+						baselines.delete(root);
+						throw error;
+					},
+				),
+			);
 		}
 		return baselines.get(root);
 	}
@@ -189,7 +220,11 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		};
 		switch (kind) {
 			case 'stretch':
-				return { kind, axis: oneOf(`${name}.axis`, change.axis, AXES), percent: within('percent', -LIMITS.percent, LIMITS.percent) };
+				return {
+					kind,
+					axis: oneOf(`${name}.axis`, change.axis, AXES),
+					percent: within('percent', -LIMITS.percent, LIMITS.percent),
+				};
 			case 'ride_height':
 				return { kind, offset_mm: within('offset_mm', -LIMITS.offset_mm, LIMITS.offset_mm) };
 			default:
@@ -215,8 +250,10 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	async function makeVariant({ case_id, name, changes }, by) {
 		const base = case_id === undefined ? session.active : session.byId(case_id);
 		if (!base) throw new Error('No case is on screen. Open a file or an example first.');
-		if (base.status !== 'ready') throw new Error(`Case ${base.id} (${base.name}) is ${base.status}; a variant is made from a result.`);
-		if (!Array.isArray(changes) || changes.length === 0) throw new Error('changes must list at least one change, e.g. [{"kind": "stretch", "axis": "x", "percent": 5}].');
+		if (base.status !== 'ready')
+			throw new Error(`Case ${base.id} (${base.name}) is ${base.status}; a variant is made from a result.`);
+		if (!Array.isArray(changes) || changes.length === 0)
+			throw new Error('changes must list at least one change, e.g. [{"kind": "stretch", "axis": "x", "percent": 5}].');
 		const checked = changes.map((change, i) => checkChange(change, i));
 		const root = base.variant?.root ?? base;
 		const { mesh } = base.result;
@@ -226,7 +263,14 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		const [result] = await Promise.all([engine.predictQuick(surfaceOf(label, points, mesh.indices)), baselineOf(root)]);
 		const path = `variants/${label}.vtp`;
 		const { cells } = result;
-		workspace.write(path, writeVtp({ name: `${label}.vtp`, points: cells.points, connectivity: cells.connectivity, offsets: cells.offsets }, { CpPredicted: cells.cp, CpSpread: cells.sigma }), by);
+		workspace.write(
+			path,
+			writeVtp(
+				{ name: `${label}.vtp`, points: cells.points, connectivity: cells.connectivity, offsets: cells.offsets },
+				{ CpPredicted: cells.cp, CpSpread: cells.sigma },
+			),
+			by,
+		);
 		const c = session.openVariant(result, { name: label, root, changes: made, path });
 		workspace.link(path, c.id);
 		// Compared with its car from the start: the difference map and the table are one choice away.
@@ -242,7 +286,8 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	}
 
 	function rowOut(v, root) {
-		const mine = numbers(v.result), base = numbers(root.baseline);
+		const mine = numbers(v.result),
+			base = numbers(root.baseline);
 		return {
 			case_id: v.id,
 			name: v.name,
@@ -256,7 +301,11 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	function studyOut(c) {
 		const { root, variants } = studyOf(c);
 		return {
-			car: { case_id: root.id, name: root.name, ...(root.baseline ? { predicted_unchanged: rounded(numbers(root.baseline)) } : {}) },
+			car: {
+				case_id: root.id,
+				name: root.name,
+				...(root.baseline ? { predicted_unchanged: rounded(numbers(root.baseline)) } : {}),
+			},
 			variants: variants.map((v) => rowOut(v, root)),
 			predicted_on: PREDICTED_ON,
 		};
@@ -265,26 +314,40 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	function studyCsv(c) {
 		const { root, variants } = studyOf(c);
 		const keys = ['cx', 'cy', 'cz', 'mean_cp', 'frontal_area_m2'];
-		const row = (name, changes, values, difference) => [name, changes, ...keys.map((k) => values[k].toFixed(5)), ...DIFFERENCES.map((k) => (difference ? difference[k].toFixed(5) : ''))];
+		const row = (name, changes, values, difference) => [
+			name,
+			changes,
+			...keys.map((k) => values[k].toFixed(5)),
+			...DIFFERENCES.map((k) => (difference ? difference[k].toFixed(5) : '')),
+		];
 		const base = numbers(root.baseline);
-		return csv([
-			['case', 'changes', ...keys, ...DIFFERENCES.map((k) => `${k}_difference`)],
-			row(root.name, 'unchanged', base, null),
-			...variants.map((v) => {
-				const mine = numbers(v.result);
-				return row(v.name, v.variant.changes.map(describe).join('; '), mine, Object.fromEntries(DIFFERENCES.map((k) => [k, mine[k] - base[k]])));
-			}),
-		], `${root.name} and its variants. ${PREDICTED_ON}`);
+		return csv(
+			[
+				['case', 'changes', ...keys, ...DIFFERENCES.map((k) => `${k}_difference`)],
+				row(root.name, 'unchanged', base, null),
+				...variants.map((v) => {
+					const mine = numbers(v.result);
+					return row(
+						v.name,
+						v.variant.changes.map(describe).join('; '),
+						mine,
+						Object.fromEntries(DIFFERENCES.map((k) => [k, mine[k] - base[k]])),
+					);
+				}),
+			],
+			`${root.name} and its variants. ${PREDICTED_ON}`,
+		);
 	}
 
 	defineOperation({
 		name: 'make_variant',
-		description: 'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
+		description:
+			'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
 		parameters: {
 			type: 'object',
 			properties: {
 				case_id: { type: 'integer', description: 'The car to change; default the case on screen.' },
-				name: { type: 'string', description: 'Default: the car\'s name and the changes.' },
+				name: { type: 'string', description: "Default: the car's name and the changes." },
 				changes: { type: 'array', items: CHANGE_SCHEMA, minItems: 1, description: 'Applied in order.' },
 			},
 			required: ['changes'],
@@ -295,8 +358,13 @@ export function createVariants({ session, engine, workspace, update, run }) {
 
 	defineOperation({
 		name: 'read_study',
-		description: 'The study of a car: the car predicted unchanged on its simplified mesh, as its variants are, and each open variant with its changes, Cx, Cy, Cz, mean Cp and frontal area, and their differences from the unchanged car. The same table the Variants tab shows, whoever made the variants. Give any case of the study; default the case on screen.',
-		parameters: { type: 'object', properties: { case_id: { type: 'integer', description: 'Default the case on screen.' } }, additionalProperties: false },
+		description:
+			'The study of a car: the car predicted unchanged on its simplified mesh, as its variants are, and each open variant with its changes, Cx, Cy, Cz, mean Cp and frontal area, and their differences from the unchanged car. The same table the Variants tab shows, whoever made the variants. Give any case of the study; default the case on screen.',
+		parameters: {
+			type: 'object',
+			properties: { case_id: { type: 'integer', description: 'Default the case on screen.' } },
+			additionalProperties: false,
+		},
 		run({ case_id }) {
 			const c = session.withResult(case_id);
 			return studyOut(c);
@@ -308,7 +376,8 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		label: 'Variants',
 		format: 'CSV',
 		title: 'The study table: the car predicted unchanged and each variant, with their differences',
-		unavailable: (c) => (studyOf(c).variants.length ? null : 'This car has no variants open. Make one in the Variants tab.'),
+		unavailable: (c) =>
+			studyOf(c).variants.length ? null : 'This car has no variants open. Make one in the Variants tab.',
 		make: async (c) => new Blob([studyCsv(c)], { type: 'text/csv' }),
 		fileName: (c) => `${baseName(studyOf(c).root)}-study.csv`,
 	});
@@ -319,9 +388,31 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	let stretchAxis = 'x';
 	let making = false;
 
-	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]), (k) => { kind = k; render(); });
-	const stretchAxes = segmented('Along', AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]), (a) => { stretchAxis = a; render(); });
-	const number = (value, label) => h('input', { class: 'number', type: 'text', inputmode: 'decimal', value, 'aria-label': label, spellcheck: 'false' });
+	const kinds = segmented(
+		'Change',
+		KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]),
+		(k) => {
+			kind = k;
+			render();
+		},
+	);
+	const stretchAxes = segmented(
+		'Along',
+		AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]),
+		(a) => {
+			stretchAxis = a;
+			render();
+		},
+	);
+	const number = (value, label) =>
+		h('input', {
+			class: 'number',
+			type: 'text',
+			inputmode: 'decimal',
+			value,
+			'aria-label': label,
+			spellcheck: 'false',
+		});
 	const unit = (text) => h('span', { class: 'unit' }, text);
 	const percent = number('5', 'Change in size, %');
 	const height = number('-20', 'Ride height change, mm');
@@ -331,17 +422,32 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		ride_height: h('span', { class: 'variants-part' }, height, unit('mm')),
 	};
 	const make = h('button', { type: 'submit', class: 'button' }, 'Make variant');
-	const form = h('form', { class: 'variants-form', onsubmit: (e) => submit(e) }, kinds.el, ...Object.values(parts), make);
+	const form = h(
+		'form',
+		{ class: 'variants-form', onsubmit: (e) => submit(e) },
+		kinds.el,
+		...Object.values(parts),
+		make,
+	);
 	const note = failureNote();
 	const table = h('table', { class: 'data-table variants-table' });
 	const basis = h('p', { class: 'variants-basis' }, PREDICTED_ON);
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });
-	const el = h('div', { class: 'variants' }, form, note.el, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
+	const el = h(
+		'div',
+		{ class: 'variants' },
+		form,
+		note.el,
+		h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot),
+	);
 
 	async function submit(e) {
 		e.preventDefault();
-		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: parseNumber(percent.value) } : { kind, offset_mm: parseNumber(height.value) };
+		const change =
+			kind === 'stretch'
+				? { kind, axis: stretchAxis, percent: parseNumber(percent.value) }
+				: { kind, offset_mm: parseNumber(height.value) };
 		making = true;
 		render();
 		await note.run(run('make_variant', { changes: [change] }));
@@ -360,15 +466,41 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		table.hidden = basis.hidden = !variants.length || !root.baseline;
 		if (table.hidden) return table.replaceChildren();
 		const base = numbers(root.baseline);
-		const row = (x, label, values, title) => h('tr', { class: x === c ? 'current' : '', title, onclick: () => note.run(run('show_case', { case_id: x.id })) },
-			h('td', { class: 'variants-name' }, label),
-			...['cx', 'cz'].flatMap((key) => [h('td', {}, signed(values[key], 3)), h('td', { class: 'variants-delta' }, x === root ? '' : signed(values[key] - base[key], 3))]),
-			h('td', {}, values.frontal_area_m2.toFixed(3)));
+		const row = (x, label, values, title) =>
+			h(
+				'tr',
+				{ class: x === c ? 'current' : '', title, onclick: () => note.run(run('show_case', { case_id: x.id })) },
+				h('td', { class: 'variants-name' }, label),
+				...['cx', 'cz'].flatMap((key) => [
+					h('td', {}, signed(values[key], 3)),
+					h('td', { class: 'variants-delta' }, x === root ? '' : signed(values[key] - base[key], 3)),
+				]),
+				h('td', {}, values.frontal_area_m2.toFixed(3)),
+			);
 		table.replaceChildren(
-			h('thead', {}, h('tr', {}, ...['Variant', coefficient('x'), coefficient('x', 'Δ'), coefficient('z'), coefficient('z', 'Δ'), 'Frontal area, m²'].map((name) => h('th', {}, name)))),
-			h('tbody', {},
+			h(
+				'thead',
+				{},
+				h(
+					'tr',
+					{},
+					...[
+						'Variant',
+						coefficient('x'),
+						coefficient('x', 'Δ'),
+						coefficient('z'),
+						coefficient('z', 'Δ'),
+						'Frontal area, m²',
+					].map((name) => h('th', {}, name)),
+				),
+			),
+			h(
+				'tbody',
+				{},
 				row(root, 'Unchanged', base, `${root.name}, predicted unchanged on the simplified mesh`),
-				...variants.map((v) => row(v, shortName(v), numbers(v.result), v.name))));
+				...variants.map((v) => row(v, shortName(v), numbers(v.result), v.name)),
+			),
+		);
 	}
 
 	const count = () => (session.active?.result ? studyOf(session.active).variants.length : 0);

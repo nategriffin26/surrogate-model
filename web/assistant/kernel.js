@@ -47,7 +47,8 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 
 	workspace.onChange(({ kind, path, from, by }) => {
 		if (!worker || fromKernel || kind === 'link') return;
-		if (kind === 'write') worker.postMessage({ type: 'file', kind: 'place', path, by, blob: workspace.file(path).blob });
+		if (kind === 'write')
+			worker.postMessage({ type: 'file', kind: 'place', path, by, blob: workspace.file(path).blob });
 		else if (kind === 'remove') worker.postMessage({ type: 'file', kind: 'remove', path });
 		else if (kind === 'move') worker.postMessage({ type: 'file', kind: 'move', path: from, to: path });
 	});
@@ -57,15 +58,25 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 			// The kernel's isolation comes from the policy its script is served with; without it, it does not start.
 			const served = await fetch(WORKER, { method: 'HEAD', cache: 'no-store' });
 			if (!served.headers.get('Content-Security-Policy')) {
-				throw new Error('This server does not send the Python kernel its network policy, so the kernel is not started. Run the tool with uv run surrogate app.');
+				throw new Error(
+					'This server does not send the Python kernel its network policy, so the kernel is not started. Run the tool with uv run surrogate app.',
+				);
 			}
-			const modules = Object.fromEntries(await Promise.all(MODULES.map(async (name) => [name, await (await fetch(new URL(`./${name}`, import.meta.url))).text()])));
+			const modules = Object.fromEntries(
+				await Promise.all(
+					MODULES.map(async (name) => [name, await (await fetch(new URL(`./${name}`, import.meta.url))).text()]),
+				),
+			);
 			await new Promise((resolve, reject) => {
 				starting = { resolve, reject };
 				worker = new Worker(WORKER, { type: 'module' });
 				worker.onmessage = ({ data }) => receive(data);
 				worker.onerror = (event) => fail(event.message || 'its script did not load');
-				worker.postMessage({ type: 'start', modules, files: workspace.files().map(({ path, blob, by }) => ({ path, blob, by })) });
+				worker.postMessage({
+					type: 'start',
+					modules,
+					files: workspace.files().map(({ path, blob, by }) => ({ path, blob, by })),
+				});
 			});
 			starting = null;
 		})();
@@ -84,7 +95,11 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 	function fail(message) {
 		shutDown();
 		if (starting) starting.reject(new Error(`The Python kernel could not start: ${message}`));
-		else current?.finish({ status: 'failed', error: `The Python kernel failed and was restarted, losing its variables: ${message}` });
+		else
+			current?.finish({
+				status: 'failed',
+				error: `The Python kernel failed and was restarted, losing its variables: ${message}`,
+			});
 	}
 
 	function cases() {
@@ -93,8 +108,18 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 			cases: session.cases.map((c) => {
 				const reference = c.result?.reference ?? null;
 				// A case's arrays change with its result and with the reference attached to it.
-				if (c.result && versions.get(c.result)?.reference !== reference) versions.set(c.result, { reference, number: nextVersion++ });
-				return { id: c.id, name: c.name, kind: c.kind, status: c.status, path: c.path ?? null, reference, variant_of: c.variant?.root.id ?? null, version: c.result ? versions.get(c.result).number : 0 };
+				if (c.result && versions.get(c.result)?.reference !== reference)
+					versions.set(c.result, { reference, number: nextVersion++ });
+				return {
+					id: c.id,
+					name: c.name,
+					kind: c.kind,
+					status: c.status,
+					path: c.path ?? null,
+					reference,
+					variant_of: c.variant?.root.id ?? null,
+					version: c.result ? versions.get(c.result).number : 0,
+				};
 			}),
 		};
 	}
@@ -108,10 +133,17 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 	 */
 	async function run(code, onOutput, signal) {
 		const begun = performance.now();
-		const outcome = (fields) => ({ written: [], removed: [], requests: [], ...fields, seconds: (performance.now() - begun) / 1000 });
+		const outcome = (fields) => ({
+			written: [],
+			removed: [],
+			requests: [],
+			...fields,
+			seconds: (performance.now() - begun) / 1000,
+		});
 		const stopped = new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
 		if (!signal.aborted) await Promise.race([start(), stopped]);
-		if (signal.aborted) return outcome({ status: 'stopped', error: 'The engineer stopped the run before the code started.' });
+		if (signal.aborted)
+			return outcome({ status: 'stopped', error: 'The engineer stopped the run before the code started.' });
 		const id = nextRun++;
 		return new Promise((resolve) => {
 			const clock = pausableClock(RUN_LIMIT * 1000, () => end('timed out'));
@@ -130,10 +162,14 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 	function end(status) {
 		if (current?.phase !== 'computing') return;
 		shutDown();
-		const error = status === 'timed out'
-			? `The run computed for more than ${RUN_LIMIT} s and was stopped by restarting the kernel.`
-			: 'The engineer stopped the run, which restarted the kernel.';
-		current.finish({ status, error: `${error} Its variables and imports are gone; the workspace files are kept, except any this run was still writing.` });
+		const error =
+			status === 'timed out'
+				? `The run computed for more than ${RUN_LIMIT} s and was stopped by restarting the kernel.`
+				: 'The engineer stopped the run, which restarted the kernel.';
+		current.finish({
+			status,
+			error: `${error} Its variables and imports are gone; the workspace files are kept, except any this run was still writing.`,
+		});
 	}
 
 	async function receive(message) {
@@ -153,7 +189,8 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				const { error = null, value = null, transfer = [] } = await answer(message.kind, message.payload);
 				current?.clock.resume();
 				// A kernel restarted meanwhile (stopped, timed out) is not answered.
-				if (asker === worker) worker.postMessage({ type: 'reply', id: message.id, error, value, cases: cases() }, transfer);
+				if (asker === worker)
+					worker.postMessage({ type: 'reply', id: message.id, error, value, cases: cases() }, transfer);
 				return;
 			}
 			case 'done': {
@@ -171,7 +208,13 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				}
 				// A stop declines the question on screen and every one after it, unasked.
 				const decided = [];
-				for (const change of requests) decided.push({ kind: change.kind, path: change.path, to: change.to, approved: !run.signal.aborted && (await decide(change)) });
+				for (const change of requests)
+					decided.push({
+						kind: change.kind,
+						path: change.path,
+						to: change.to,
+						approved: !run.signal.aborted && (await decide(change)),
+					});
 				run.finish({
 					status: message.error ? 'failed' : 'finished',
 					error: message.error,
@@ -223,11 +266,17 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 					const { name, points, connectivity, offsets } = payload;
 					const result = await engine.predictQuick({ name, points, connectivity, offsets });
 					const seconds = result.timings.reduce((sum, stage) => sum + stage.seconds, 0);
-					return { value: { summary: resultSummary(result, false), cells: result.cells, seconds }, transfer: buffersOf(result.cells) };
+					return {
+						value: { summary: resultSummary(result, false), cells: result.cells, seconds },
+						transfer: buffersOf(result.cells),
+					};
 				}
 				case 'write_vtp': {
 					const { path, points, connectivity, offsets, cellData, pointData } = payload;
-					if (workspace.file(path)?.by === 'engineer' && !(await approve(`Replace ${path} with the assistant's version?`, 'Replace'))) {
+					if (
+						workspace.file(path)?.by === 'engineer' &&
+						!(await approve(`Replace ${path} with the assistant's version?`, 'Replace'))
+					) {
 						return { error: `The engineer declined replacing ${path}. Write to another path.` };
 					}
 					const name = path.slice(path.lastIndexOf('/') + 1);
@@ -243,15 +292,22 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 
 	function readyCase(id) {
 		const c = session.cases.find((each) => each.id === id);
-		if (!c) throw new Error(`There is no open case ${id}. Open cases: ${session.cases.map((each) => `${each.id} (${each.name})`).join(', ') || 'none'}.`);
-		if (c.status !== 'ready') throw new Error(`Case ${id} (${c.name}) is ${c.status}; its arrays are there once it is ready.`);
+		if (!c)
+			throw new Error(
+				`There is no open case ${id}. Open cases: ${session.cases.map((each) => `${each.id} (${each.name})`).join(', ') || 'none'}.`,
+			);
+		if (c.status !== 'ready')
+			throw new Error(`Case ${id} (${c.name}) is ${c.status}; its arrays are there once it is ready.`);
 		return c;
 	}
 
 	return { run, close: shutDown };
 }
 
-const buffersOf = (cells) => Object.values(cells).filter(ArrayBuffer.isView).map((array) => array.buffer);
+const buffersOf = (cells) =>
+	Object.values(cells)
+		.filter(ArrayBuffer.isView)
+		.map((array) => array.buffer);
 
 /**
  * A timer that stops while the kernel waits on the page (an operation, a prediction, the engineer), so only the

@@ -11,7 +11,8 @@ class SlabIndex {
 	constructor(mesh, axis) {
 		const { positions: P, indices: I } = mesh;
 		const triangles = I.length / 3;
-		let lo = Infinity, hi = -Infinity;
+		let lo = Infinity,
+			hi = -Infinity;
 		for (let v = axis; v < P.length; v += 3) {
 			if (P[v] < lo) lo = P[v];
 			if (P[v] > hi) hi = P[v];
@@ -24,7 +25,9 @@ class SlabIndex {
 		const last = new Uint16Array(triangles);
 		const sizes = new Uint32Array(BUCKETS + 1);
 		for (let t = 0; t < triangles; t++) {
-			const a = P[3 * I[3 * t] + axis], b = P[3 * I[3 * t + 1] + axis], c = P[3 * I[3 * t + 2] + axis];
+			const a = P[3 * I[3 * t] + axis],
+				b = P[3 * I[3 * t + 1] + axis],
+				c = P[3 * I[3 * t + 2] + axis];
 			const min = a < b ? (a < c ? a : c) : b < c ? b : c;
 			const max = a > b ? (a > c ? a : c) : b > c ? b : c;
 			const f = Math.min(BUCKETS - 1, ((min - lo) * scale) | 0);
@@ -76,7 +79,8 @@ export function cut(mesh, axis, offset) {
 	const vertexCount = P.length / 3;
 	const crossings = new Map();
 	const crossing = (u, v) => {
-		const a = Math.min(u, v), b = Math.max(u, v);
+		const a = Math.min(u, v),
+			b = Math.max(u, v);
 		const key = a * vertexCount + b;
 		let point = crossings.get(key);
 		if (point) return key;
@@ -98,8 +102,12 @@ export function cut(mesh, axis, offset) {
 		return key;
 	};
 	const visit = (t) => {
-		const a = I[3 * t], b = I[3 * t + 1], c = I[3 * t + 2];
-		const aboveA = P[3 * a + axis] >= offset, aboveB = P[3 * b + axis] >= offset, aboveC = P[3 * c + axis] >= offset;
+		const a = I[3 * t],
+			b = I[3 * t + 1],
+			c = I[3 * t + 2];
+		const aboveA = P[3 * a + axis] >= offset,
+			aboveB = P[3 * b + axis] >= offset,
+			aboveC = P[3 * c + axis] >= offset;
 		if (aboveA === aboveB && aboveB === aboveC) return;
 		// The plane crosses exactly two of the triangle's edges.
 		const ends = [];
@@ -171,7 +179,8 @@ export function branches(lines, axis) {
 		const run = points[0].p[along] <= points.at(-1).p[along] ? points : [...points].reverse();
 		return mean(points) >= mean(all) ? [[run], []] : [[], [run]];
 	}
-	let iMin = 0, iMax = 0;
+	let iMin = 0,
+		iMax = 0;
 	points.forEach((q, i) => {
 		if (q.p[along] < points[iMin].p[along]) iMin = i;
 		if (q.p[along] > points[iMax].p[along]) iMax = i;

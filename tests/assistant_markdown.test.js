@@ -5,7 +5,11 @@ import { tableCells } from '../web/assistant/markdown.js';
 
 Deno.test('an escaped pipe in a cell is a literal | and does not split the cell', () => {
 	// The header of a reply to "Raise the car 20 mm and show me where the pressure changes most".
-	assertEquals(tableCells('| Where | Area with \\|ΔCp\\| > 0.1 | Max \\|ΔCp\\| |'), ['Where', 'Area with |ΔCp| > 0.1', 'Max |ΔCp|']);
+	assertEquals(tableCells('| Where | Area with \\|ΔCp\\| > 0.1 | Max \\|ΔCp\\| |'), [
+		'Where',
+		'Area with |ΔCp| > 0.1',
+		'Max |ΔCp|',
+	]);
 });
 
 Deno.test('a plain row splits at each pipe, with or without the outer ones', () => {

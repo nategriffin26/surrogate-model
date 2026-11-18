@@ -64,28 +64,34 @@ const NEAREST_CHUNK = 262_144;
 
 const engine = prepare();
 engine.then(
-  ({ device, model }) => {
-    self.postMessage({ type: 'device', device });
-    self.postMessage({ type: 'model', model });
-  },
-  (error) => self.postMessage({ type: 'unavailable', message: error.message }),
+	({ device, model }) => {
+		self.postMessage({ type: 'device', device });
+		self.postMessage({ type: 'model', model });
+	},
+	(error) => self.postMessage({ type: 'unavailable', message: error.message }),
 );
 
 async function prepare() {
-  const ensemble = await loadEnsemble(new URL('../model/', import.meta.url));
-  const layout = featureLayout(ensemble.features);
-  const model = modelCard(ensemble);
-  const gpu = await createGpuNetworks(ensemble);
-  const pool = createPool(HELPERS, ensemble);
-  const runners = { gpu, grids: gpu && createGridOperations(gpu.device), pool, networks: ensemble.folds.length, spreadScale: ensemble.spreadScale };
-  return { ensemble, layout, runners, model, device: deviceName(gpu) };
+	const ensemble = await loadEnsemble(new URL('../model/', import.meta.url));
+	const layout = featureLayout(ensemble.features);
+	const model = modelCard(ensemble);
+	const gpu = await createGpuNetworks(ensemble);
+	const pool = createPool(HELPERS, ensemble);
+	const runners = {
+		gpu,
+		grids: gpu && createGridOperations(gpu.device),
+		pool,
+		networks: ensemble.folds.length,
+		spreadScale: ensemble.spreadScale,
+	};
+	return { ensemble, layout, runners, model, device: deviceName(gpu) };
 }
 
 /** A GPU the browser took away, replaced before the next car, with the grid operations on the new device. */
 async function replaceLostGpu(runners, ensemble) {
-  if (!runners.gpu?.lost) return;
-  runners.gpu = await createGpuNetworks(ensemble);
-  runners.grids = runners.gpu && createGridOperations(runners.gpu.device);
+	if (!runners.gpu?.lost) return;
+	runners.gpu = await createGpuNetworks(ensemble);
+	runners.grids = runners.gpu && createGridOperations(runners.gpu.device);
 }
 
 /**
@@ -93,11 +99,11 @@ async function replaceLostGpu(runners, ensemble) {
  * @returns {import('./result.js').ModelCard}
  */
 function modelCard({ card, activation, features }) {
-  return { ...card, activation, columns: describeColumns(features) };
+	return { ...card, activation, columns: describeColumns(features) };
 }
 
 function deviceName(gpu) {
-  return gpu ? `WebGPU (${gpu.name})` : `CPU (${HELPERS} threads)`;
+	return gpu ? `WebGPU (${gpu.name})` : `CPU (${HELPERS} threads)`;
 }
 
 /** Analyses asked for and not yet ended, by id: the one running and those waiting their turn. */
@@ -120,38 +126,38 @@ let explainedLookups = null;
 class Aborted extends Error {}
 
 self.onmessage = ({ data }) => {
-  switch (data.type) {
-    case 'analyze':
-    case 'predictQuick': {
-      const analysis = { id: data.id, aborted: false, controller: new AbortController() };
-      analyses.set(analysis.id, analysis);
-      turn = turn.then(() => run(analysis, data));
-      break;
-    }
-    case 'abort': {
-      const analysis = analyses.get(data.id);
-      if (analysis) abort(analysis);
-      if (lastCar?.id === data.id) lastCar = null;
-      break;
-    }
-    case 'explain':
-      answer(data.id, () => explain(data));
-      break;
-    case 'polygonAt':
-      answer(data.id, () => answerPolygonAt(data));
-      break;
-    case 'fileCells':
-      answer(data.id, () => answerFileCells(data));
-      break;
-    case 'export':
-      answer(data.id, () => exportVtp(data));
-      break;
-    case 'attachReference':
-      answer(data.id, () => attachReference(data));
-      break;
-    default:
-      throw new Error(`Unknown engine request ${data.type}`);
-  }
+	switch (data.type) {
+		case 'analyze':
+		case 'predictQuick': {
+			const analysis = { id: data.id, aborted: false, controller: new AbortController() };
+			analyses.set(analysis.id, analysis);
+			turn = turn.then(() => run(analysis, data));
+			break;
+		}
+		case 'abort': {
+			const analysis = analyses.get(data.id);
+			if (analysis) abort(analysis);
+			if (lastCar?.id === data.id) lastCar = null;
+			break;
+		}
+		case 'explain':
+			answer(data.id, () => explain(data));
+			break;
+		case 'polygonAt':
+			answer(data.id, () => answerPolygonAt(data));
+			break;
+		case 'fileCells':
+			answer(data.id, () => answerFileCells(data));
+			break;
+		case 'export':
+			answer(data.id, () => exportVtp(data));
+			break;
+		case 'attachReference':
+			answer(data.id, () => attachReference(data));
+			break;
+		default:
+			throw new Error(`Unknown engine request ${data.type}`);
+	}
 };
 
 /**
@@ -159,12 +165,12 @@ self.onmessage = ({ data }) => {
  * that move to the page), or with the message of its failure.
  */
 async function answer(id, work) {
-  try {
-    const [value, transfer = []] = await work();
-    self.postMessage({ type: 'answer', id, answer: value }, transfer);
-  } catch (error) {
-    self.postMessage({ type: 'answerFailed', id, message: error.message });
-  }
+	try {
+		const [value, transfer = []] = await work();
+		self.postMessage({ type: 'answer', id, answer: value }, transfer);
+	} catch (error) {
+		self.postMessage({ type: 'answerFailed', id, message: error.message });
+	}
 }
 
 /**
@@ -173,161 +179,196 @@ async function answer(id, work) {
  * leaves it held. The page lets go of aborted and failed analyses itself.
  */
 async function run(analysis, request) {
-  if (!analysis.aborted) {
-    running = analysis;
-    if (request.type === 'analyze') {
-      if (lastCar) self.postMessage({ type: 'released', id: lastCar.id });
-      lastCar = null;
-      await analyze(analysis, request.file);
-    } else {
-      await predictQuick(analysis, request.surface);
-    }
-    running = null;
-    engine.then(({ runners }) => runners.pool.broadcast({ type: 'release' }), () => {});
-  }
-  analyses.delete(analysis.id);
+	if (!analysis.aborted) {
+		running = analysis;
+		if (request.type === 'analyze') {
+			if (lastCar) self.postMessage({ type: 'released', id: lastCar.id });
+			lastCar = null;
+			await analyze(analysis, request.file);
+		} else {
+			await predictQuick(analysis, request.surface);
+		}
+		running = null;
+		engine.then(
+			({ runners }) => runners.pool.broadcast({ type: 'release' }),
+			() => {},
+		);
+	}
+	analyses.delete(analysis.id);
 }
 
 function abort(analysis) {
-  analysis.aborted = true;
-  analysis.controller.abort(new Aborted());
-  if (analysis === running) engine.then(({ runners }) => runners.pool.clear(new Aborted()), () => {});
+	analysis.aborted = true;
+	analysis.controller.abort(new Aborted());
+	if (analysis === running)
+		engine.then(
+			({ runners }) => runners.pool.clear(new Aborted()),
+			() => {},
+		);
 }
 
 function checkpoint(analysis) {
-  if (analysis.aborted) throw new Aborted();
+	if (analysis.aborted) throw new Aborted();
 }
 
 /** Posts an analysis's messages, tagged with its id, until it is aborted. */
 function poster(analysis) {
-  return (message, transfer = []) => {
-    if (!analysis.aborted) self.postMessage({ ...message, id: analysis.id }, transfer);
-  };
+	return (message, transfer = []) => {
+		if (!analysis.aborted) self.postMessage({ ...message, id: analysis.id }, transfer);
+	};
 }
 
 /** Tells the page an analysis failed and drops the work still queued for it; an aborted one ends silently. */
 function fail(analysis, post, error, input) {
-  if (error instanceof Aborted || analysis.aborted) return;
-  post({ type: 'failed', message: describeFailure(error, input) });
-  abort(analysis);
+	if (error instanceof Aborted || analysis.aborted) return;
+	post({ type: 'failed', message: describeFailure(error, input) });
+	abort(analysis);
 }
 
 /** A full analysis of `file`. */
 async function analyze(analysis, file) {
-  const post = poster(analysis);
-  try {
-    const { ensemble, layout, runners } = await engine;
-    await replaceLostGpu(runners, ensemble);
-    const stages = stageClock(post);
+	const post = poster(analysis);
+	try {
+		const { ensemble, layout, runners } = await engine;
+		await replaceLostGpu(runners, ensemble);
+		const stages = stageClock(post);
 
-    stages.begin('reading');
-    const surface = await readSurface(file, stages.progress);
-    checkpoint(analysis);
+		stages.begin('reading');
+		const surface = await readSurface(file, stages.progress);
+		checkpoint(analysis);
 
-    stages.begin('measuring');
-    const car = await measure(surface, layout, runners.grids, stages.progress);
-    runners.pool.broadcast({ type: 'context', context: car.context });
-    checkpoint(analysis);
+		stages.begin('measuring');
+		const car = await measure(surface, layout, runners.grids, stages.progress);
+		runners.pool.broadcast({ type: 'context', context: car.context });
+		checkpoint(analysis);
 
-    stages.begin('meshing');
-    const { cells } = car;
-    // The area picks need no mesh, so the networks run on them while the meshes are built. Progress
-    // counts toward the predicting stage only once it begins (the total is unknown until then).
-    let cellsPredicted = 0;
-    let cellsToPredict = Infinity;
-    const counted = (size) => stages.progress((cellsPredicted += size) / cellsToPredict);
-    const picks = evenPicks(cells.areas, DRAG_PICKS);
-    const pickedCells = distinct(picks.picks);
-    const pickBatch = predictBatch(analysis, runners, cells, pickedCells, counted);
-    pickBatch.catch(() => {});
+		stages.begin('meshing');
+		const { cells } = car;
+		// The area picks need no mesh, so the networks run on them while the meshes are built. Progress
+		// counts toward the predicting stage only once it begins (the total is unknown until then).
+		let cellsPredicted = 0;
+		let cellsToPredict = Infinity;
+		const counted = (size) => stages.progress((cellsPredicted += size) / cellsToPredict);
+		const picks = evenPicks(cells.areas, DRAG_PICKS);
+		const pickedCells = distinct(picks.picks);
+		const pickBatch = predictBatch(analysis, runners, cells, pickedCells, counted);
+		pickBatch.catch(() => {});
 
-    let full = null;
-    let working = null;
-    await buildMeshes(surface, { flip: car.flip, average: car.average, signal: analysis.controller.signal }, {
-      preview: (mesh) => post({ type: 'geometry', mesh: displayMesh(mesh) }),
-      full: (mesh) => {
-        full = mesh;
-        // The meshes read positions, normals and CFD until they are done, so the page gets copies,
-        // made here off its main thread and handed over whole rather than copied again on arrival.
-        const copy = {
-          ...displayMesh(mesh),
-          positions: mesh.positions.slice(),
-          normals: mesh.normals.slice(),
-          ...(mesh.cfd && { cfd: mesh.cfd.slice() }),
-        };
-        const arrays = [copy.indices, copy.positions, copy.normals, copy.cfd].filter(Boolean);
-        post({ type: 'fullMesh', mesh: copy }, arrays.map((array) => array.buffer));
-      },
-      working: (mesh) => {
-        working = mesh;
-      },
-      progress: stages.progress,
-    });
-    checkpoint(analysis);
+		let full = null;
+		let working = null;
+		await buildMeshes(
+			surface,
+			{ flip: car.flip, average: car.average, signal: analysis.controller.signal },
+			{
+				preview: (mesh) => post({ type: 'geometry', mesh: displayMesh(mesh) }),
+				full: (mesh) => {
+					full = mesh;
+					// The meshes read positions, normals and CFD until they are done, so the page gets copies,
+					// made here off its main thread and handed over whole rather than copied again on arrival.
+					const copy = {
+						...displayMesh(mesh),
+						positions: mesh.positions.slice(),
+						normals: mesh.normals.slice(),
+						...(mesh.cfd && { cfd: mesh.cfd.slice() }),
+					};
+					const arrays = [copy.indices, copy.positions, copy.normals, copy.cfd].filter(Boolean);
+					post(
+						{ type: 'fullMesh', mesh: copy },
+						arrays.map((array) => array.buffer),
+					);
+				},
+				working: (mesh) => {
+					working = mesh;
+				},
+				progress: stages.progress,
+			},
+		);
+		checkpoint(analysis);
 
-    stages.begin('predicting');
-    const near = car.average.around(working.sourcePoint);
-    const ringCells = difference(near.cells, pickedCells);
-    cellsToPredict = pickedCells.length + ringCells.length;
-    stages.progress(cellsPredicted / cellsToPredict);
-    const ringBatch = await predictBatch(analysis, runners, cells, ringCells, counted);
-    const pickBatchDone = await pickBatch;
-    checkpoint(analysis);
-    stages.end();
+		stages.begin('predicting');
+		const near = car.average.around(working.sourcePoint);
+		const ringCells = difference(near.cells, pickedCells);
+		cellsToPredict = pickedCells.length + ringCells.length;
+		stages.progress(cellsPredicted / cellsToPredict);
+		const ringBatch = await predictBatch(analysis, runners, cells, ringCells, counted);
+		const pickBatchDone = await pickBatch;
+		checkpoint(analysis);
+		stages.end();
 
-    const predicted = {
-      cp: new Float32Array(cells.areas.length),
-      sigma: new Float32Array(cells.areas.length),
-      done: new Uint8Array(cells.areas.length),
-    };
-    for (const batch of [pickBatchDone, ringBatch]) {
-      batch.cells.forEach((c, j) => {
-        predicted.cp[c] = batch.fields.cp[j];
-        predicted.sigma[c] = batch.fields.sigma[j];
-        predicted.done[c] = 1;
-      });
-    }
-    const mesh = {
-      ...displayMesh(working),
-      cp: near.average(Float32Array.from(near.cells, (c) => predicted.cp[c])),
-      sigma: near.average(Float32Array.from(near.cells, (c) => predicted.sigma[c])),
-    };
+		const predicted = {
+			cp: new Float32Array(cells.areas.length),
+			sigma: new Float32Array(cells.areas.length),
+			done: new Uint8Array(cells.areas.length),
+		};
+		for (const batch of [pickBatchDone, ringBatch]) {
+			batch.cells.forEach((c, j) => {
+				predicted.cp[c] = batch.fields.cp[j];
+				predicted.sigma[c] = batch.fields.sigma[j];
+				predicted.done[c] = 1;
+			});
+		}
+		const mesh = {
+			...displayMesh(working),
+			cp: near.average(Float32Array.from(near.cells, (c) => predicted.cp[c])),
+			sigma: near.average(Float32Array.from(near.cells, (c) => predicted.sigma[c])),
+		};
 
-    const estimate = new SurfaceTally(runners.networks, car.frontal, cells);
-    const accuracy = surface.cfd && new Accuracy();
-    // The picks and their distinct cells both ascend, so one walk finds each pick's prediction.
-    const { models: pickModels, fields: pickFields } = pickBatchDone;
-    for (let i = 0, j = 0; i < picks.picks.length; i++) {
-      const c = picks.picks[i];
-      while (pickedCells[j] < c) j++;
-      estimate.add(picks.weight, c, pickModels, j, pickedCells.length, pickFields.cp[j]);
-      accuracy?.add(picks.weight, pickFields.cp[j], surface.cfd[c]);
-    }
-    const result = {
-      ...resultOf('full', surface, car, surfaceNumbers(estimate, accuracy ? accuracy.result() : null), ensemble, runners),
-      timings: stages.timings,
-      mesh,
-    };
-    lastCar = {
-      id: analysis.id, file, surface, cells, context: car.context, frontal: car.frontal, predicted,
-      index: null, complete: false, sourcePoint: working.sourcePoint, showFull: Boolean(full), reference: result.reference,
-    };
-    post({ type: 'result', result });
-    lastCar.index = indexPolygons(surface, cells);
+		const estimate = new SurfaceTally(runners.networks, car.frontal, cells);
+		const accuracy = surface.cfd && new Accuracy();
+		// The picks and their distinct cells both ascend, so one walk finds each pick's prediction.
+		const { models: pickModels, fields: pickFields } = pickBatchDone;
+		for (let i = 0, j = 0; i < picks.picks.length; i++) {
+			const c = picks.picks[i];
+			while (pickedCells[j] < c) j++;
+			estimate.add(picks.weight, c, pickModels, j, pickedCells.length, pickFields.cp[j]);
+			accuracy?.add(picks.weight, pickFields.cp[j], surface.cfd[c]);
+		}
+		const result = {
+			...resultOf(
+				'full',
+				surface,
+				car,
+				surfaceNumbers(estimate, accuracy ? accuracy.result() : null),
+				ensemble,
+				runners,
+			),
+			timings: stages.timings,
+			mesh,
+		};
+		lastCar = {
+			id: analysis.id,
+			file,
+			surface,
+			cells,
+			context: car.context,
+			frontal: car.frontal,
+			predicted,
+			index: null,
+			complete: false,
+			sourcePoint: working.sourcePoint,
+			showFull: Boolean(full),
+			reference: result.reference,
+		};
+		post({ type: 'result', result });
+		lastCar.index = indexPolygons(surface, cells);
 
-    const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
-    // The background prediction is the rest of this analysis: the next one waits for it.
-    const complete = await completeSurface(analysis, runners, post, {
-      surface, car, working: { ...mesh, sourcePoint: working.sourcePoint },
-      batches: [pickBatchDone, ringBatch], predicted, showFull: Boolean(full),
-      affordable: cells.areas.length / cellsPerSecond <= FULL_PREDICTION_SECONDS,
-    }).catch((error) => {
-      if (!(error instanceof Aborted)) console.error(error);
-    });
-    if (complete && lastCar?.id === analysis.id) lastCar.complete = true;
-  } catch (error) {
-    fail(analysis, post, error, { file });
-  }
+		const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
+		// The background prediction is the rest of this analysis: the next one waits for it.
+		const complete = await completeSurface(analysis, runners, post, {
+			surface,
+			car,
+			working: { ...mesh, sourcePoint: working.sourcePoint },
+			batches: [pickBatchDone, ringBatch],
+			predicted,
+			showFull: Boolean(full),
+			affordable: cells.areas.length / cellsPerSecond <= FULL_PREDICTION_SECONDS,
+		}).catch((error) => {
+			if (!(error instanceof Aborted)) console.error(error);
+		});
+		if (complete && lastCar?.id === analysis.id) lastCar.complete = true;
+	} catch (error) {
+		fail(analysis, post, error, { file });
+	}
 }
 
 /**
@@ -336,75 +377,88 @@ async function analyze(analysis, file) {
  * of a working mesh. Its result carries the polygons themselves with their predictions (`cells`).
  */
 async function predictQuick(analysis, given) {
-  const post = poster(analysis);
-  try {
-    const { ensemble, layout, runners } = await engine;
-    await replaceLostGpu(runners, ensemble);
-    const started = performance.now();
-    const surface = checkSurface(given);
-    const car = await measure(surface, layout, runners.grids, () => {});
-    runners.pool.broadcast({ type: 'context', context: car.context });
-    const measured = performance.now();
+	const post = poster(analysis);
+	try {
+		const { ensemble, layout, runners } = await engine;
+		await replaceLostGpu(runners, ensemble);
+		const started = performance.now();
+		const surface = checkSurface(given);
+		const car = await measure(surface, layout, runners.grids, () => {});
+		runners.pool.broadcast({ type: 'context', context: car.context });
+		const measured = performance.now();
 
-    const { cells } = car;
-    const count = cells.areas.length;
-    const batch = await predictBatch(analysis, runners, cells, Uint32Array.from({ length: count }, (_, c) => c), () => {});
-    checkpoint(analysis);
-    const { cp, sigma } = batch.fields;
-    const tally = new SurfaceTally(runners.networks, car.frontal, cells);
-    for (let c = 0; c < count; c++) tally.add(cells.areas[c], c, batch.models, c, count, cp[c]);
-    const accuracy = surface.cfd ? surfaceAccuracy(cells.areas, cp, surface.cfd) : null;
-    const drawn = surfaceMesh(surface, car.flip);
-    const mesh = {
-      ...displayMesh({ ...drawn, cfd: surface.cfd && car.average.all(surface.cfd) }),
-      cp: car.average.all(cp),
-      sigma: car.average.all(sigma),
-    };
-    const result = {
-      ...resultOf('quick', surface, car, surfaceNumbers(tally, accuracy), ensemble, runners),
-      timings: [
-        { stage: 'measuring', seconds: (measured - started) / 1000 },
-        { stage: 'predicting', seconds: (performance.now() - measured) / 1000 },
-      ],
-      mesh,
-      cells: {
-        points: surface.points, connectivity: surface.connectivity, offsets: surface.offsets,
-        centers: cells.centers, normals: cells.normals, areas: cells.areas, cp, sigma, cfd: surface.cfd,
-      },
-    };
-    // `mesh.positions` is `cells.points`: the clone keeps them one array, and each buffer moves once.
-    const arrays = [...Object.values(result.cells), mesh.normals, mesh.indices, mesh.cp, mesh.sigma, mesh.cfd];
-    post({ type: 'result', result }, [...new Set(arrays.filter(Boolean).map((array) => array.buffer))]);
-  } catch (error) {
-    fail(analysis, post, error, { surface: given });
-  }
+		const { cells } = car;
+		const count = cells.areas.length;
+		const batch = await predictBatch(
+			analysis,
+			runners,
+			cells,
+			Uint32Array.from({ length: count }, (_, c) => c),
+			() => {},
+		);
+		checkpoint(analysis);
+		const { cp, sigma } = batch.fields;
+		const tally = new SurfaceTally(runners.networks, car.frontal, cells);
+		for (let c = 0; c < count; c++) tally.add(cells.areas[c], c, batch.models, c, count, cp[c]);
+		const accuracy = surface.cfd ? surfaceAccuracy(cells.areas, cp, surface.cfd) : null;
+		const drawn = surfaceMesh(surface, car.flip);
+		const mesh = {
+			...displayMesh({ ...drawn, cfd: surface.cfd && car.average.all(surface.cfd) }),
+			cp: car.average.all(cp),
+			sigma: car.average.all(sigma),
+		};
+		const result = {
+			...resultOf('quick', surface, car, surfaceNumbers(tally, accuracy), ensemble, runners),
+			timings: [
+				{ stage: 'measuring', seconds: (measured - started) / 1000 },
+				{ stage: 'predicting', seconds: (performance.now() - measured) / 1000 },
+			],
+			mesh,
+			cells: {
+				points: surface.points,
+				connectivity: surface.connectivity,
+				offsets: surface.offsets,
+				centers: cells.centers,
+				normals: cells.normals,
+				areas: cells.areas,
+				cp,
+				sigma,
+				cfd: surface.cfd,
+			},
+		};
+		// `mesh.positions` is `cells.points`: the clone keeps them one array, and each buffer moves once.
+		const arrays = [...Object.values(result.cells), mesh.normals, mesh.indices, mesh.cp, mesh.sigma, mesh.cfd];
+		post({ type: 'result', result }, [...new Set(arrays.filter(Boolean).map((array) => array.buffer))]);
+	} catch (error) {
+		fail(analysis, post, error, { surface: given });
+	}
 }
 
 /** The parts of a Result that a full and a quick one make alike, from a measured surface and its sums. */
 function resultOf(form, surface, car, numbers, ensemble, runners) {
-  return {
-    form,
-    source: { name: surface.name, cells: car.cells.areas.length },
-    geometry: geometryOf(car),
-    ...numbers,
-    reference: ownReference(surface),
-    referenceTotals: car.referenceTotals,
-    coverage: coverage(car.bounds, ensemble.card.dimensions),
-    device: deviceName(runners.gpu),
-    model: ensemble.weightsSha256,
-    lookups: lookupsOf(car.context, ensemble.features),
-  };
+	return {
+		form,
+		source: { name: surface.name, cells: car.cells.areas.length },
+		geometry: geometryOf(car),
+		...numbers,
+		reference: ownReference(surface),
+		referenceTotals: car.referenceTotals,
+		coverage: coverage(car.bounds, ensemble.card.dimensions),
+		device: deviceName(runners.gpu),
+		model: ensemble.weightsSha256,
+		lookups: lookupsOf(car.context, ensemble.features),
+	};
 }
 
 /** The Result's `geometry` of a measured car. */
 function geometryOf({ bounds, frontal }) {
-  return {
-    bounds,
-    length: bounds[1] - bounds[0],
-    width: bounds[3] - bounds[2],
-    height: bounds[5] - bounds[4],
-    frontalArea: frontal,
-  };
+	return {
+		bounds,
+		length: bounds[1] - bounds[0],
+		width: bounds[3] - bounds[2],
+		height: bounds[5] - bounds[4],
+		frontalArea: frontal,
+	};
 }
 
 /**
@@ -412,47 +466,52 @@ function geometryOf({ bounds, frontal }) {
  * reference field's whole-car totals.
  */
 async function measure(surface, layout, grids, progress) {
-  const cells = measureCells(surface);
-  progress(0.5);
-  const frontal = frontalArea(surface);
-  progress(0.6);
-  const context = { layout, ...(await buildLookups(surface, cells, layout, grids)) };
-  progress(0.8);
-  const average = cellToPoint(surface, cells.areas);
-  progress(0.95);
-  return {
-    cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds,
-    referenceTotals: surface.cfd ? referenceTotals(cells, surface.cfd, frontal) : null,
-  };
+	const cells = measureCells(surface);
+	progress(0.5);
+	const frontal = frontalArea(surface);
+	progress(0.6);
+	const context = { layout, ...(await buildLookups(surface, cells, layout, grids)) };
+	progress(0.8);
+	const average = cellToPoint(surface, cells.areas);
+	progress(0.95);
+	return {
+		cells,
+		context,
+		average,
+		frontal,
+		flip: cells.flip,
+		bounds: cells.bounds,
+		referenceTotals: surface.cfd ? referenceTotals(cells, surface.cfd, frontal) : null,
+	};
 }
 
 /** The Result's surface numbers: the forces and totals of a tally over polygons, and the accuracy against CFD. */
 function surfaceNumbers(tally, accuracy) {
-  return { forces: tally.forces(), accuracy, totals: tally.totals() };
+	return { forces: tally.forces(), accuracy, totals: tally.totals() };
 }
 
 /** `Result.reference` for a surface's own CFD, as its file or its arrays carried it. */
 function ownReference(surface) {
-  return surface.cfd ? { file: surface.name, array: CFD_ARRAY, mapping: 'own' } : null;
+	return surface.cfd ? { file: surface.name, array: CFD_ARRAY, mapping: 'own' } : null;
 }
 
 /** An ascending list without its repeats. */
 function distinct(sorted) {
-  let n = 0;
-  const out = new Uint32Array(sorted.length);
-  for (let i = 0; i < sorted.length; i++) if (n === 0 || out[n - 1] !== sorted[i]) out[n++] = sorted[i];
-  return out.slice(0, n);
+	let n = 0;
+	const out = new Uint32Array(sorted.length);
+	for (let i = 0; i < sorted.length; i++) if (n === 0 || out[n - 1] !== sorted[i]) out[n++] = sorted[i];
+	return out.slice(0, n);
 }
 
 /** The entries of ascending list `a` that ascending list `b` lacks. */
 function difference(a, b) {
-  const out = new Uint32Array(a.length);
-  let n = 0;
-  for (let i = 0, j = 0; i < a.length; i++) {
-    while (j < b.length && b[j] < a[i]) j++;
-    if (j >= b.length || b[j] !== a[i]) out[n++] = a[i];
-  }
-  return out.slice(0, n);
+	const out = new Uint32Array(a.length);
+	let n = 0;
+	for (let i = 0, j = 0; i < a.length; i++) {
+		while (j < b.length && b[j] < a[i]) j++;
+		if (j >= b.length || b[j] !== a[i]) out[n++] = a[i];
+	}
+	return out.slice(0, n);
 }
 
 /**
@@ -460,53 +519,58 @@ function difference(a, b) {
  * count) array, their mean and spread, and the seconds it took. `counted(size)` hears of each chunk.
  */
 async function predictBatch(analysis, runners, cells, order, counted) {
-  const started = performance.now();
-  const count = order.length;
-  const models = new Float32Array(runners.networks * count);
-  await predictPoints(analysis, runners, cells, order, (start, size, chunk) => {
-    for (let f = 0; f < runners.networks; f++) models.set(chunk.subarray(f * size, (f + 1) * size), f * count + start);
-    counted(size);
-  });
-  return { cells: order, models, fields: ensembleStatistics(models, count, runners.spreadScale), seconds: (performance.now() - started) / 1000 };
+	const started = performance.now();
+	const count = order.length;
+	const models = new Float32Array(runners.networks * count);
+	await predictPoints(analysis, runners, cells, order, (start, size, chunk) => {
+		for (let f = 0; f < runners.networks; f++) models.set(chunk.subarray(f * size, (f + 1) * size), f * count + start);
+		counted(size);
+	});
+	return {
+		cells: order,
+		models,
+		fields: ensembleStatistics(models, count, runners.spreadScale),
+		seconds: (performance.now() - started) / 1000,
+	};
 }
 
 /** The contract's mesh fields only (the working mesh also carries `sourcePoint`), with its bounds. */
 function displayMesh({ positions, normals, indices, cfd }) {
-  return { positions, normals, indices, bounds: boundsOf(positions), ...(cfd && { cfd }) };
+	return { positions, normals, indices, bounds: boundsOf(positions), ...(cfd && { cfd }) };
 }
 
 /**
  * Stage events and timings: each stage reports nondecreasing progress, then 1 when the next begins.
  */
 function stageClock(post) {
-  const timings = [];
-  let current = null;
-  let started = 0;
-  let reported = 0;
-  const end = () => {
-    if (!current) return;
-    post({ type: 'stage', stage: current, fraction: 1 });
-    timings.push({ stage: current, seconds: (performance.now() - started) / 1000 });
-    current = null;
-  };
-  return {
-    timings,
-    begin(stage) {
-      end();
-      current = stage;
-      started = performance.now();
-      reported = 0;
-      post({ type: 'stage', stage, fraction: 0 });
-    },
-    progress(fraction) {
-      // At most a hundred updates a stage.
-      if (current && fraction >= reported + 0.01 && fraction < 1) {
-        reported = fraction;
-        post({ type: 'stage', stage: current, fraction });
-      }
-    },
-    end,
-  };
+	const timings = [];
+	let current = null;
+	let started = 0;
+	let reported = 0;
+	const end = () => {
+		if (!current) return;
+		post({ type: 'stage', stage: current, fraction: 1 });
+		timings.push({ stage: current, seconds: (performance.now() - started) / 1000 });
+		current = null;
+	};
+	return {
+		timings,
+		begin(stage) {
+			end();
+			current = stage;
+			started = performance.now();
+			reported = 0;
+			post({ type: 'stage', stage, fraction: 0 });
+		},
+		progress(fraction) {
+			// At most a hundred updates a stage.
+			if (current && fraction >= reported + 0.01 && fraction < 1) {
+				reported = fraction;
+				post({ type: 'stage', stage: current, fraction });
+			}
+		},
+		end,
+	};
 }
 
 /**
@@ -514,47 +578,54 @@ function stageClock(post) {
  * chunk: features in the helpers and the networks on the GPU, or everything in the helpers.
  * `onChunk(start, count, models)` receives each chunk's (networks, count) Cp in order.
  */
-async function predictPoints(analysis, { gpu, pool, networks }, { centers, normals }, order, onChunk, background = false) {
-  const count = order.length;
-  const chunkSize = gpu ? (background ? BACKGROUND_GPU_CHUNK : GPU_CHUNK) : CPU_CHUNK;
-  const inFlight = background ? Math.min(pool.size, BACKGROUND_IN_FLIGHT) : pool.size;
-  let next = 0;
-  const launch = () => {
-    const start = next;
-    const size = Math.min(chunkSize, count - start);
-    next += size;
-    const chunkCenters = new Float32Array(3 * size);
-    const chunkNormals = new Float32Array(3 * size);
-    for (let i = 0; i < size; i++) {
-      const c = order[start + i];
-      chunkCenters.set(centers.subarray(3 * c, 3 * c + 3), 3 * i);
-      chunkNormals.set(normals.subarray(3 * c, 3 * c + 3), 3 * i);
-    }
-    const task = pool.run(
-      gpu
-        ? { type: 'features', positions: chunkCenters, normals: chunkNormals, count: size, stride: gpu.stride }
-        : { type: 'models', positions: chunkCenters, normals: chunkNormals, count: size },
-      [chunkCenters.buffer, chunkNormals.buffer],
-    );
-    // A task dropped by an abort rejects; whoever awaits it handles that, the rest are let go.
-    task.catch(() => {});
-    return { start, size, task };
-  };
-  const pending = [];
-  while (pending.length < inFlight && next < count) pending.push(launch());
-  while (pending.length) {
-    const { start, size, task } = pending.shift();
-    const result = await task;
-    checkpoint(analysis);
-    if (next < count) pending.push(launch());
-    let models = result;
-    if (gpu) {
-      models = new Float32Array(networks * size);
-      await gpu.predict(result, size, models);
-      checkpoint(analysis);
-    }
-    onChunk(start, size, models);
-  }
+async function predictPoints(
+	analysis,
+	{ gpu, pool, networks },
+	{ centers, normals },
+	order,
+	onChunk,
+	background = false,
+) {
+	const count = order.length;
+	const chunkSize = gpu ? (background ? BACKGROUND_GPU_CHUNK : GPU_CHUNK) : CPU_CHUNK;
+	const inFlight = background ? Math.min(pool.size, BACKGROUND_IN_FLIGHT) : pool.size;
+	let next = 0;
+	const launch = () => {
+		const start = next;
+		const size = Math.min(chunkSize, count - start);
+		next += size;
+		const chunkCenters = new Float32Array(3 * size);
+		const chunkNormals = new Float32Array(3 * size);
+		for (let i = 0; i < size; i++) {
+			const c = order[start + i];
+			chunkCenters.set(centers.subarray(3 * c, 3 * c + 3), 3 * i);
+			chunkNormals.set(normals.subarray(3 * c, 3 * c + 3), 3 * i);
+		}
+		const task = pool.run(
+			gpu
+				? { type: 'features', positions: chunkCenters, normals: chunkNormals, count: size, stride: gpu.stride }
+				: { type: 'models', positions: chunkCenters, normals: chunkNormals, count: size },
+			[chunkCenters.buffer, chunkNormals.buffer],
+		);
+		// A task dropped by an abort rejects; whoever awaits it handles that, the rest are let go.
+		task.catch(() => {});
+		return { start, size, task };
+	};
+	const pending = [];
+	while (pending.length < inFlight && next < count) pending.push(launch());
+	while (pending.length) {
+		const { start, size, task } = pending.shift();
+		const result = await task;
+		checkpoint(analysis);
+		if (next < count) pending.push(launch());
+		let models = result;
+		if (gpu) {
+			models = new Float32Array(networks * size);
+			await gpu.predict(result, size, models);
+			checkpoint(analysis);
+		}
+		onChunk(start, size, models);
+	}
 }
 
 /**
@@ -565,116 +636,136 @@ async function predictPoints(analysis, { gpu, pool, networks }, { centers, norma
  * @returns {Promise<boolean>} whether every polygon was predicted
  */
 async function completeSurface(analysis, runners, post, held) {
-  const { surface, car, working, batches, predicted, showFull, affordable } = held;
-  const { cells } = car;
-  const { points, connectivity, offsets } = surface;
-  const cellCount = cells.areas.length;
-  const pointCount = points.length / 3;
-  let predictedCount = batches.reduce((sum, batch) => sum + batch.cells.length, 0);
+	const { surface, car, working, batches, predicted, showFull, affordable } = held;
+	const { cells } = car;
+	const { points, connectivity, offsets } = surface;
+	const cellCount = cells.areas.length;
+	const pointCount = points.length / 3;
+	let predictedCount = batches.reduce((sum, batch) => sum + batch.cells.length, 0);
 
-  // The full mesh's fields, kept current as polygons are predicted: each file point holds the
-  // area-weighted mean of its polygons predicted so far, or until the first one its nearest
-  // working-mesh vertex's value. A `fullFields` posts a copy, so the worker stays free for picks.
-  let field = null;
-  const accumulate = (c, cp, sigma) => {
-    const area = cells.areas[c];
-    for (let i = offsets[c]; i < offsets[c + 1]; i++) {
-      const p = connectivity[i];
-      const share = area / (field.area[p] + area);
-      field.cp[p] += (cp - field.cp[p]) * share;
-      field.sigma[p] += (sigma - field.sigma[p]) * share;
-      field.area[p] += area;
-    }
-  };
-  let lastSent = 0;
-  const send = () => {
-    const cp = field.cp.slice();
-    const sigma = field.sigma.slice();
-    post({ type: 'fullFields', fields: { cp, sigma }, fraction: predictedCount / cellCount }, [cp.buffer, sigma.buffer]);
-    lastSent = performance.now();
-  };
-  let nearest = null;
-  if (showFull) {
-    nearest = await nearestWorkingVertices(runners.pool, points, working.positions);
-    checkpoint(analysis);
-    field = { cp: new Float32Array(pointCount), sigma: new Float32Array(pointCount), area: new Float32Array(pointCount) };
-    for (let p = 0; p < pointCount; p++) {
-      field.cp[p] = working.cp[nearest[p]];
-      field.sigma[p] = working.sigma[nearest[p]];
-    }
-    for (const batch of batches) batch.cells.forEach((c, j) => accumulate(c, batch.fields.cp[j], batch.fields.sigma[j]));
-    send();
-  }
-  if (!affordable) return false;
+	// The full mesh's fields, kept current as polygons are predicted: each file point holds the
+	// area-weighted mean of its polygons predicted so far, or until the first one its nearest
+	// working-mesh vertex's value. A `fullFields` posts a copy, so the worker stays free for picks.
+	let field = null;
+	const accumulate = (c, cp, sigma) => {
+		const area = cells.areas[c];
+		for (let i = offsets[c]; i < offsets[c + 1]; i++) {
+			const p = connectivity[i];
+			const share = area / (field.area[p] + area);
+			field.cp[p] += (cp - field.cp[p]) * share;
+			field.sigma[p] += (sigma - field.sigma[p]) * share;
+			field.area[p] += area;
+		}
+	};
+	let lastSent = 0;
+	const send = () => {
+		const cp = field.cp.slice();
+		const sigma = field.sigma.slice();
+		post({ type: 'fullFields', fields: { cp, sigma }, fraction: predictedCount / cellCount }, [
+			cp.buffer,
+			sigma.buffer,
+		]);
+		lastSent = performance.now();
+	};
+	let nearest = null;
+	if (showFull) {
+		nearest = await nearestWorkingVertices(runners.pool, points, working.positions);
+		checkpoint(analysis);
+		field = {
+			cp: new Float32Array(pointCount),
+			sigma: new Float32Array(pointCount),
+			area: new Float32Array(pointCount),
+		};
+		for (let p = 0; p < pointCount; p++) {
+			field.cp[p] = working.cp[nearest[p]];
+			field.sigma[p] = working.sigma[nearest[p]];
+		}
+		for (const batch of batches)
+			batch.cells.forEach((c, j) => accumulate(c, batch.fields.cp[j], batch.fields.sigma[j]));
+		send();
+	}
+	if (!affordable) return false;
 
-  const exact = new SurfaceTally(runners.networks, car.frontal, cells);
-  for (const batch of batches) {
-    batch.cells.forEach((c, j) => exact.add(cells.areas[c], c, batch.models, j, batch.cells.length, batch.fields.cp[j]));
-  }
-  await requestsTurn();
-  let order;
-  if (nearest) {
-    const variation = edgeVariation(working);
-    order = refinementOrder(cells.centers, (c) => variation[nearest[connectivity[offsets[c]]]]);
-  } else {
-    order = Uint32Array.from({ length: cellCount }, (_, c) => c);
-  }
-  await requestsTurn();
-  const remaining = new Uint32Array(cellCount - predictedCount);
-  for (let i = 0, k = 0; i < cellCount; i++) if (!predicted.done[order[i]]) remaining[k++] = order[i];
+	const exact = new SurfaceTally(runners.networks, car.frontal, cells);
+	for (const batch of batches) {
+		batch.cells.forEach((c, j) =>
+			exact.add(cells.areas[c], c, batch.models, j, batch.cells.length, batch.fields.cp[j]),
+		);
+	}
+	await requestsTurn();
+	let order;
+	if (nearest) {
+		const variation = edgeVariation(working);
+		order = refinementOrder(cells.centers, (c) => variation[nearest[connectivity[offsets[c]]]]);
+	} else {
+		order = Uint32Array.from({ length: cellCount }, (_, c) => c);
+	}
+	await requestsTurn();
+	const remaining = new Uint32Array(cellCount - predictedCount);
+	for (let i = 0, k = 0; i < cellCount; i++) if (!predicted.done[order[i]]) remaining[k++] = order[i];
 
-  await predictPoints(analysis, runners, cells, remaining, (start, size, chunk) => {
-    const fields = ensembleStatistics(chunk, size, runners.spreadScale);
-    for (let i = 0; i < size; i++) {
-      const c = remaining[start + i];
-      predicted.cp[c] = fields.cp[i];
-      predicted.sigma[c] = fields.sigma[i];
-      predicted.done[c] = 1;
-      exact.add(cells.areas[c], c, chunk, i, size, fields.cp[i]);
-      if (field) accumulate(c, fields.cp[i], fields.sigma[i]);
-    }
-    predictedCount += size;
-    if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
-  }, true);
-  const accuracy = surface.cfd ? surfaceAccuracy(cells.areas, predicted.cp, surface.cfd) : null;
-  post({ type: 'exact', numbers: surfaceNumbers(exact, accuracy) });
-  if (showFull) send();
-  return true;
+	await predictPoints(
+		analysis,
+		runners,
+		cells,
+		remaining,
+		(start, size, chunk) => {
+			const fields = ensembleStatistics(chunk, size, runners.spreadScale);
+			for (let i = 0; i < size; i++) {
+				const c = remaining[start + i];
+				predicted.cp[c] = fields.cp[i];
+				predicted.sigma[c] = fields.sigma[i];
+				predicted.done[c] = 1;
+				exact.add(cells.areas[c], c, chunk, i, size, fields.cp[i]);
+				if (field) accumulate(c, fields.cp[i], fields.sigma[i]);
+			}
+			predictedCount += size;
+			if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
+		},
+		true,
+	);
+	const accuracy = surface.cfd ? surfaceAccuracy(cells.areas, predicted.cp, surface.cfd) : null;
+	post({ type: 'exact', numbers: surfaceNumbers(exact, accuracy) });
+	if (showFull) send();
+	return true;
 }
 
 /** For every file point, the index of the nearest working-mesh vertex, found in the helpers. */
 async function nearestWorkingVertices(pool, points, workingPositions) {
-  pool.broadcast({ type: 'working', positions: workingPositions });
-  const pointCount = points.length / 3;
-  const nearest = new Uint32Array(pointCount);
-  await Promise.all(Array.from({ length: Math.ceil(pointCount / NEAREST_CHUNK) }, (_, k) => {
-    const start = k * NEAREST_CHUNK;
-    const size = Math.min(NEAREST_CHUNK, pointCount - start);
-    const slice = points.slice(3 * start, 3 * (start + size));
-    return pool.run({ type: 'nearest', positions: slice, count: size }, [slice.buffer])
-      .then((result) => nearest.set(result, start));
-  }));
-  return nearest;
+	pool.broadcast({ type: 'working', positions: workingPositions });
+	const pointCount = points.length / 3;
+	const nearest = new Uint32Array(pointCount);
+	await Promise.all(
+		Array.from({ length: Math.ceil(pointCount / NEAREST_CHUNK) }, (_, k) => {
+			const start = k * NEAREST_CHUNK;
+			const size = Math.min(NEAREST_CHUNK, pointCount - start);
+			const slice = points.slice(3 * start, 3 * (start + size));
+			return pool
+				.run({ type: 'nearest', positions: slice, count: size }, [slice.buffer])
+				.then((result) => nearest.set(result, start));
+		}),
+	);
+	return nearest;
 }
 
 /** Lets requests already waiting (picks, explanations) run before the next long step. */
 function requestsTurn() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** For each working-mesh vertex, the largest change of Cp along any of its edges. */
 function edgeVariation({ indices, cp }) {
-  const variation = new Float32Array(cp.length);
-  for (let t = 0; t < indices.length; t += 3) {
-    for (let e = 0; e < 3; e++) {
-      const a = indices[t + e];
-      const b = indices[t + ((e + 1) % 3)];
-      const change = Math.abs(cp[a] - cp[b]);
-      if (change > variation[a]) variation[a] = change;
-      if (change > variation[b]) variation[b] = change;
-    }
-  }
-  return variation;
+	const variation = new Float32Array(cp.length);
+	for (let t = 0; t < indices.length; t += 3) {
+		for (let e = 0; e < 3; e++) {
+			const a = indices[t + e];
+			const b = indices[t + ((e + 1) % 3)];
+			const change = Math.abs(cp[a] - cp[b]);
+			if (change > variation[a]) variation[a] = change;
+			if (change > variation[b]) variation[b] = change;
+		}
+	}
+	return variation;
 }
 
 /**
@@ -684,38 +775,40 @@ function edgeVariation({ indices, cp }) {
  * @param {(item: number) => number} variationOf
  */
 function refinementOrder(centers, variationOf) {
-  const count = centers.length / 3;
-  const bounds = boundsOf(centers);
-  const min = [bounds[0], bounds[2], bounds[4]];
-  const shape = [0, 1, 2].map((k) => Math.floor((bounds[2 * k + 1] - min[k]) / REFINE_CUBE) + 1);
-  const cubeOf = new Uint32Array(count);
-  const cubeVariation = new Float32Array(shape[0] * shape[1] * shape[2]).fill(-1);
-  for (let i = 0; i < count; i++) {
-    const cx = Math.floor((centers[3 * i] - min[0]) / REFINE_CUBE);
-    const cy = Math.floor((centers[3 * i + 1] - min[1]) / REFINE_CUBE);
-    const cz = Math.floor((centers[3 * i + 2] - min[2]) / REFINE_CUBE);
-    const cube = (cx * shape[1] + cy) * shape[2] + cz;
-    cubeOf[i] = cube;
-    const value = variationOf(i);
-    if (value > cubeVariation[cube]) cubeVariation[cube] = value;
-  }
+	const count = centers.length / 3;
+	const bounds = boundsOf(centers);
+	const min = [bounds[0], bounds[2], bounds[4]];
+	const shape = [0, 1, 2].map((k) => Math.floor((bounds[2 * k + 1] - min[k]) / REFINE_CUBE) + 1);
+	const cubeOf = new Uint32Array(count);
+	const cubeVariation = new Float32Array(shape[0] * shape[1] * shape[2]).fill(-1);
+	for (let i = 0; i < count; i++) {
+		const cx = Math.floor((centers[3 * i] - min[0]) / REFINE_CUBE);
+		const cy = Math.floor((centers[3 * i + 1] - min[1]) / REFINE_CUBE);
+		const cz = Math.floor((centers[3 * i + 2] - min[2]) / REFINE_CUBE);
+		const cube = (cx * shape[1] + cy) * shape[2] + cz;
+		cubeOf[i] = cube;
+		const value = variationOf(i);
+		if (value > cubeVariation[cube]) cubeVariation[cube] = value;
+	}
 
-  const occupied = [];
-  for (let cube = 0; cube < cubeVariation.length; cube++) if (cubeVariation[cube] >= 0) occupied.push(cube);
-  occupied.sort((a, b) => cubeVariation[b] - cubeVariation[a]);
-  const rank = new Uint32Array(cubeVariation.length);
-  occupied.forEach((cube, r) => { rank[cube] = r; });
-  const starts = new Uint32Array(occupied.length + 1);
-  for (let i = 0; i < count; i++) starts[rank[cubeOf[i]] + 1]++;
-  for (let r = 1; r < starts.length; r++) starts[r] += starts[r - 1];
-  const order = new Uint32Array(count);
-  for (let i = 0; i < count; i++) order[starts[rank[cubeOf[i]]]++] = i;
-  return order;
+	const occupied = [];
+	for (let cube = 0; cube < cubeVariation.length; cube++) if (cubeVariation[cube] >= 0) occupied.push(cube);
+	occupied.sort((a, b) => cubeVariation[b] - cubeVariation[a]);
+	const rank = new Uint32Array(cubeVariation.length);
+	occupied.forEach((cube, r) => {
+		rank[cube] = r;
+	});
+	const starts = new Uint32Array(occupied.length + 1);
+	for (let i = 0; i < count; i++) starts[rank[cubeOf[i]] + 1]++;
+	for (let r = 1; r < starts.length; r++) starts[r] += starts[r - 1];
+	const order = new Uint32Array(count);
+	for (let i = 0; i < count; i++) order[starts[rank[cubeOf[i]]]++] = i;
+	return order;
 }
 
 /** A result's lookups: the car's feature lookups and the feature definition they were built for. */
 function lookupsOf({ layout, ...lookups }, definition) {
-  return { definition, ...lookups };
+	return { definition, ...lookups };
 }
 
 /**
@@ -727,58 +820,73 @@ function lookupsOf({ layout, ...lookups }, definition) {
  * about each result.
  */
 async function explain({ point, normal, analysisId, model, lookups, vertex }) {
-  const { ensemble, layout } = await engine;
-  if (model !== ensemble.weightsSha256) {
-    throw new Error('This result was computed with a different version of the model than this page runs, so it cannot be explained.');
-  }
-  if (lookups) {
-    if (JSON.stringify(lookups.definition) !== JSON.stringify(ensemble.features)) {
-      throw new Error('This result was computed with different model inputs than this page uses, so it cannot be explained.');
-    }
-    explainedLookups = { ...lookups, layout };
-  }
-  let site;
-  let context;
-  const car = heldCar(analysisId);
-  const cell = car ? polygonAt(car, point, normal) : -1;
-  if (cell >= 0) {
-    const { cells, surface } = car;
-    site = {
-      at: 'polygon', index: cell, position: cells.centers.slice(3 * cell, 3 * cell + 3),
-      normal: cells.normals.slice(3 * cell, 3 * cell + 3), cfd: surface.cfd ? surface.cfd[cell] : null,
-    };
-    context = car.context;
-  } else {
-    site = { at: 'vertex', index: vertex.index, position: Float32Array.from(vertex.position), normal: Float32Array.from(vertex.normal), cfd: vertex.cfd };
-    context = lookupsAtVertex(explainedLookups, vertex.index);
-  }
-  const features = new Float32Array(layout.count);
-  computeFeatures(context, site.position, site.normal, 0, 1, features);
-  const { cpModels, activations } = networkActivations(ensemble, features);
-  const { cp, sigma } = ensembleStatistics(cpModels, 1, ensemble.spreadScale);
-  return [{
-    ...site,
-    position: Array.from(site.position),
-    normal: Array.from(site.normal),
-    features,
-    cpModels: Array.from(cpModels),
-    cp: cp[0],
-    sigma: sigma[0],
-    activations,
-  }];
+	const { ensemble, layout } = await engine;
+	if (model !== ensemble.weightsSha256) {
+		throw new Error(
+			'This result was computed with a different version of the model than this page runs, so it cannot be explained.',
+		);
+	}
+	if (lookups) {
+		if (JSON.stringify(lookups.definition) !== JSON.stringify(ensemble.features)) {
+			throw new Error(
+				'This result was computed with different model inputs than this page uses, so it cannot be explained.',
+			);
+		}
+		explainedLookups = { ...lookups, layout };
+	}
+	let site;
+	let context;
+	const car = heldCar(analysisId);
+	const cell = car ? polygonAt(car, point, normal) : -1;
+	if (cell >= 0) {
+		const { cells, surface } = car;
+		site = {
+			at: 'polygon',
+			index: cell,
+			position: cells.centers.slice(3 * cell, 3 * cell + 3),
+			normal: cells.normals.slice(3 * cell, 3 * cell + 3),
+			cfd: surface.cfd ? surface.cfd[cell] : null,
+		};
+		context = car.context;
+	} else {
+		site = {
+			at: 'vertex',
+			index: vertex.index,
+			position: Float32Array.from(vertex.position),
+			normal: Float32Array.from(vertex.normal),
+			cfd: vertex.cfd,
+		};
+		context = lookupsAtVertex(explainedLookups, vertex.index);
+	}
+	const features = new Float32Array(layout.count);
+	computeFeatures(context, site.position, site.normal, 0, 1, features);
+	const { cpModels, activations } = networkActivations(ensemble, features);
+	const { cp, sigma } = ensembleStatistics(cpModels, 1, ensemble.spreadScale);
+	return [
+		{
+			...site,
+			position: Array.from(site.position),
+			normal: Array.from(site.normal),
+			features,
+			cpModels: Array.from(cpModels),
+			cp: cp[0],
+			sigma: sigma[0],
+			activations,
+		},
+	];
 }
 
 /** The `FilePolygon` under a point picked on the car analysed last; null once that car is let go. */
 async function answerPolygonAt({ analysisId, point, normal }) {
-  const { ensemble } = await engine;
-  const car = heldCar(analysisId);
-  const cell = car ? polygonAt(car, point, normal) : -1;
-  return [cell < 0 ? null : describePolygon(car, ensemble, cell)];
+	const { ensemble } = await engine;
+	const car = heldCar(analysisId);
+	const cell = car ? polygonAt(car, point, normal) : -1;
+	return [cell < 0 ? null : describePolygon(car, ensemble, cell)];
 }
 
 /** The car this worker holds for analysis `analysisId`, or null: a bundled example has no analysis. */
 function heldCar(analysisId) {
-  return lastCar && lastCar.id === analysisId ? lastCar : null;
+	return lastCar && lastCar.id === analysisId ? lastCar : null;
 }
 
 /**
@@ -786,21 +894,26 @@ function heldCar(analysisId) {
  * polygon is predicted. About 650 MB for a DrivAerML car, so it is made only when asked for.
  */
 function answerFileCells({ analysisId }) {
-  const car = heldCar(analysisId);
-  if (!car?.complete) return [null];
-  const { surface, cells, predicted } = car;
-  const set = {
-    points: surface.points.slice(),
-    connectivity: surface.connectivity.slice(),
-    offsets: surface.offsets.slice(),
-    centers: cells.centers.slice(),
-    normals: cells.normals.slice(),
-    areas: cells.areas.slice(),
-    cp: predicted.cp.slice(),
-    sigma: predicted.sigma.slice(),
-    cfd: surface.cfd ? surface.cfd.slice() : null,
-  };
-  return [set, Object.values(set).filter(Boolean).map((array) => array.buffer)];
+	const car = heldCar(analysisId);
+	if (!car?.complete) return [null];
+	const { surface, cells, predicted } = car;
+	const set = {
+		points: surface.points.slice(),
+		connectivity: surface.connectivity.slice(),
+		offsets: surface.offsets.slice(),
+		centers: cells.centers.slice(),
+		normals: cells.normals.slice(),
+		areas: cells.areas.slice(),
+		cp: predicted.cp.slice(),
+		sigma: predicted.sigma.slice(),
+		cfd: surface.cfd ? surface.cfd.slice() : null,
+	};
+	return [
+		set,
+		Object.values(set)
+			.filter(Boolean)
+			.map((array) => array.buffer),
+	];
 }
 
 /**
@@ -811,23 +924,25 @@ function answerFileCells({ analysisId }) {
  * mesh and the full mesh, put on their vertices as the meshes put a file's own.
  */
 async function attachReference({ analysisId, file, array = CFD_ARRAY }) {
-  const car = heldCar(analysisId);
-  if (!car?.complete) {
-    throw new Error('A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.');
-  }
-  const { cfd, mapping } = await referenceField(car, file, array, requestsTurn);
-  car.surface.cfd = cfd;
-  car.reference = { file: file.name, array, mapping };
-  const { cells, predicted } = car;
-  const all = cellToPoint(car.surface, cells.areas).all(cfd);
-  const change = {
-    reference: car.reference,
-    referenceTotals: referenceTotals(cells, cfd, car.frontal),
-    accuracy: surfaceAccuracy(cells.areas, predicted.cp, cfd),
-    cfd: Float32Array.from(car.sourcePoint, (p) => all[p]),
-    fullCfd: car.showFull ? all : null,
-  };
-  return [change, [change.cfd, change.fullCfd].filter(Boolean).map((values) => values.buffer)];
+	const car = heldCar(analysisId);
+	if (!car?.complete) {
+		throw new Error(
+			'A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.',
+		);
+	}
+	const { cfd, mapping } = await referenceField(car, file, array, requestsTurn);
+	car.surface.cfd = cfd;
+	car.reference = { file: file.name, array, mapping };
+	const { cells, predicted } = car;
+	const all = cellToPoint(car.surface, cells.areas).all(cfd);
+	const change = {
+		reference: car.reference,
+		referenceTotals: referenceTotals(cells, cfd, car.frontal),
+		accuracy: surfaceAccuracy(cells.areas, predicted.cp, cfd),
+		cfd: Float32Array.from(car.sourcePoint, (p) => all[p]),
+		fullCfd: car.showFull ? all : null,
+	};
+	return [change, [change.cfd, change.fullCfd].filter(Boolean).map((values) => values.buffer)];
 }
 
 /**
@@ -836,31 +951,33 @@ async function attachReference({ analysisId, file, array = CFD_ARRAY }) {
  * attached reference under its array's name.
  */
 async function exportVtp({ analysisId }) {
-  const car = heldCar(analysisId);
-  if (!car?.complete) {
-    throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse it again.');
-  }
-  const { reference, surface } = car;
-  const attached = reference && reference.mapping !== 'own' ? { [reference.array]: surface.cfd } : {};
-  const arrays = { ...attached, CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
-  const name = `${surface.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
-  try {
-    const vtp = await addCellArrays(car.file, arrays);
-    return [new File([vtp], name, { type: 'application/octet-stream' })];
-  } catch (error) {
-    // Reading the file again fails with a DOMException when it was moved or changed after the drop.
-    if (!(error instanceof DOMException)) throw error;
-    throw new Error(`${car.file.name} could not be read again; it may have been moved or changed since it was opened. Open it again to export its prediction.`);
-  }
+	const car = heldCar(analysisId);
+	if (!car?.complete) {
+		throw new Error("This car's prediction is no longer held, so it cannot be exported. Analyse it again.");
+	}
+	const { reference, surface } = car;
+	const attached = reference && reference.mapping !== 'own' ? { [reference.array]: surface.cfd } : {};
+	const arrays = { ...attached, CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
+	const name = `${surface.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
+	try {
+		const vtp = await addCellArrays(car.file, arrays);
+		return [new File([vtp], name, { type: 'application/octet-stream' })];
+	} catch (error) {
+		// Reading the file again fails with a DOMException when it was moved or changed after the drop.
+		if (!(error instanceof DOMException)) throw error;
+		throw new Error(
+			`${car.file.name} could not be read again; it may have been moved or changed since it was opened. Open it again to export its prediction.`,
+		);
+	}
 }
 
 /** The message for a failed analysis: the file's own problem as the reader words it, or what ran out. */
 function describeFailure(error, { file, surface }) {
-  if (error instanceof RangeError && /allocat|memory/i.test(error.message)) {
-    const what = file
-      ? `${file.name} (${(file.size / 1e6).toFixed(0)} MB)`
-      : `${surface.name} (${(surface.offsets.length - 1).toLocaleString('en-US')} polygons)`;
-    return `This device ran out of memory analysing ${what}. Close other tabs or windows and try again, or use a machine with more memory.`;
-  }
-  return error.message;
+	if (error instanceof RangeError && /allocat|memory/i.test(error.message)) {
+		const what = file
+			? `${file.name} (${(file.size / 1e6).toFixed(0)} MB)`
+			: `${surface.name} (${(surface.offsets.length - 1).toLocaleString('en-US')} polygons)`;
+		return `This device ran out of memory analysing ${what}. Close other tabs or windows and try again, or use a machine with more memory.`;
+	}
+	return error.message;
 }

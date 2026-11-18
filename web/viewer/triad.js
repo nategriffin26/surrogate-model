@@ -24,7 +24,14 @@ function el(name, attrs) {
 }
 
 export function createTriad(viewer) {
-	const svg = el('svg', { class: 'triad', viewBox: `${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`, width: SIZE, height: SIZE, role: 'group', 'aria-label': 'Axes' });
+	const svg = el('svg', {
+		class: 'triad',
+		viewBox: `${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`,
+		width: SIZE,
+		height: SIZE,
+		role: 'group',
+		'aria-label': 'Axes',
+	});
 	const axes = AXES.map((axis) => {
 		const g = el('g', { class: 'triad-axis', role: 'button', tabindex: '0' });
 		const title = el('title', {});
@@ -32,7 +39,12 @@ export function createTriad(viewer) {
 		const hit = el('line', { class: 'hit', x1: 0, y1: 0 });
 		const shaft = el('line', { class: 'shaft', x1: 0, y1: 0, stroke: axis.colour });
 		const head = el('polygon', { fill: axis.colour });
-		const label = el('text', { class: 'label', fill: axis.colour, 'text-anchor': 'middle', 'dominant-baseline': 'central' });
+		const label = el('text', {
+			class: 'label',
+			fill: axis.colour,
+			'text-anchor': 'middle',
+			'dominant-baseline': 'central',
+		});
 		label.textContent = axis.name;
 		g.append(title, hit, shaft, head, label);
 		const dir = new THREE.Vector3(...axis.dir);
@@ -58,17 +70,23 @@ export function createTriad(viewer) {
 			// The axis in view space: x right, y up, z towards the eye.
 			v.copy(axis.dir).applyQuaternion(q);
 			const scale = perspective ? EYE / (EYE - v.z) : 1;
-			const tx = v.x * R * scale, ty = -v.y * R * scale;
+			const tx = v.x * R * scale,
+				ty = -v.y * R * scale;
 			const length = Math.hypot(tx, ty);
-			const ux = length ? tx / length : 0, uy = length ? ty / length : 0;
+			const ux = length ? tx / length : 0,
+				uy = length ? ty / length : 0;
 			const headLength = Math.min(HEAD.length * scale, length * 0.5);
 			const halfWidth = HEAD.halfWidth * scale * (headLength / (HEAD.length * scale));
-			const bx = tx - ux * headLength, by = ty - uy * headLength;
+			const bx = tx - ux * headLength,
+				by = ty - uy * headLength;
 			axis.shaft.setAttribute('x2', bx);
 			axis.shaft.setAttribute('y2', by);
 			axis.hit.setAttribute('x2', tx);
 			axis.hit.setAttribute('y2', ty);
-			axis.head.setAttribute('points', `${tx},${ty} ${bx - uy * halfWidth},${by + ux * halfWidth} ${bx + uy * halfWidth},${by - ux * halfWidth}`);
+			axis.head.setAttribute(
+				'points',
+				`${tx},${ty} ${bx - uy * halfWidth},${by + ux * halfWidth} ${bx + uy * halfWidth},${by - ux * halfWidth}`,
+			);
 			// The label sits beyond the tip, or beside the origin when the axis points at the eye.
 			const gap = length > 4 ? 8 : 0;
 			axis.label.setAttribute('x', tx + ux * gap + (length > 4 ? 0 : 7));

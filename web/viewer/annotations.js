@@ -208,7 +208,9 @@ class Batch {
 	constructor(layout) {
 		this.layout = layout;
 		this.count = 0;
-		this.arrays = Object.fromEntries(Object.entries(layout).map(([name, { size, type }]) => [name, new type(size * 256)]));
+		this.arrays = Object.fromEntries(
+			Object.entries(layout).map(([name, { size, type }]) => [name, new type(size * 256)]),
+		);
 	}
 
 	/** Room for `n` more items; returns the index of the first. */
@@ -255,28 +257,55 @@ export class Annotations {
 			uOrtho: viewer.uniforms.uOrtho,
 		};
 		this.parts = {
-			segments: this.part(true, SEGMENT_VERTEX, SEGMENT_FRAGMENT, { a: POINT, b: POINT, colour: COLOUR, width: NUMBER, head: NUMBER }),
+			segments: this.part(true, SEGMENT_VERTEX, SEGMENT_FRAGMENT, {
+				a: POINT,
+				b: POINT,
+				colour: COLOUR,
+				width: NUMBER,
+				head: NUMBER,
+			}),
 			heads: this.part(true, HEAD_VERTEX, HEAD_FRAGMENT, { tip: POINT, tail: POINT, colour: COLOUR, width: NUMBER }),
 			dots: this.part(true, DOT_VERTEX, DOT_FRAGMENT, { centre: POINT, colour: COLOUR, radius: NUMBER }),
 			fills: this.part(false, FILL_VERTEX, FILL_FRAGMENT, { position: POINT, colour: COLOUR }),
 		};
 		// Faint where the car hides them, under what it does not; halos under every mark's own colour.
-		const order = [['fills', 'behind', false], ['segments', 'behind', false], ['heads', 'behind', false], ['dots', 'behind', false],
-			['fills', 'front', false], ['segments', 'front', true], ['heads', 'front', true], ['dots', 'front', true],
-			['segments', 'front', false], ['heads', 'front', false], ['dots', 'front', false]];
+		const order = [
+			['fills', 'behind', false],
+			['segments', 'behind', false],
+			['heads', 'behind', false],
+			['dots', 'behind', false],
+			['fills', 'front', false],
+			['segments', 'front', true],
+			['heads', 'front', true],
+			['dots', 'front', true],
+			['segments', 'front', false],
+			['heads', 'front', false],
+			['dots', 'front', false],
+		];
 		order.forEach(([name, side, halo], i) => this.group.add(this.mesh(this.parts[name], side, halo, 10 + i)));
 		this.labels = new Labels(viewer, host);
 	}
 
 	/** One kind of mark: instanced on a quad, or plain triangles. */
 	part(instanced, vertexShader, fragmentShader, layout) {
-		return { instanced, geometry: instanced ? quad() : new THREE.BufferGeometry(), vertexShader, fragmentShader, layout, meshes: [] };
+		return {
+			instanced,
+			geometry: instanced ? quad() : new THREE.BufferGeometry(),
+			vertexShader,
+			fragmentShader,
+			layout,
+			meshes: [],
+		};
 	}
 
 	/** One pass of one kind: what the car hides drawn faint, or what it does not with or without its halo. */
 	mesh(part, side, halo, renderOrder) {
 		const material = new THREE.ShaderMaterial({
-			uniforms: { ...this.uniforms, uHalo: { value: halo ? HALO : 0 }, uOpacity: { value: side === 'behind' ? BEHIND : 1 } },
+			uniforms: {
+				...this.uniforms,
+				uHalo: { value: halo ? HALO : 0 },
+				uOpacity: { value: side === 'behind' ? BEHIND : 1 },
+			},
 			vertexShader: part.vertexShader,
 			fragmentShader: part.fragmentShader,
 			transparent: true,
@@ -303,7 +332,9 @@ export class Annotations {
 	 * Nothing is drawn, and nothing costs a frame, when there are none.
 	 */
 	show(layers, mesh) {
-		const batches = Object.fromEntries(Object.entries(this.parts).map(([name, part]) => [name, new Batch(part.layout)]));
+		const batches = Object.fromEntries(
+			Object.entries(this.parts).map(([name, part]) => [name, new Batch(part.layout)]),
+		);
 		const labels = [];
 		for (const layer of layers) {
 			const colour = [...rgbOf(layer.colour), 255];
@@ -336,7 +367,12 @@ function geometryOf(part, batch) {
 	for (const [name, { size }] of Object.entries(part.layout)) {
 		const array = batch.filled(name).slice();
 		const normalized = array instanceof Uint8Array;
-		geometry.setAttribute(name, part.instanced ? new THREE.InstancedBufferAttribute(array, size, normalized) : new THREE.BufferAttribute(array, size, normalized));
+		geometry.setAttribute(
+			name,
+			part.instanced
+				? new THREE.InstancedBufferAttribute(array, size, normalized)
+				: new THREE.BufferAttribute(array, size, normalized),
+		);
 	}
 	if (part.instanced) geometry.instanceCount = batch.count;
 	return geometry;
@@ -368,7 +404,8 @@ function addMark(batches, mark, colour, width) {
 		case 'lines': {
 			const { points, starts } = mark;
 			for (let line = 0; line + 1 < starts.length; line++) {
-				const first = starts[line], end = starts[line + 1];
+				const first = starts[line],
+					end = starts[line + 1];
 				for (let i = first; i + 1 < end; i++) segment(point(points, i), point(points, i + 1), colour);
 				if (mark.closed && end - first > 2) segment(point(points, end - 1), point(points, first), colour);
 			}
@@ -401,10 +438,41 @@ function addMark(batches, mark, colour, width) {
 			return;
 		}
 		case 'box': {
-			const [x0, y0, z0] = mark.min, [x1, y1, z1] = mark.max;
-			const c = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
-			for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) segment(c[i], c[j], colour);
-			for (const [p, q, r, s] of [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 3, 7, 4], [1, 2, 6, 5]]) {
+			const [x0, y0, z0] = mark.min,
+				[x1, y1, z1] = mark.max;
+			const c = [
+				[x0, y0, z0],
+				[x1, y0, z0],
+				[x1, y1, z0],
+				[x0, y1, z0],
+				[x0, y0, z1],
+				[x1, y0, z1],
+				[x1, y1, z1],
+				[x0, y1, z1],
+			];
+			for (const [i, j] of [
+				[0, 1],
+				[1, 2],
+				[2, 3],
+				[3, 0],
+				[4, 5],
+				[5, 6],
+				[6, 7],
+				[7, 4],
+				[0, 4],
+				[1, 5],
+				[2, 6],
+				[3, 7],
+			])
+				segment(c[i], c[j], colour);
+			for (const [p, q, r, s] of [
+				[0, 1, 2, 3],
+				[4, 5, 6, 7],
+				[0, 1, 5, 4],
+				[3, 2, 6, 7],
+				[0, 3, 7, 4],
+				[1, 2, 6, 5],
+			]) {
 				triangle(c[p], c[q], c[r], wash);
 				triangle(c[p], c[r], c[s], wash);
 			}
@@ -431,7 +499,18 @@ function planeCorners({ point, normal, size }) {
 	const u = new THREE.Vector3().setComponent(least, 1).addScaledVector(n, -n.getComponent(least)).normalize();
 	const v = new THREE.Vector3().crossVectors(n, u);
 	const p = new THREE.Vector3(...point);
-	return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => p.clone().addScaledVector(u, (i * size[0]) / 2).addScaledVector(v, (j * size[1]) / 2).toArray());
+	return [
+		[-1, -1],
+		[1, -1],
+		[1, 1],
+		[-1, 1],
+	].map(([i, j]) =>
+		p
+			.clone()
+			.addScaledVector(u, (i * size[0]) / 2)
+			.addScaledVector(v, (j * size[1]) / 2)
+			.toArray(),
+	);
 }
 
 // ---- labels -------------------------------------------------------------------------------------------------------------
@@ -462,11 +541,15 @@ class Occupancy {
 		const cells = new Uint8Array(nx * ny * this.size[2]);
 		const P = positions;
 		const mark = (x, y, z) => {
-			const i = Math.floor((x - this.origin[0]) / VOXEL), j = Math.floor((y - this.origin[1]) / VOXEL), k = Math.floor((z - this.origin[2]) / VOXEL);
+			const i = Math.floor((x - this.origin[0]) / VOXEL),
+				j = Math.floor((y - this.origin[1]) / VOXEL),
+				k = Math.floor((z - this.origin[2]) / VOXEL);
 			cells[i + nx * (j + ny * k)] = 1;
 		};
 		for (let t = 0; t < indices.length; t += 3) {
-			const a = 3 * indices[t], b = 3 * indices[t + 1], c = 3 * indices[t + 2];
+			const a = 3 * indices[t],
+				b = 3 * indices[t + 1],
+				c = 3 * indices[t + 2];
 			const edge = Math.max(
 				Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]),
 				Math.hypot(P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]),
@@ -476,8 +559,14 @@ class Occupancy {
 			const n = Math.max(1, Math.ceil(edge / (0.5 * VOXEL)));
 			for (let i = 0; i <= n; i++) {
 				for (let j = 0; i + j <= n; j++) {
-					const u = i / n, v = j / n, w = 1 - u - v;
-					mark(w * P[a] + u * P[b] + v * P[c], w * P[a + 1] + u * P[b + 1] + v * P[c + 1], w * P[a + 2] + u * P[b + 2] + v * P[c + 2]);
+					const u = i / n,
+						v = j / n,
+						w = 1 - u - v;
+					mark(
+						w * P[a] + u * P[b] + v * P[c],
+						w * P[a + 1] + u * P[b + 1] + v * P[c + 1],
+						w * P[a + 2] + u * P[b + 2] + v * P[c + 2],
+					);
 				}
 			}
 		}
@@ -495,7 +584,8 @@ class Occupancy {
 		const v = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
 		const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
 		// Turned the way the vertex normals point: out of the car.
-		const out = (N[a] + N[b] + N[c]) * n[0] + (N[a + 1] + N[b + 1] + N[c + 1]) * n[1] + (N[a + 2] + N[b + 2] + N[c + 2]) * n[2];
+		const out =
+			(N[a] + N[b] + N[c]) * n[0] + (N[a + 1] + N[b + 1] + N[c + 1]) * n[1] + (N[a + 2] + N[b + 2] + N[c + 2]) * n[2];
 		const length = Math.hypot(...n) * (out < 0 ? -1 : 1);
 		return length ? n.map((x) => x / length) : null;
 	}
@@ -517,10 +607,20 @@ class Occupancy {
 		const p = [0, 0, 0];
 		for (let s = start; s < distance; s += step) {
 			for (let k = 0; k < 3; k++) p[k] = point[k] + towards[k] * s;
-			const i = Math.floor((p[0] - this.origin[0]) / VOXEL), j = Math.floor((p[1] - this.origin[1]) / VOXEL), k = Math.floor((p[2] - this.origin[2]) / VOXEL);
+			const i = Math.floor((p[0] - this.origin[0]) / VOXEL),
+				j = Math.floor((p[1] - this.origin[1]) / VOXEL),
+				k = Math.floor((p[2] - this.origin[2]) / VOXEL);
 			if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) {
 				// Out of the box for good once it is walking away from it.
-				if ((i < 0 && towards[0] <= 0) || (i >= nx && towards[0] >= 0) || (j < 0 && towards[1] <= 0) || (j >= ny && towards[1] >= 0) || (k < 0 && towards[2] <= 0) || (k >= nz && towards[2] >= 0)) return false;
+				if (
+					(i < 0 && towards[0] <= 0) ||
+					(i >= nx && towards[0] >= 0) ||
+					(j < 0 && towards[1] <= 0) ||
+					(j >= ny && towards[1] >= 0) ||
+					(k < 0 && towards[2] <= 0) ||
+					(k >= nz && towards[2] >= 0)
+				)
+					return false;
 				continue;
 			}
 			if (this.cells[i + nx * (j + ny * k)]) return true;
@@ -552,11 +652,25 @@ class Labels {
 
 	/** labels: [{mark, colour}] in drawing order; mesh: the working mesh whose surface hides them. */
 	show(labels, mesh) {
-		const items = labels.flatMap(({ mark, colour }) => mark.texts.map((text, i) => ({ text, colour, offset: mark.offset, point: Array.from(mark.points.subarray(3 * i, 3 * i + 3)) })));
-		const same = items.length === this.items.length && items.every((item, i) => {
-			const was = this.items[i];
-			return item.text === was.text && item.colour === was.colour && item.offset === was.offset && item.point.every((v, k) => v === was.point[k]);
-		});
+		const items = labels.flatMap(({ mark, colour }) =>
+			mark.texts.map((text, i) => ({
+				text,
+				colour,
+				offset: mark.offset,
+				point: Array.from(mark.points.subarray(3 * i, 3 * i + 3)),
+			})),
+		);
+		const same =
+			items.length === this.items.length &&
+			items.every((item, i) => {
+				const was = this.items[i];
+				return (
+					item.text === was.text &&
+					item.colour === was.colour &&
+					item.offset === was.offset &&
+					item.point.every((v, k) => v === was.point[k])
+				);
+			});
 		this.mesh = mesh;
 		if (same) return this.place();
 		for (const item of this.items) {
@@ -583,7 +697,8 @@ class Labels {
 	/** Where each label goes for the camera as it is now. */
 	place() {
 		const viewer = this.viewer;
-		const W = viewer.host.clientWidth, H = viewer.host.clientHeight;
+		const W = viewer.host.clientWidth,
+			H = viewer.host.clientHeight;
 		const occupancy = this.items.length && this.mesh ? occupancyOf(this.mesh) : null;
 		const camera = viewer.camera.position.toArray();
 		const look = new THREE.Vector3();
@@ -593,10 +708,17 @@ class Labels {
 			const shown = p.visible && p.x > -40 && p.y > -40 && p.x < W + 40 && p.y < H + 40;
 			let behind = false;
 			if (shown && occupancy) {
-				const towards = viewer.camera.isOrthographicCamera ? look.toArray().map((v) => -v) : camera.map((v, k) => v - item.point[k]);
+				const towards = viewer.camera.isOrthographicCamera
+					? look.toArray().map((v) => -v)
+					: camera.map((v, k) => v - item.point[k]);
 				const distance = Math.hypot(...towards);
 				if (item.normal === undefined) item.normal = occupancy.normalAt(item.point);
-				behind = occupancy.hides(item.point, towards.map((v) => v / distance), viewer.camera.isOrthographicCamera ? Infinity : distance, item.normal);
+				behind = occupancy.hides(
+					item.point,
+					towards.map((v) => v / distance),
+					viewer.camera.isOrthographicCamera ? Infinity : distance,
+					item.normal,
+				);
 			}
 			item.at = { x: Math.round(p.x), y: Math.round(p.y), behind, shown };
 		}
@@ -617,16 +739,18 @@ class Labels {
 			const key = `${item.colour}${at.behind ? ' behind' : ''}`;
 			paths.set(key, `${paths.get(key) ?? ''}M${at.x} ${at.y}L${x} ${y}`);
 		}
-		this.leaders.replaceChildren(...[...paths].flatMap(([key, d]) => {
-			const [colour, behind] = key.split(' ');
-			const halo = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-			halo.setAttribute('class', `halo${behind ? ' behind' : ''}`);
-			halo.setAttribute('d', d);
-			const line = halo.cloneNode();
-			line.setAttribute('class', `line${behind ? ' behind' : ''}`);
-			line.style.stroke = colour;
-			return [halo, line];
-		}));
+		this.leaders.replaceChildren(
+			...[...paths].flatMap(([key, d]) => {
+				const [colour, behind] = key.split(' ');
+				const halo = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+				halo.setAttribute('class', `halo${behind ? ' behind' : ''}`);
+				halo.setAttribute('d', d);
+				const line = halo.cloneNode();
+				line.setAttribute('class', `line${behind ? ' behind' : ''}`);
+				line.style.stroke = colour;
+				return [halo, line];
+			}),
+		);
 	}
 
 	/**
@@ -640,12 +764,25 @@ class Labels {
 		const cellsOf = (r) => {
 			const keys = [];
 			for (let x = Math.floor((r.x - CLEAR) / BUCKET); x <= Math.floor((r.x + r.w + CLEAR) / BUCKET); x++) {
-				for (let y = Math.floor((r.y - CLEAR) / BUCKET); y <= Math.floor((r.y + r.h + CLEAR) / BUCKET); y++) keys.push(`${x},${y}`);
+				for (let y = Math.floor((r.y - CLEAR) / BUCKET); y <= Math.floor((r.y + r.h + CLEAR) / BUCKET); y++)
+					keys.push(`${x},${y}`);
 			}
 			return keys;
 		};
-		const free = (r) => r.x >= CLEAR && r.y >= CLEAR && r.x + r.w <= W - CLEAR && r.y + r.h <= H - CLEAR
-			&& cellsOf(r).every((key) => (taken.get(key) ?? []).every((o) => r.x + r.w + CLEAR <= o.x || o.x + o.w + CLEAR <= r.x || r.y + r.h + CLEAR <= o.y || o.y + o.h + CLEAR <= r.y));
+		const free = (r) =>
+			r.x >= CLEAR &&
+			r.y >= CLEAR &&
+			r.x + r.w <= W - CLEAR &&
+			r.y + r.h <= H - CLEAR &&
+			cellsOf(r).every((key) =>
+				(taken.get(key) ?? []).every(
+					(o) =>
+						r.x + r.w + CLEAR <= o.x ||
+						o.x + o.w + CLEAR <= r.x ||
+						r.y + r.h + CLEAR <= o.y ||
+						o.y + o.h + CLEAR <= r.y,
+				),
+			);
 		const take = (r) => cellsOf(r).forEach((key) => (taken.get(key) ?? taken.set(key, []).get(key)).push(r));
 		const shown = this.items.filter((item) => item.at.shown);
 		// Every point is kept clear first, so no box covers another label's point.
@@ -692,7 +829,13 @@ class Labels {
 				continue;
 			}
 			ctx.beginPath();
-			ctx.roundRect((rect.x + 0.5) * scale, (rect.y + 0.5) * scale, (rect.w - 1) * scale, (rect.h - 1) * scale, 5 * scale);
+			ctx.roundRect(
+				(rect.x + 0.5) * scale,
+				(rect.y + 0.5) * scale,
+				(rect.w - 1) * scale,
+				(rect.h - 1) * scale,
+				5 * scale,
+			);
 			ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
 			ctx.fill();
 			ctx.strokeStyle = '#cddce4';

@@ -80,7 +80,9 @@ function saveFile(workspace, path, fileName, blob, by) {
 	const target = path ?? workspace.freePath(fileName);
 	const existing = workspace.file(target);
 	if (existing && existing.by === 'engineer' && by === 'assistant') {
-		throw new Error(`${target} was written by the engineer. Save under another path, or ask the engineer to delete it first.`);
+		throw new Error(
+			`${target} was written by the engineer. Save under another path, or ask the engineer to delete it first.`,
+		);
 	}
 	return workspace.write(target, blob, by);
 }
@@ -94,25 +96,36 @@ export function defineExportOperations({ session, workspace, engine }) {
 		title: 'The analysed file with CpPredicted and CpSpread cell arrays added',
 		// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on. A
 		// variant's surface was written with its prediction when it was made.
-		unavailable: (c) => (engine.canExportVtp(c.result) ? null
-			: c.variant ? `The variant's surface, with CpPredicted and CpSpread, is in the workspace at ${c.path}.`
-				: 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
+		unavailable: (c) =>
+			engine.canExportVtp(c.result)
+				? null
+				: c.variant
+					? `The variant's surface, with CpPredicted and CpSpread, is in the workspace at ${c.path}.`
+					: 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.',
 		make: (c) => engine.exportVtp(c.result),
 		fileName: (c) => `${baseName(c)}_prediction.vtp`,
 	});
 
 	const describe = () => [...EXPORTS.values()].map((e) => `${e.name} (${e.label}, ${e.format})`).join(', ');
-	const exportParameter = () => ({ type: 'string', enum: [...EXPORTS.keys()], description: `What to export: ${describe()}.` });
+	const exportParameter = () => ({
+		type: 'string',
+		enum: [...EXPORTS.keys()],
+		description: `What to export: ${describe()}.`,
+	});
 
 	defineOperation({
 		name: 'save_export',
-		description: 'Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section, probes, comparison and study: the section plot\'s points, the probe table, the Compare table and the Variants table, as CSV. report: one HTML page with the picture, the whole-car numbers, and the section, probes, comparison and study the car has. Returns the path and size.',
+		description:
+			"Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section, probes, comparison and study: the section plot's points, the probe table, the Compare table and the Variants table, as CSV. report: one HTML page with the picture, the whole-car numbers, and the section, probes, comparison and study the car has. Returns the path and size.",
 		get parameters() {
 			return {
 				type: 'object',
 				properties: {
 					export: exportParameter(),
-					path: { type: 'string', description: 'Workspace path to save to, e.g. "figures/rear.png"; default the export\'s own name.' },
+					path: {
+						type: 'string',
+						description: 'Workspace path to save to, e.g. "figures/rear.png"; default the export\'s own name.',
+					},
 				},
 				required: ['export'],
 				additionalProperties: false,
@@ -127,9 +140,15 @@ export function defineExportOperations({ session, workspace, engine }) {
 
 	defineOperation({
 		name: 'download_export',
-		description: 'Make an export of the case on screen and download it to the engineer\'s computer. The same exports as save_export.',
+		description:
+			"Make an export of the case on screen and download it to the engineer's computer. The same exports as save_export.",
 		get parameters() {
-			return { type: 'object', properties: { export: exportParameter() }, required: ['export'], additionalProperties: false };
+			return {
+				type: 'object',
+				properties: { export: exportParameter() },
+				required: ['export'],
+				additionalProperties: false,
+			};
 		},
 		confirm: true,
 		async run({ export: name }) {
@@ -160,14 +179,40 @@ export function createExportMenu({ run, active }) {
 
 	function render() {
 		const c = active();
-		list.replaceChildren(...[...EXPORTS.values()].flatMap((e) => {
-			const why = e.unavailable(c);
-			if (e.name === 'surface' && why) return [];
-			const row = h('div', { class: 'export-row', 'data-export': e.name },
-				h('button', { type: 'button', class: 'menu-item', title: why ?? e.title, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'download') }, h('span', {}, e.label), h('kbd', {}, e.format)),
-				h('button', { type: 'button', class: 'icon-button export-keep', title: `Save ${e.label.toLowerCase()} to files`, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'files') }, icon('keep')));
-			return [row];
-		}));
+		list.replaceChildren(
+			...[...EXPORTS.values()].flatMap((e) => {
+				const why = e.unavailable(c);
+				if (e.name === 'surface' && why) return [];
+				const row = h(
+					'div',
+					{ class: 'export-row', 'data-export': e.name },
+					h(
+						'button',
+						{
+							type: 'button',
+							class: 'menu-item',
+							title: why ?? e.title,
+							disabled: Boolean(why),
+							onclick: () => exportTo(row, e.name, 'download'),
+						},
+						h('span', {}, e.label),
+						h('kbd', {}, e.format),
+					),
+					h(
+						'button',
+						{
+							type: 'button',
+							class: 'icon-button export-keep',
+							title: `Save ${e.label.toLowerCase()} to files`,
+							disabled: Boolean(why),
+							onclick: () => exportTo(row, e.name, 'files'),
+						},
+						icon('keep'),
+					),
+				);
+				return [row];
+			}),
+		);
 	}
 	button.addEventListener('click', () => {
 		note.hide();

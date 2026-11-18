@@ -6,11 +6,41 @@ import { niceTicks } from './format.js';
 
 /** `map` names the colour map the field uses; `ramps` are the ramps offered for it, the first being the default. */
 export const FIELDS = {
-	cp: { label: 'Pressure', title: 'Pressure Cp', symbol: 'Cp', map: 'cp', tip: 'Pressure coefficient, mean of the networks' },
-	drag: { label: 'Drag', title: 'Drag −Cp nₓ', symbol: '−Cp nₓ', map: 'drag', tip: 'Local pressure drag: −Cp times the x component of the outward normal' },
-	sigma: { label: 'Spread', title: 'Spread σ(Cp)', symbol: 'σ', map: 'sigma', tip: 'Standard deviation of the networks’ Cp, scaled by the model’s calibration' },
-	cfd: { label: 'CFD', title: 'Cp CFD', symbol: 'Cp', map: 'cp', tip: 'Pressure coefficient from the CFD solution in the file' },
-	error: { label: 'Error', title: 'ΔCp predicted − CFD', symbol: 'ΔCp', map: 'error', tip: 'Predicted Cp minus CFD Cp' },
+	cp: {
+		label: 'Pressure',
+		title: 'Pressure Cp',
+		symbol: 'Cp',
+		map: 'cp',
+		tip: 'Pressure coefficient, mean of the networks',
+	},
+	drag: {
+		label: 'Drag',
+		title: 'Drag −Cp nₓ',
+		symbol: '−Cp nₓ',
+		map: 'drag',
+		tip: 'Local pressure drag: −Cp times the x component of the outward normal',
+	},
+	sigma: {
+		label: 'Spread',
+		title: 'Spread σ(Cp)',
+		symbol: 'σ',
+		map: 'sigma',
+		tip: 'Standard deviation of the networks’ Cp, scaled by the model’s calibration',
+	},
+	cfd: {
+		label: 'CFD',
+		title: 'Cp CFD',
+		symbol: 'Cp',
+		map: 'cp',
+		tip: 'Pressure coefficient from the CFD solution in the file',
+	},
+	error: {
+		label: 'Error',
+		title: 'ΔCp predicted − CFD',
+		symbol: 'ΔCp',
+		map: 'error',
+		tip: 'Predicted Cp minus CFD Cp',
+	},
 	none: { label: 'None', title: null, symbol: null, map: null, tip: 'Surface only' },
 };
 
@@ -70,7 +100,8 @@ function valueAt(mesh, field, v) {
 }
 
 /** A per-vertex value on face f of a mesh with `indices`: the mean of its three corners, as the viewer draws it at the face's centre. */
-export const faceMean = (values, indices, f) => (values[indices[3 * f]] + values[indices[3 * f + 1]] + values[indices[3 * f + 2]]) / 3;
+export const faceMean = (values, indices, f) =>
+	(values[indices[3 * f]] + values[indices[3 * f + 1]] + values[indices[3 * f + 2]]) / 3;
 
 /**
  * The end of a scale spanning 98 % of `count` values (value(i) the i-th): |value| at the 98th percentile of an even

@@ -21,19 +21,19 @@
  * @param {Float64Array} sums  (nx · ny · nz)
  */
 export function spreadOnGrid(grid, positions, weights, sums) {
-  const [, ny, nz] = grid.nodes;
-  const spline = new Float64Array(12);
-  for (let p = 0; p < weights.length; p++) {
-    splineAround(spline, grid, positions[3 * p], positions[3 * p + 1], positions[3 * p + 2]);
-    const weight = weights[p];
-    for (let dx = 0; dx < 3; dx++) {
-      for (let dy = 0; dy < 3; dy++) {
-        const wxy = spline[3 + dx] * spline[6 + dy];
-        const row = ((spline[0] + dx - 1) * ny + spline[1] + dy - 1) * nz + spline[2] - 1;
-        for (let dz = 0; dz < 3; dz++) sums[row + dz] += weight * (wxy * spline[9 + dz]);
-      }
-    }
-  }
+	const [, ny, nz] = grid.nodes;
+	const spline = new Float64Array(12);
+	for (let p = 0; p < weights.length; p++) {
+		splineAround(spline, grid, positions[3 * p], positions[3 * p + 1], positions[3 * p + 2]);
+		const weight = weights[p];
+		for (let dx = 0; dx < 3; dx++) {
+			for (let dy = 0; dy < 3; dy++) {
+				const wxy = spline[3 + dx] * spline[6 + dy];
+				const row = ((spline[0] + dx - 1) * ny + spline[1] + dy - 1) * nz + spline[2] - 1;
+				for (let dz = 0; dz < 3; dz++) sums[row + dz] += weight * (wxy * spline[9 + dz]);
+			}
+		}
+	}
 }
 
 /**
@@ -50,18 +50,18 @@ export function spreadOnGrid(grid, positions, weights, sums) {
  * @param {number} z
  */
 export function splineAround(spline, { origin, step, nodes }, x, y, z) {
-  place(spline, 0, (x - origin[0]) / step, nodes[0]);
-  place(spline, 1, (y - origin[1]) / step, nodes[1]);
-  place(spline, 2, (z - origin[2]) / step, nodes[2]);
+	place(spline, 0, (x - origin[0]) / step, nodes[0]);
+	place(spline, 1, (y - origin[1]) / step, nodes[1]);
+	place(spline, 2, (z - origin[2]) / step, nodes[2]);
 }
 
 function place(spline, axis, q, n) {
-  const i = Math.min(Math.max(Math.floor(q + 0.5), 1), n - 2);
-  const t = q - i;
-  spline[axis] = i;
-  spline[3 + 3 * axis] = 0.5 * (0.5 - t) * (0.5 - t);
-  spline[4 + 3 * axis] = 0.75 - t * t;
-  spline[5 + 3 * axis] = 0.5 * (0.5 + t) * (0.5 + t);
+	const i = Math.min(Math.max(Math.floor(q + 0.5), 1), n - 2);
+	const t = q - i;
+	spline[axis] = i;
+	spline[3 + 3 * axis] = 0.5 * (0.5 - t) * (0.5 - t);
+	spline[4 + 3 * axis] = 0.75 - t * t;
+	spline[5 + 3 * axis] = 0.5 * (0.5 + t) * (0.5 + t);
 }
 
 /**
@@ -73,11 +73,11 @@ function place(spline, axis, q, n) {
  * @returns {Float64Array}
  */
 export function gaussianWeights(sigma, truncate) {
-  const radius = Math.floor(truncate * sigma + 0.5);
-  const weights = new Float64Array(2 * radius + 1);
-  for (let k = -radius; k <= radius; k++) weights[k + radius] = Math.exp(-0.5 * (k / sigma) ** 2);
-  const total = weights.reduce((sum, w) => sum + w, 0);
-  return weights.map((w) => w / total);
+	const radius = Math.floor(truncate * sigma + 0.5);
+	const weights = new Float64Array(2 * radius + 1);
+	for (let k = -radius; k <= radius; k++) weights[k + radius] = Math.exp(-0.5 * (k / sigma) ** 2);
+	const total = weights.reduce((sum, w) => sum + w, 0);
+	return weights.map((w) => w / total);
 }
 
 /**
@@ -87,8 +87,8 @@ export function gaussianWeights(sigma, truncate) {
  * @returns {Float64Array}
  */
 export function upstreamHalf(weights) {
-  const radius = (weights.length - 1) / 2;
-  return weights.map((w, index) => (index < radius ? w : index === radius ? 0.5 * w : 0));
+	const radius = (weights.length - 1) / 2;
+	return weights.map((w, index) => (index < radius ? w : index === radius ? 0.5 * w : 0));
 }
 
 /**
@@ -102,20 +102,20 @@ export function upstreamHalf(weights) {
  * @returns {Float32Array} out
  */
 export function correlateAlong(field, nodes, axis, weights, out = new Float32Array(field.length)) {
-  const n = nodes[axis];
-  const stride = axis === 0 ? nodes[1] * nodes[2] : axis === 1 ? nodes[2] : 1;
-  const radius = (weights.length - 1) / 2;
-  const reflected = (index) => {
-    const period = 2 * n;
-    const m = ((index % period) + period) % period;
-    return m < n ? m : period - 1 - m;
-  };
-  for (let node = 0; node < field.length; node++) {
-    const index = Math.floor(node / stride) % n;
-    const base = node - index * stride;
-    let sum = 0;
-    for (let k = -radius; k <= radius; k++) sum += weights[k + radius] * field[base + reflected(index + k) * stride];
-    out[node] = sum;
-  }
-  return out;
+	const n = nodes[axis];
+	const stride = axis === 0 ? nodes[1] * nodes[2] : axis === 1 ? nodes[2] : 1;
+	const radius = (weights.length - 1) / 2;
+	const reflected = (index) => {
+		const period = 2 * n;
+		const m = ((index % period) + period) % period;
+		return m < n ? m : period - 1 - m;
+	};
+	for (let node = 0; node < field.length; node++) {
+		const index = Math.floor(node / stride) % n;
+		const base = node - index * stride;
+		let sum = 0;
+		for (let k = -radius; k <= radius; k++) sum += weights[k + radius] * field[base + reflected(index + k) * stride];
+		out[node] = sum;
+	}
+	return out;
 }

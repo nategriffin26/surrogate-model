@@ -33,7 +33,10 @@ function profileOf(mesh, bounds) {
 	const map = ([x, , z]) => [(x - x0) * scale, height - (z - z0) * scale];
 	const bins = [...top.keys()].filter((b) => Number.isFinite(top[b]));
 	const along = (b) => x0 + ((b + 0.5) / PROFILE_BINS) * (x1 - x0);
-	const points = [...bins.map((b) => map([along(b), 0, top[b]])), ...bins.reverse().map((b) => map([along(b), 0, bottom[b]]))];
+	const points = [
+		...bins.map((b) => map([along(b), 0, top[b]])),
+		...bins.reverse().map((b) => map([along(b), 0, bottom[b]])),
+	];
 	return { path: `M${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L')}Z`, height, map };
 }
 
@@ -50,14 +53,25 @@ function wholeCarRows(r, row) {
 	const spread = `${Math.min(...byNetwork).toFixed(3)}–${Math.max(...byNetwork).toFixed(3)}`;
 	return COEFFICIENTS.flatMap(([axis, title], i) => [
 		row(coefficient(axis), title, signed(r.totals.coefficients[i], 3), cfd && signed(cfd[i], 3)),
-		i === 0 ? row([coefficient('x'), ' by network'], 'Lowest and highest Cx among the networks; the prediction is their mean', spread, null, 'num quiet') : null,
+		i === 0
+			? row(
+					[coefficient('x'), ' by network'],
+					'Lowest and highest Cx among the networks; the prediction is their mean',
+					spread,
+					null,
+					'num quiet',
+				)
+			: null,
 	]);
 }
 
 /** host: where the card goes; overlay: over the 3D view, for the extremes' markers; run(name, args) runs an operation. */
 export function createResultCard({ host, overlay, viewer, active, run }) {
 	const outlines = new WeakMap();
-	const markers = { max: h('div', { class: 'extreme-marker max', hidden: true }, h('span', {}, 'max')), min: h('div', { class: 'extreme-marker min', hidden: true }, h('span', {}, 'min')) };
+	const markers = {
+		max: h('div', { class: 'extreme-marker max', hidden: true }, h('span', {}, 'max')),
+		min: h('div', { class: 'extreme-marker min', hidden: true }, h('span', {}, 'min')),
+	};
 	overlay.append(markers.max, markers.min);
 	let shown = null;
 	/** The pressure extremes of the car the card describes, {max, min}, each {value, center, normal}; or null. */
@@ -88,14 +102,21 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	/** The readout as a grid whose third column holds the CFD's, for a file that carries CFD; that column's head shares the title's row, so it costs no line. */
 	function readout(r) {
 		const cfd = Boolean(r.referenceTotals);
-		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), cfd ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
+		const row = (label, title, text, aside, tone = 'num') => [
+			h('dt', { title }, ...label),
+			h('dd', { class: tone }, text),
+			cfd ? h('dd', { class: 'result-aside num' }, aside ?? '') : null,
+		];
 		const rows = wholeCarRows(r, row);
 		if (!cfd) return [h('div', { class: 'result-label' }, 'Whole car'), h('dl', { class: 'result-forces' }, rows)];
-		return h('dl', { class: 'result-forces against' },
+		return h(
+			'dl',
+			{ class: 'result-forces against' },
 			h('dt', { class: 'result-label' }, 'Whole car'),
 			h('dd', { class: 'result-head' }, 'Predicted'),
 			h('dd', { class: 'result-head', title: 'Summed from the CFD in the file, over the same cells' }, 'CFD'),
-			rows);
+			rows,
+		);
 	}
 
 	function extremes(c) {
@@ -119,14 +140,50 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 		};
 		const spot = (which) => {
 			const [x, y] = profile.map(ex[which].center);
-			return hover(s('circle', { class: `spot ${which}`, cx: x, cy: y, r: 3.5, onclick: () => fly(which) }, s('title', {}, `Cp ${which} ${signed(ex[which].value, 2)}`)), which);
+			return hover(
+				s(
+					'circle',
+					{ class: `spot ${which}`, cx: x, cy: y, r: 3.5, onclick: () => fly(which) },
+					s('title', {}, `Cp ${which} ${signed(ex[which].value, 2)}`),
+				),
+				which,
+			);
 		};
-		const button = (which, label) => hover(h('button', { type: 'button', class: `extreme ${which}`, title: `Fly to the ${which === 'max' ? 'highest' : 'lowest'} Cp`, onclick: () => fly(which) },
-			h('i', { 'aria-hidden': 'true' }), label, h('b', { class: 'num' }, signed(ex[which].value, 2))), which);
-		return h('div', { class: 'extremes' },
-			s('svg', { class: 'profile', viewBox: `-4 -4 ${WIDTH} ${profile.height + 8}`, width: WIDTH, height: profile.height + 8, role: 'img', 'aria-label': 'Side view with the highest and lowest Cp' },
-				s('path', { class: 'outline', d: profile.path }), spot('max'), spot('min')),
-			h('div', { class: 'extreme-buttons' }, button('max', 'Cp max'), button('min', 'Cp min')));
+		const button = (which, label) =>
+			hover(
+				h(
+					'button',
+					{
+						type: 'button',
+						class: `extreme ${which}`,
+						title: `Fly to the ${which === 'max' ? 'highest' : 'lowest'} Cp`,
+						onclick: () => fly(which),
+					},
+					h('i', { 'aria-hidden': 'true' }),
+					label,
+					h('b', { class: 'num' }, signed(ex[which].value, 2)),
+				),
+				which,
+			);
+		return h(
+			'div',
+			{ class: 'extremes' },
+			s(
+				'svg',
+				{
+					class: 'profile',
+					viewBox: `-4 -4 ${WIDTH} ${profile.height + 8}`,
+					width: WIDTH,
+					height: profile.height + 8,
+					role: 'img',
+					'aria-label': 'Side view with the highest and lowest Cp',
+				},
+				s('path', { class: 'outline', d: profile.path }),
+				spot('max'),
+				spot('min'),
+			),
+			h('div', { class: 'extreme-buttons' }, button('max', 'Cp max'), button('min', 'Cp min')),
+		);
 	}
 
 	/** The whole car's reference area and size, and which of its dimensions lie outside the training range. */
@@ -134,12 +191,28 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 		const g = r.geometry;
 		const outside = outsideTraining(r);
 		return [
-			h('dl', { class: 'result-facts' },
-				h('dt', {}, 'Frontal area'), h('dd', { class: 'num' }, `${g.frontalArea.toFixed(2)} m²`),
-				h('dt', {}, 'L × W × H'), h('dd', { class: 'num' }, `${g.length.toFixed(2)} × ${g.width.toFixed(2)} × ${g.height.toFixed(2)} m`)),
-			outside.length === 0 ? null : h('div', { class: 'result-outside', role: 'note' },
-				h('div', {}, 'Outside the training range'),
-				outside.map((d) => h('div', { class: 'num' }, `${DIMENSION_LABELS[d.name]} ${d.value.toFixed(2)} m, trained ${d.trainMin.toFixed(2)} to ${d.trainMax.toFixed(2)} m`))),
+			h(
+				'dl',
+				{ class: 'result-facts' },
+				h('dt', {}, 'Frontal area'),
+				h('dd', { class: 'num' }, `${g.frontalArea.toFixed(2)} m²`),
+				h('dt', {}, 'L × W × H'),
+				h('dd', { class: 'num' }, `${g.length.toFixed(2)} × ${g.width.toFixed(2)} × ${g.height.toFixed(2)} m`),
+			),
+			outside.length === 0
+				? null
+				: h(
+						'div',
+						{ class: 'result-outside', role: 'note' },
+						h('div', {}, 'Outside the training range'),
+						outside.map((d) =>
+							h(
+								'div',
+								{ class: 'num' },
+								`${DIMENSION_LABELS[d.name]} ${d.value.toFixed(2)} m, trained ${d.trainMin.toFixed(2)} to ${d.trainMax.toFixed(2)} m`,
+							),
+						),
+					),
 		];
 	}
 
@@ -155,10 +228,13 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 			shown = c;
 			return;
 		}
-		const card = h('div', { class: `result-card${c === shown ? ' settled' : ''}` },
+		const card = h(
+			'div',
+			{ class: `result-card${c === shown ? ' settled' : ''}` },
 			readout(c.result),
 			extremes(c),
-			facts(c.result));
+			facts(c.result),
+		);
 		host.replaceChildren(card);
 		shown = c;
 	}

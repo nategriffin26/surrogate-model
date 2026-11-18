@@ -9,7 +9,17 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
 import { FaceIndex, VertexGrid } from './picking.js';
-import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT, WORLD_VERTEX } from './shaders.js';
+import {
+	CAR_FRAGMENT,
+	CAR_VERTEX,
+	EDGE_FRAGMENT,
+	EDGE_VERTEX,
+	PICK_FRAGMENT,
+	SCREEN_VERTEX,
+	WAIT_COMPOSITE_FRAGMENT,
+	WAIT_INFO_FRAGMENT,
+	WORLD_VERTEX,
+} from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 const SHADER_FIELD = { cp: 0, cfd: 1, error: 2, sigma: 3, drag: 4, none: 5 };
@@ -150,19 +160,39 @@ export class Viewer extends EventTarget {
 			uWaitTime: { value: 0 },
 			uAccent: { value: new THREE.Color(ACCENT) },
 		};
-		this.carMaterial = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: CAR_VERTEX, fragmentShader: CAR_FRAGMENT, side: THREE.DoubleSide });
+		this.carMaterial = new THREE.ShaderMaterial({
+			uniforms: this.uniforms,
+			vertexShader: CAR_VERTEX,
+			fragmentShader: CAR_FRAGMENT,
+			side: THREE.DoubleSide,
+		});
 		this.car = new THREE.Mesh(new THREE.BufferGeometry(), this.carMaterial);
 		this.car.frustumCulled = false;
 		this.car.visible = false;
-		this.waitInfoMaterial = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: CAR_VERTEX, fragmentShader: WAIT_INFO_FRAGMENT, side: THREE.DoubleSide });
+		this.waitInfoMaterial = new THREE.ShaderMaterial({
+			uniforms: this.uniforms,
+			vertexShader: CAR_VERTEX,
+			fragmentShader: WAIT_INFO_FRAGMENT,
+			side: THREE.DoubleSide,
+		});
 		const u = this.uniforms;
-		this.waitComposite = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-			uniforms: { uStill: { value: null }, uInfo: { value: null }, uClay: u.uClay, uAccent: u.uAccent, uWait: u.uWait, uWaitTime: u.uWaitTime },
-			vertexShader: SCREEN_VERTEX,
-			fragmentShader: WAIT_COMPOSITE_FRAGMENT,
-			depthTest: false,
-			depthWrite: false,
-		}));
+		this.waitComposite = new THREE.Mesh(
+			new THREE.PlaneGeometry(2, 2),
+			new THREE.ShaderMaterial({
+				uniforms: {
+					uStill: { value: null },
+					uInfo: { value: null },
+					uClay: u.uClay,
+					uAccent: u.uAccent,
+					uWait: u.uWait,
+					uWaitTime: u.uWaitTime,
+				},
+				vertexShader: SCREEN_VERTEX,
+				fragmentShader: WAIT_COMPOSITE_FRAGMENT,
+				depthTest: false,
+				depthWrite: false,
+			}),
+		);
 		this.waitComposite.frustumCulled = false;
 		/** While the car waits for its field: the frame drawn in plain clay and what the tint needs per pixel (keepStill). */
 		this.still = null;
@@ -452,10 +482,21 @@ export class Viewer extends EventTarget {
 		const group = new THREE.Group();
 		const fill = new THREE.Mesh(
 			new THREE.PlaneGeometry(1, 1),
-			new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false }),
+			new THREE.MeshBasicMaterial({
+				color: ACCENT,
+				transparent: true,
+				opacity: 0.07,
+				side: THREE.DoubleSide,
+				depthWrite: false,
+			}),
 		);
 		const outline = new THREE.LineLoop(
-			new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.5, -0.5, 0), new THREE.Vector3(0.5, -0.5, 0), new THREE.Vector3(0.5, 0.5, 0), new THREE.Vector3(-0.5, 0.5, 0)]),
+			new THREE.BufferGeometry().setFromPoints([
+				new THREE.Vector3(-0.5, -0.5, 0),
+				new THREE.Vector3(0.5, -0.5, 0),
+				new THREE.Vector3(0.5, 0.5, 0),
+				new THREE.Vector3(-0.5, 0.5, 0),
+			]),
 			new THREE.LineBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.8 }),
 		);
 		fill.renderOrder = outline.renderOrder = 3;
@@ -474,7 +515,11 @@ export class Viewer extends EventTarget {
 		centre[s.axis] = s.offset;
 		this.plane.position.set(...centre);
 		// The plane geometry lies in its local xy; turn it so its normal is the section axis.
-		const [u, v] = [[1, 2], [0, 2], [0, 1]][s.axis];
+		const [u, v] = [
+			[1, 2],
+			[0, 2],
+			[0, 1],
+		][s.axis];
 		this.plane.rotation.set(0, 0, 0);
 		if (s.axis === 0) this.plane.rotation.set(Math.PI / 2, Math.PI / 2, 0);
 		if (s.axis === 1) this.plane.rotation.set(Math.PI / 2, 0, 0);
@@ -491,10 +536,15 @@ export class Viewer extends EventTarget {
 		switch (mode) {
 			case 'none':
 				if (!lattice.object.visible) return;
-				this.animate(700, (k) => {
-					u.uOpacity.value = 1 - k;
-					u.uAmp.value = 0.18 * (1 - k);
-				}, () => (lattice.object.visible = false), 'backdrop');
+				this.animate(
+					700,
+					(k) => {
+						u.uOpacity.value = 1 - k;
+						u.uAmp.value = 0.18 * (1 - k);
+					},
+					() => (lattice.object.visible = false),
+					'backdrop',
+				);
 				return;
 			case 'still':
 			case 'moving':
@@ -538,7 +588,15 @@ export class Viewer extends EventTarget {
 			const width = 0.22 * length;
 			const depth = 0.1 * length;
 			u.uArrival.value.set(xmin - depth, width, depth, 1);
-			this.arrival = () => this.animate(ARRIVAL_MS, (k) => (u.uArrival.value.x = xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)), done, 'arrival');
+			this.arrival = () =>
+				this.animate(
+					ARRIVAL_MS,
+					(k) =>
+						(u.uArrival.value.x =
+							xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)),
+					done,
+					'arrival',
+				);
 		}
 		this.requestRender();
 	}
@@ -591,7 +649,8 @@ export class Viewer extends EventTarget {
 		const target = new THREE.Vector3((b[0] + b[1]) / 2, (b[2] + b[3]) / 2, (b[4] + b[5]) / 2);
 		const d = new THREE.Vector3(...dir).normalize();
 		const corners = [];
-		for (const x of [b[0], b[1]]) for (const y of [b[2], b[3]]) for (const z of [b[4], b[5]]) corners.push(new THREE.Vector3(x, y, z));
+		for (const x of [b[0], b[1]])
+			for (const y of [b[2], b[3]]) for (const z of [b[4], b[5]]) corners.push(new THREE.Vector3(x, y, z));
 		const probe = camera.clone();
 		probe.up.set(0, 0, 1);
 		const fill = 0.9;
@@ -642,7 +701,15 @@ export class Viewer extends EventTarget {
 		const whole = this.framing([normal[0], normal[1], Math.max(normal[2], 0.25)]);
 		const target = new THREE.Vector3(...point);
 		const offset = whole.position.clone().sub(whole.target).multiplyScalar(CLOSE_UP);
-		this.moveTo({ position: target.clone().add(offset), target, zoom: this.camera.isOrthographicCamera ? whole.zoom / CLOSE_UP : 1 }, true, 600);
+		this.moveTo(
+			{
+				position: target.clone().add(offset),
+				target,
+				zoom: this.camera.isOrthographicCamera ? whole.zoom / CLOSE_UP : 1,
+			},
+			true,
+			600,
+		);
 	}
 
 	/** Frame the whole car without changing the direction of view. */
@@ -680,15 +747,24 @@ export class Viewer extends EventTarget {
 		if (dTheta > Math.PI) dTheta -= 2 * Math.PI;
 		if (dTheta < -Math.PI) dTheta += 2 * Math.PI;
 		const zoom0 = camera.zoom;
-		this.animate(ms, (k) => {
-			const e = ease(k);
-			const s = new THREE.Spherical(s0.radius + (s1.radius - s0.radius) * e, s0.phi + (s1.phi - s0.phi) * e, s0.theta + dTheta * e);
-			this.target.copy(fromTarget).lerp(goal.target, e);
-			camera.position.copy(this.target).add(fromYUp(new THREE.Vector3().setFromSpherical(s)));
-			camera.zoom = zoom0 + (goal.zoom - zoom0) * e;
-			camera.updateProjectionMatrix();
-			camera.lookAt(this.target);
-		}, () => this.controls.update(), 'camera');
+		this.animate(
+			ms,
+			(k) => {
+				const e = ease(k);
+				const s = new THREE.Spherical(
+					s0.radius + (s1.radius - s0.radius) * e,
+					s0.phi + (s1.phi - s0.phi) * e,
+					s0.theta + dTheta * e,
+				);
+				this.target.copy(fromTarget).lerp(goal.target, e);
+				camera.position.copy(this.target).add(fromYUp(new THREE.Vector3().setFromSpherical(s)));
+				camera.zoom = zoom0 + (goal.zoom - zoom0) * e;
+				camera.updateProjectionMatrix();
+				camera.lookAt(this.target);
+			},
+			() => this.controls.update(),
+			'camera',
+		);
 	}
 
 	get projection() {
@@ -725,7 +801,12 @@ export class Viewer extends EventTarget {
 
 	/** Everything needed to put the camera back where it was. */
 	cameraState() {
-		return { projection: this.projection, position: this.camera.position.toArray(), target: this.target.toArray(), zoom: this.camera.zoom };
+		return {
+			projection: this.projection,
+			position: this.camera.position.toArray(),
+			target: this.target.toArray(),
+			zoom: this.camera.zoom,
+		};
 	}
 
 	restoreCamera(state) {
@@ -986,7 +1067,8 @@ export class Viewer extends EventTarget {
 		if (still) this.composeWait();
 		this.lastFrame = now;
 		this.dirty = false;
-		if (this.animations.size > 0 || controlled || moving || latticeMoving || waitMoving || this.surface?.uploading) this.schedule();
+		if (this.animations.size > 0 || controlled || moving || latticeMoving || waitMoving || this.surface?.uploading)
+			this.schedule();
 	}
 
 	/** The largest distance, in pixels, any corner of the car's box moved on screen since the previous frame. */
@@ -994,7 +1076,8 @@ export class Viewer extends EventTarget {
 		const b = this.bounds ?? [-1, 1, -1, 1, -1, 1];
 		this.camera.updateMatrixWorld();
 		const corners = [];
-		for (const x of [b[0], b[1]]) for (const y of [b[2], b[3]]) for (const z of [b[4], b[5]]) corners.push(this.project([x, y, z]));
+		for (const x of [b[0], b[1]])
+			for (const y of [b[2], b[3]]) for (const z of [b[4], b[5]]) corners.push(this.project([x, y, z]));
 		const previous = this.corners;
 		this.corners = corners;
 		if (!previous) return Infinity;
@@ -1014,7 +1097,11 @@ export class Viewer extends EventTarget {
 		if (this.still && (this.still.width !== W || this.still.height !== H)) this.disposeStill();
 		if (!this.still) {
 			const frame = new THREE.FramebufferTexture(W, H);
-			const info = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+			const info = new THREE.WebGLRenderTarget(W, H, {
+				type: THREE.HalfFloatType,
+				minFilter: THREE.NearestFilter,
+				magFilter: THREE.NearestFilter,
+			});
 			const composite = this.waitComposite.material.uniforms;
 			composite.uStill.value = frame;
 			composite.uInfo.value = info.texture;
@@ -1027,7 +1114,13 @@ export class Viewer extends EventTarget {
 		renderer.copyFramebufferToTexture(this.still.frame);
 		// The car's pixels change only with the view, the mesh and the section; a fading backdrop leaves them be.
 		const camera = this.camera;
-		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uSection.value].join();
+		const key = [
+			layer,
+			...camera.matrixWorld.elements,
+			...camera.projectionMatrix.elements,
+			...u.uPlane.value.toArray(),
+			u.uSection.value,
+		].join();
 		if (this.still.key !== key) {
 			// Cleared to transparent black, so a pixel off the car reads 0 where the car's read 1.
 			renderer.setRenderTarget(this.still.info);

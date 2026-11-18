@@ -85,7 +85,10 @@ export function stepView(name, { python, schemaOf }) {
 		el: row.el,
 		begin(args) {
 			row.setDetail(python ? firstLine(args.code) : summary(args, schemaOf(name)));
-			row.content.append(h('p', { class: 'step-label' }, 'Asked'), h('pre', {}, python ? args.code : JSON.stringify(args, null, 2)));
+			row.content.append(
+				h('p', { class: 'step-label' }, 'Asked'),
+				h('pre', {}, python ? args.code : JSON.stringify(args, null, 2)),
+			);
 		},
 		output(item) {
 			if (item.kind === 'text') {
@@ -99,14 +102,25 @@ export function stepView(name, { python, schemaOf }) {
 		},
 		/** An operation the Python run called, as a line under the step. */
 		sub(subName, subArgs) {
-			const sub = h('div', { class: 'step-sub running' }, h('span', { class: 'row-state' }), h('span', { class: 'row-name step-name' }, sentence(subName)), h('span', { class: 'row-detail' }, summary(subArgs, schemaOf(subName))));
+			const sub = h(
+				'div',
+				{ class: 'step-sub running' },
+				h('span', { class: 'row-state' }),
+				h('span', { class: 'row-name step-name' }, sentence(subName)),
+				h('span', { class: 'row-detail' }, summary(subArgs, schemaOf(subName))),
+			);
 			subs.append(sub);
 			return { finish: (outcome) => sub.classList.replace('running', endState(outcome)) };
 		},
 		finish(outcome, error, result) {
 			row.finish(outcome);
-			if (result !== undefined) row.content.append(h('p', { class: 'step-label' }, 'Returned'), h('pre', {}, JSON.stringify(result, null, 2)));
-			if (error) row.content.append(h('p', { class: 'step-label' }, python ? 'Error' : 'Refused'), h('pre', { class: 'step-error' }, error));
+			if (result !== undefined)
+				row.content.append(h('p', { class: 'step-label' }, 'Returned'), h('pre', {}, JSON.stringify(result, null, 2)));
+			if (error)
+				row.content.append(
+					h('p', { class: 'step-label' }, python ? 'Error' : 'Refused'),
+					h('pre', { class: 'step-error' }, error),
+				);
 		},
 	};
 }
@@ -119,8 +133,15 @@ function disclosure(kind, name) {
 	const nameEl = h('span', { class: kind === 'step' ? 'row-name step-name' : 'row-name' }, name);
 	const detail = h('span', { class: 'row-detail' });
 	const ending = h('span', { class: 'row-ending' });
-	const toggle = h('button', { type: 'button', class: 'row', 'aria-expanded': 'false' },
-		h('span', { class: 'row-state' }), nameEl, detail, ending, h('span', { class: 'row-chevron' }, icon('chevron')));
+	const toggle = h(
+		'button',
+		{ type: 'button', class: 'row', 'aria-expanded': 'false' },
+		h('span', { class: 'row-state' }),
+		nameEl,
+		detail,
+		ending,
+		h('span', { class: 'row-chevron' }, icon('chevron')),
+	);
 	const content = h('div', { class: 'row-content' });
 	const body = h('div', { class: 'row-body' }, h('div', { class: 'row-clip' }, content));
 	const el = h('div', { class: `${kind} running` }, toggle, body);
@@ -155,20 +176,68 @@ function endState(outcome) {
 function figureView({ png, title }) {
 	const blob = new Blob([png], { type: 'image/png' });
 	const url = URL.createObjectURL(blob);
-	const name = `${title.replace(/[^\w\- ]+/g, '').trim().slice(0, 60) || 'figure'}.png`;
+	const name = `${
+		title
+			.replace(/[^\w\- ]+/g, '')
+			.trim()
+			.slice(0, 60) || 'figure'
+	}.png`;
 	// The size from the PNG header, so the figure's space is kept before it decodes and nothing below it jumps.
 	const header = new DataView(png.buffer, png.byteOffset, 24);
-	return h('figure', { class: 'output-figure' },
+	return h(
+		'figure',
+		{ class: 'output-figure' },
 		h('img', { src: url, alt: title, width: header.getUint32(16), height: header.getUint32(20) }),
-		h('button', { type: 'button', class: 'icon-button figure-save', title: 'Download', 'aria-label': `Download ${name}`, onclick: () => download(blob, name) }, icon('download')));
+		h(
+			'button',
+			{
+				type: 'button',
+				class: 'icon-button figure-save',
+				title: 'Download',
+				'aria-label': `Download ${name}`,
+				onclick: () => download(blob, name),
+			},
+			icon('download'),
+		),
+	);
 }
 
 function tableView({ columns, rows, total }) {
-	return h('div', { class: 'output-table' },
-		h('div', { class: 'output-table-scroll' }, h('table', {},
-			h('thead', {}, h('tr', {}, columns.map((column) => h('th', {}, column)))),
-			h('tbody', {}, rows.map((row) => h('tr', {}, row.map((cell) => h('td', { class: /^[−+-]?[\d.]+(e[−+-]?\d+)?$/i.test(cell) ? 'num' : null }, cell))))))),
-		total > rows.length ? h('p', { class: 'output-table-more' }, `${rows.length} of ${total.toLocaleString()} rows`) : null);
+	return h(
+		'div',
+		{ class: 'output-table' },
+		h(
+			'div',
+			{ class: 'output-table-scroll' },
+			h(
+				'table',
+				{},
+				h(
+					'thead',
+					{},
+					h(
+						'tr',
+						{},
+						columns.map((column) => h('th', {}, column)),
+					),
+				),
+				h(
+					'tbody',
+					{},
+					rows.map((row) =>
+						h(
+							'tr',
+							{},
+							row.map((cell) => h('td', { class: /^[−+-]?[\d.]+(e[−+-]?\d+)?$/i.test(cell) ? 'num' : null }, cell)),
+						),
+					),
+				),
+			),
+		),
+		total > rows.length
+			? h('p', { class: 'output-table-more' }, `${rows.length} of ${total.toLocaleString()} rows`)
+			: null,
+	);
 }
 
 /** `delete_file` → "Delete file". */
@@ -183,14 +252,16 @@ const UNIT_WORDS = { metres: 'm', millimetres: 'mm', degrees: '°', seconds: 's'
  * them exactly.
  */
 function summary(args, schema = {}) {
-	return Object.entries(args ?? {}).map(([key, value]) => {
-		if (key === 'case_id') return `case ${value}`;
-		const suffix = key.match(/_(m|m2|mm|deg|s|pct)$/);
-		const word = schema[key]?.description?.match(/\bin (metres|millimetres|degrees|seconds)\b/);
-		const unit = suffix ? UNITS[suffix[1]] : word ? UNIT_WORDS[word[1]] : null;
-		const label = (suffix ? key.slice(0, -suffix[0].length) : key).replaceAll('_', ' ');
-		return `${label} ${rounded(value)}${unit ? ` ${unit}` : ''}`;
-	}).join(' · ');
+	return Object.entries(args ?? {})
+		.map(([key, value]) => {
+			if (key === 'case_id') return `case ${value}`;
+			const suffix = key.match(/_(m|m2|mm|deg|s|pct)$/);
+			const word = schema[key]?.description?.match(/\bin (metres|millimetres|degrees|seconds)\b/);
+			const unit = suffix ? UNITS[suffix[1]] : word ? UNIT_WORDS[word[1]] : null;
+			const label = (suffix ? key.slice(0, -suffix[0].length) : key).replaceAll('_', ' ');
+			return `${label} ${rounded(value)}${unit ? ` ${unit}` : ''}`;
+		})
+		.join(' · ');
 }
 
 function rounded(value) {
@@ -198,25 +269,43 @@ function rounded(value) {
 	// Arrays sent from Python arrive whole; their size says enough in one line.
 	if (ArrayBuffer.isView(value)) return `${value.length.toLocaleString('en')} values`;
 	if (Array.isArray(value)) return `[${value.map(rounded).join(', ')}]`;
-	if (value !== null && typeof value === 'object') return `{${Object.entries(value).map(([key, part]) => `${key} ${rounded(part)}`).join(', ')}}`;
+	if (value !== null && typeof value === 'object')
+		return `{${Object.entries(value)
+			.map(([key, part]) => `${key} ${rounded(part)}`)
+			.join(', ')}}`;
 	return String(value);
 }
 
 /** A Python run's one-line summary: its first comment, else its first line. */
 function firstLine(code = '') {
-	const lines = String(code).split('\n').map((line) => line.trim()).filter(Boolean);
+	const lines = String(code)
+		.split('\n')
+		.map((line) => line.trim())
+		.filter(Boolean);
 	const comment = lines.find((line) => line.startsWith('#'));
-	return (comment ? comment.replace(/^#+\s*/, '') : lines[0] ?? '').slice(0, 80);
+	return (comment ? comment.replace(/^#+\s*/, '') : (lines[0] ?? '')).slice(0, 80);
 }
 
 export function arrowIcon() {
-	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M8 13V3M3.5 7.5 8 3l4.5 4.5' }));
+	return s(
+		'svg',
+		{ class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+		s('path', { d: 'M8 13V3M3.5 7.5 8 3l4.5 4.5' }),
+	);
 }
 
 export function forwardIcon() {
-	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M3 8h10M8.5 3.5 13 8l-4.5 4.5' }));
+	return s(
+		'svg',
+		{ class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+		s('path', { d: 'M3 8h10M8.5 3.5 13 8l-4.5 4.5' }),
+	);
 }
 
 export function downIcon() {
-	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M8 3v10M3.5 8.5 8 13l4.5-4.5' }));
+	return s(
+		'svg',
+		{ class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+		s('path', { d: 'M8 3v10M3.5 8.5 8 13l4.5-4.5' }),
+	);
 }

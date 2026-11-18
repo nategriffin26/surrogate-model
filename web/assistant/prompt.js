@@ -73,8 +73,17 @@ for i in picked: print(np.round(w.centers[i], 3), round(float(d[i]), 3))
  * message.
  */
 export function describeState({ cases, extents, workspace, actions }) {
-	const files = workspace.files().map((f) => `${f.path} (${f.by}, ${bytes(f.size)}${f.caseId != null ? `, case ${f.caseId}` : ''})`);
-	const lines = [`Open cases (list_cases): ${JSON.stringify(cases)}`, `Extents: ${JSON.stringify(extents)}`, `Workspace: ${files.join('; ') || 'empty'}.`];
-	if (actions.length) lines.push(`Since your last reply the engineer used: ${actions.map(({ name, args }) => `${name} ${JSON.stringify(args ?? {})}`).join('; ')}.`);
+	const files = workspace
+		.files()
+		.map((f) => `${f.path} (${f.by}, ${bytes(f.size)}${f.caseId != null ? `, case ${f.caseId}` : ''})`);
+	const lines = [
+		`Open cases (list_cases): ${JSON.stringify(cases)}`,
+		`Extents: ${JSON.stringify(extents)}`,
+		`Workspace: ${files.join('; ') || 'empty'}.`,
+	];
+	if (actions.length)
+		lines.push(
+			`Since your last reply the engineer used: ${actions.map(({ name, args }) => `${name} ${JSON.stringify(args ?? {})}`).join('; ')}.`,
+		);
 	return `<tool_state>\n${lines.join('\n')}\n</tool_state>`;
 }

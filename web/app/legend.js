@@ -48,7 +48,9 @@ function barGradient(map) {
 	const colour = (t) => `rgb(${sample(map.ramp, t).join(' ')})`;
 	const percent = (t) => `${(t * 100).toFixed(2)}%`;
 	const stops = [];
-	if (bands) for (let k = 0; k < bands; k++) stops.push(`${colour((k + 0.5) / bands)} ${percent(k / bands)} ${percent((k + 1) / bands)}`);
+	if (bands)
+		for (let k = 0; k < bands; k++)
+			stops.push(`${colour((k + 0.5) / bands)} ${percent(k / bands)} ${percent((k + 1) / bands)}`);
 	else for (let i = 0; i <= 64; i++) stops.push(`${colour(i / 64)} ${percent(i / 64)}`);
 	return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
@@ -72,19 +74,48 @@ export function createLegend(actions) {
 	// A gradient, not a canvas: putting pixels into a canvas waits on the GPU process, which the networks keep busy.
 	const bar = h('div', { class: 'legend-bar', title: 'Drag an end to set it, the middle to shift the range' });
 	const ticks = h('div', { class: 'legend-ticks' });
-	const lo = h('input', { class: 'legend-end', 'aria-label': 'Range minimum', inputmode: 'decimal', spellcheck: 'false' });
-	const hi = h('input', { class: 'legend-end legend-end-hi', 'aria-label': 'Range maximum', inputmode: 'decimal', spellcheck: 'false' });
-	const banded = h('button', { type: 'button', class: 'legend-tool', title: 'Discrete bands', onclick: () => actions.change({ banded: !state.map.banded }) }, icon('bands'));
+	const lo = h('input', {
+		class: 'legend-end',
+		'aria-label': 'Range minimum',
+		inputmode: 'decimal',
+		spellcheck: 'false',
+	});
+	const hi = h('input', {
+		class: 'legend-end legend-end-hi',
+		'aria-label': 'Range maximum',
+		inputmode: 'decimal',
+		spellcheck: 'false',
+	});
+	const banded = h(
+		'button',
+		{
+			type: 'button',
+			class: 'legend-tool',
+			title: 'Discrete bands',
+			onclick: () => actions.change({ banded: !state.map.banded }),
+		},
+		icon('bands'),
+	);
 	const rampList = h('div', { class: 'menu-list', role: 'menu' });
 	const swatch = h('span', { class: 'ramp-swatch' });
-	const ramps = menu(h('button', { type: 'button', class: 'legend-tool legend-ramp', title: 'Colour ramp' }, swatch, icon('chevron')), rampList, { align: 'right' });
-	const el = h('div', { class: 'legend' },
+	const ramps = menu(
+		h('button', { type: 'button', class: 'legend-tool legend-ramp', title: 'Colour ramp' }, swatch, icon('chevron')),
+		rampList,
+		{ align: 'right' },
+	);
+	const el = h(
+		'div',
+		{ class: 'legend' },
 		h('div', { class: 'legend-head' }, title, h('span', { class: 'legend-tools' }, banded, ramps.el)),
 		bar,
-		h('div', { class: 'legend-scale' }, lo, ticks, hi));
+		h('div', { class: 'legend-scale' }, lo, ticks, hi),
+	);
 	let state = null;
 
-	for (const [input, end, arg] of [[lo, 'lo', 'min'], [hi, 'hi', 'max']]) {
+	for (const [input, end, arg] of [
+		[lo, 'lo', 'min'],
+		[hi, 'hi', 'max'],
+	]) {
 		const commit = () => {
 			const value = parseNumber(input.value);
 			const next = { lo: state.map.lo, hi: state.map.hi, [end]: value };
@@ -146,16 +177,32 @@ export function createLegend(actions) {
 		const d = digits(map);
 		if (document.activeElement !== lo) lo.value = signed(map.lo, d);
 		if (document.activeElement !== hi) hi.value = signed(map.hi, d);
-		ticks.replaceChildren(...ticksFor(map, bar.clientWidth || BAR_WIDTH).map((t) => h('span', { style: `left:${(((t - map.lo) / (map.hi - map.lo)) * 100).toFixed(2)}%` }, signed(t, d))));
+		ticks.replaceChildren(
+			...ticksFor(map, bar.clientWidth || BAR_WIDTH).map((t) =>
+				h('span', { style: `left:${(((t - map.lo) / (map.hi - map.lo)) * 100).toFixed(2)}%` }, signed(t, d)),
+			),
+		);
 		banded.setAttribute('aria-pressed', String(map.banded));
 		swatch.style.background = rampCss(map.ramp);
-		rampList.replaceChildren(...MAPS[mapName].ramps.map((name) => h('button', {
-			type: 'button', role: 'menuitemradio', class: 'menu-item', 'aria-checked': String(name === map.ramp),
-			onclick: () => {
-				ramps.close();
-				actions.change({ ramp: name });
-			},
-		}, h('span', { class: 'ramp-swatch', style: `background:${rampCss(name)}` }), h('span', {}, RAMPS[name].label))));
+		rampList.replaceChildren(
+			...MAPS[mapName].ramps.map((name) =>
+				h(
+					'button',
+					{
+						type: 'button',
+						role: 'menuitemradio',
+						class: 'menu-item',
+						'aria-checked': String(name === map.ramp),
+						onclick: () => {
+							ramps.close();
+							actions.change({ ramp: name });
+						},
+					},
+					h('span', { class: 'ramp-swatch', style: `background:${rampCss(name)}` }),
+					h('span', {}, RAMPS[name].label),
+				),
+			),
+		);
 	}
 	return { el, render };
 }

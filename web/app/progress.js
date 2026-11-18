@@ -16,17 +16,29 @@ export function createProgress({ cancel }) {
 	const rows = STAGES.map((stage) => {
 		const fill = h('span', { class: 'progress-fill' });
 		const time = h('span', { class: 'progress-time num' });
-		const row = h('div', { class: 'progress-row', 'data-stage': stage },
-			h('span', { class: 'progress-label' }, LABELS[stage]), time, h('span', { class: 'progress-bar' }, fill));
+		const row = h(
+			'div',
+			{ class: 'progress-row', 'data-stage': stage },
+			h('span', { class: 'progress-label' }, LABELS[stage]),
+			time,
+			h('span', { class: 'progress-bar' }, fill),
+		);
 		return { stage, row, fill, time };
 	});
 	const stop = h('button', { type: 'button', class: 'button progress-cancel' }, icon('cancel'), 'Cancel');
-	const el = h('div', { class: 'progress', role: 'status' },
+	const el = h(
+		'div',
+		{ class: 'progress', role: 'status' },
 		// The card's box, apart from its content, so it can stretch from card to strip without distorting the text.
 		h('span', { class: 'progress-panel' }),
 		h('div', { class: 'progress-head' }, name, size),
-		h('div', { class: 'progress-stages' }, rows.map((r) => r.row)),
-		h('div', { class: 'progress-foot' }, device, stop));
+		h(
+			'div',
+			{ class: 'progress-stages' },
+			rows.map((r) => r.row),
+		),
+		h('div', { class: 'progress-foot' }, device, stop),
+	);
 	let current = null;
 	stop.addEventListener('click', () => current && cancel(current));
 
@@ -42,7 +54,11 @@ export function createProgress({ cancel }) {
 			const state = !st ? 'waiting' : st.end ? 'done' : 'active';
 			r.row.dataset.state = c.status === 'queued' ? 'waiting' : state;
 			r.fill.style.transform = `scaleX(${st ? (st.end ? 1 : st.fraction) : 0})`;
-			r.time.textContent = st ? seconds(((st.end ?? now) - st.start) / 1000) : c.status === 'queued' && r.stage === 'reading' ? 'Queued' : '';
+			r.time.textContent = st
+				? seconds(((st.end ?? now) - st.start) / 1000)
+				: c.status === 'queued' && r.stage === 'reading'
+					? 'Queued'
+					: '';
 		}
 	}
 

@@ -3,7 +3,13 @@
 
 import * as THREE from 'three';
 import {
-	BLUR_FRAGMENT, GROUND_FRAGMENT, LATTICE_FRAGMENT, LATTICE_VERTEX, SCREEN_VERTEX, SHADOW_DEPTH_FRAGMENT, SHADOW_DEPTH_VERTEX,
+	BLUR_FRAGMENT,
+	GROUND_FRAGMENT,
+	LATTICE_FRAGMENT,
+	LATTICE_VERTEX,
+	SCREEN_VERTEX,
+	SHADOW_DEPTH_FRAGMENT,
+	SHADOW_DEPTH_VERTEX,
 	WORLD_VERTEX,
 } from './shaders.js';
 
@@ -24,7 +30,13 @@ export class Ground {
 		};
 		this.object = new THREE.Mesh(
 			new THREE.PlaneGeometry(60, 60),
-			new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: WORLD_VERTEX, fragmentShader: GROUND_FRAGMENT, transparent: true, depthWrite: false }),
+			new THREE.ShaderMaterial({
+				uniforms: this.uniforms,
+				vertexShader: WORLD_VERTEX,
+				fragmentShader: GROUND_FRAGMENT,
+				transparent: true,
+				depthWrite: false,
+			}),
 		);
 		this.object.renderOrder = 1;
 		this.object.visible = false;
@@ -123,7 +135,8 @@ export class Lattice {
 		const points = [];
 		const at = (i, j) => j * cols + i;
 		for (let j = 0; j < rows; j++) {
-			for (let i = 0; i < cols; i++) points.push(-5.6 + i * step + (j % 2) * step * 0.5, (j - (rows - 1) / 2) * step * 0.866, 0);
+			for (let i = 0; i < cols; i++)
+				points.push(-5.6 + i * step + (j % 2) * step * 0.5, (j - (rows - 1) / 2) * step * 0.866, 0);
 		}
 		const lines = [];
 		for (let j = 0; j < rows; j++) {
@@ -150,7 +163,13 @@ export class Lattice {
 		};
 		this.object = new THREE.LineSegments(
 			geometry,
-			new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: LATTICE_VERTEX, fragmentShader: LATTICE_FRAGMENT, transparent: true, depthWrite: false }),
+			new THREE.ShaderMaterial({
+				uniforms: this.uniforms,
+				vertexShader: LATTICE_VERTEX,
+				fragmentShader: LATTICE_FRAGMENT,
+				transparent: true,
+				depthWrite: false,
+			}),
 		);
 		this.object.position.z = -0.3175;
 		this.object.renderOrder = 2;

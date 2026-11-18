@@ -13,7 +13,7 @@ export function renderMarkdown(text, { streaming = false, previous = [] } = {}) 
 	let lines = text.replaceAll('\r', '').split('\n');
 	if (streaming) lines = settled(lines);
 	const blocks = [];
-	for (let i = 0; i < lines.length; ) {
+	for (let i = 0; i < lines.length;) {
 		const start = i;
 		const line = lines[i];
 		let build = null;
@@ -31,18 +31,55 @@ export function renderMarkdown(text, { streaming = false, previous = [] } = {}) 
 			const rows = [];
 			for (; i < lines.length && isTableRow(lines[i]); i++) rows.push(tableCells(lines[i]));
 			const [head, , ...body] = rows;
-			build = () => h('div', { class: 'md-table' }, h('table', {},
-				h('thead', {}, h('tr', {}, head.map((cell) => h('th', {}, inline(cell))))),
-				h('tbody', {}, body.map((row) => h('tr', {}, row.map((cell) => h('td', { class: numeric(cell) ? 'num' : null }, inline(cell))))))));
+			build = () =>
+				h(
+					'div',
+					{ class: 'md-table' },
+					h(
+						'table',
+						{},
+						h(
+							'thead',
+							{},
+							h(
+								'tr',
+								{},
+								head.map((cell) => h('th', {}, inline(cell))),
+							),
+						),
+						h(
+							'tbody',
+							{},
+							body.map((row) =>
+								h(
+									'tr',
+									{},
+									row.map((cell) => h('td', { class: numeric(cell) ? 'num' : null }, inline(cell))),
+								),
+							),
+						),
+					),
+				);
 		} else if (LIST_ITEM.test(line)) {
 			const ordered = /^\s*\d/.test(line);
 			const items = [];
 			for (; i < lines.length && LIST_ITEM.test(lines[i]); i++) items.push(lines[i].replace(LIST_ITEM, ''));
-			build = () => h(ordered ? 'ol' : 'ul', {}, items.map((item) => h('li', {}, inline(item))));
+			build = () =>
+				h(
+					ordered ? 'ol' : 'ul',
+					{},
+					items.map((item) => h('li', {}, inline(item))),
+				);
 		} else {
 			const paragraph = [];
-			for (; i < lines.length && lines[i].trim() !== '' && !startsBlock(lines[i], lines[i + 1]); i++) paragraph.push(lines[i]);
-			build = () => h('p', {}, paragraph.flatMap((part, k) => (k ? [h('br'), ...inline(part)] : inline(part))));
+			for (; i < lines.length && lines[i].trim() !== '' && !startsBlock(lines[i], lines[i + 1]); i++)
+				paragraph.push(lines[i]);
+			build = () =>
+				h(
+					'p',
+					{},
+					paragraph.flatMap((part, k) => (k ? [h('br'), ...inline(part)] : inline(part))),
+				);
 		}
 		if (!build) continue;
 		const source = lines.slice(start, i).join('\n');
@@ -85,13 +122,24 @@ function withoutOpenMarks(line) {
 }
 
 function startsBlock(line, next) {
-	return line.startsWith('```') || HEADING.test(line) || LIST_ITEM.test(line) || (isTableRow(line) && TABLE_RULE.test(next ?? ''));
+	return (
+		line.startsWith('```') ||
+		HEADING.test(line) ||
+		LIST_ITEM.test(line) ||
+		(isTableRow(line) && TABLE_RULE.test(next ?? ''))
+	);
 }
 
 const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
 const isTableLike = (line) => /^\s*\|/.test(line);
 /** A table row's cells, split at its pipes; an escaped pipe (\|, as in \|ΔCp\|) is a literal | inside its cell. */
-export const tableCells = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll('\\|', '|'));
+export const tableCells = (line) =>
+	line
+		.trim()
+		.replace(/^\|/, '')
+		.replace(/(?<!\\)\|$/, '')
+		.split(/(?<!\\)\|/)
+		.map((cell) => cell.trim().replaceAll('\\|', '|'));
 const numeric = (cell) => /^[−+-]?[\d.,]+\s*(%|m²|m|s|counts?)?$/.test(cell);
 
 /** Inline spans: `code`, **bold**, *italic*; everything else as text. */

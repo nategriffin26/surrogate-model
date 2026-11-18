@@ -46,13 +46,27 @@ export function createInputs({ card, groups, engine, ask }) {
 	const caption = h('p', { class: 'car-caption' });
 	// `close`: whether the camera is in nearby surface's close view of the cell.
 	const state = { car: null, point: null, close: false };
-	const primer = createPrimer({ card, groups, engine, onShow: () => { drawMarks(); frame(); } });
+	const primer = createPrimer({
+		card,
+		groups,
+		engine,
+		onShow: () => {
+			drawMarks();
+			frame();
+		},
+	});
 
-	const el = section('inputs', {},
+	const el = section(
+		'inputs',
+		{},
 		primer.el,
-		h('div', { class: 'inputs-car' },
+		h(
+			'div',
+			{ class: 'inputs-car' },
 			h('div', { class: 'inputs-car-view' }, carHost),
-			h('div', { class: 'inputs-car-numbers' }, caption, answer, primer.carGrid)));
+			h('div', { class: 'inputs-car-numbers' }, caption, answer, primer.carGrid),
+		),
+	);
 	el.prepend(locator('inputs'));
 
 	/** The shown kind's marks on the car, at its shown size or station; only the handle while all are shown. */
@@ -69,7 +83,12 @@ export function createInputs({ card, groups, engine, ask }) {
 			return;
 		}
 		const at = group.repeat ? { scale: shown.size, station: shown.station }[group.repeat] : null;
-		stencil.draw(point.explanation, point.marks.filter((m) => m.layer === group.id), group.color, at);
+		stencil.draw(
+			point.explanation,
+			point.marks.filter((m) => m.layer === group.id),
+			group.color,
+			at,
+		);
 	}
 
 	function showAnswer() {
@@ -106,49 +125,78 @@ export function createInputs({ card, groups, engine, ask }) {
 		if (dragging) dragging.picking = false;
 	}
 
-	canvas.addEventListener('pointerdown', (e) => {
-		if (!state.car || e.button !== 0) return;
-		press = { x: e.clientX, y: e.clientY, slop: TAP_SLOP[e.pointerType] ?? TAP_SLOP.touch, handle: stencil.onHandle(e.clientX, e.clientY) };
-		if (!press.handle) return;
-		// The handle's press is the cell's: the camera never sees it.
-		e.stopImmediatePropagation();
-		e.preventDefault();
-		canvas.setPointerCapture(e.pointerId);
-		dragging = { next: null, picking: false };
-		canvas.style.cursor = 'grabbing';
-	}, { capture: true });
-	canvas.addEventListener('pointermove', (e) => {
-		if (dragging) {
+	canvas.addEventListener(
+		'pointerdown',
+		(e) => {
+			if (!state.car || e.button !== 0) return;
+			press = {
+				x: e.clientX,
+				y: e.clientY,
+				slop: TAP_SLOP[e.pointerType] ?? TAP_SLOP.touch,
+				handle: stencil.onHandle(e.clientX, e.clientY),
+			};
+			if (!press.handle) return;
+			// The handle's press is the cell's: the camera never sees it.
 			e.stopImmediatePropagation();
-			follow(e.clientX, e.clientY);
-		} else if (e.buttons === 0) {
-			canvas.style.cursor = stencil.onHandle(e.clientX, e.clientY) ? 'grab' : '';
-		}
-	}, { capture: true });
+			e.preventDefault();
+			canvas.setPointerCapture(e.pointerId);
+			dragging = { next: null, picking: false };
+			canvas.style.cursor = 'grabbing';
+		},
+		{ capture: true },
+	);
+	canvas.addEventListener(
+		'pointermove',
+		(e) => {
+			if (dragging) {
+				e.stopImmediatePropagation();
+				follow(e.clientX, e.clientY);
+			} else if (e.buttons === 0) {
+				canvas.style.cursor = stencil.onHandle(e.clientX, e.clientY) ? 'grab' : '';
+			}
+		},
+		{ capture: true },
+	);
 	// A tap (a press that did not turn the camera) moves the cell where it lifts, for a mouse and a finger alike.
-	canvas.addEventListener('pointerup', (e) => {
-		if (dragging) {
-			e.stopImmediatePropagation();
-			canvas.releasePointerCapture(e.pointerId);
+	canvas.addEventListener(
+		'pointerup',
+		(e) => {
+			if (dragging) {
+				e.stopImmediatePropagation();
+				canvas.releasePointerCapture(e.pointerId);
+				dragging = null;
+				canvas.style.cursor = 'grab';
+				return;
+			}
+			const tapped = press && !press.handle && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= press.slop;
+			if (tapped && e.button === 0 && state.car) pickAndAsk(e.clientX, e.clientY);
+		},
+		{ capture: true },
+	);
+	canvas.addEventListener(
+		'pointercancel',
+		() => {
 			dragging = null;
-			canvas.style.cursor = 'grab';
-			return;
-		}
-		const tapped = press && !press.handle && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= press.slop;
-		if (tapped && e.button === 0 && state.car) pickAndAsk(e.clientX, e.clientY);
-	}, { capture: true });
-	canvas.addEventListener('pointercancel', () => {
-		dragging = null;
-		press = null;
-	}, { capture: true });
+			press = null;
+		},
+		{ capture: true },
+	);
 	// The click and double-click that end a press on the handle belong to the handle, so grabbing the cell just after
 	// placing it is no pivot.
-	canvas.addEventListener('click', (e) => {
-		if (press?.handle) e.stopImmediatePropagation();
-	}, { capture: true });
-	canvas.addEventListener('dblclick', (e) => {
-		if (press?.handle) e.stopImmediatePropagation();
-	}, { capture: true });
+	canvas.addEventListener(
+		'click',
+		(e) => {
+			if (press?.handle) e.stopImmediatePropagation();
+		},
+		{ capture: true },
+	);
+	canvas.addEventListener(
+		'dblclick',
+		(e) => {
+			if (press?.handle) e.stopImmediatePropagation();
+		},
+		{ capture: true },
+	);
 
 	/**
 	 * Showing nearby surface takes the camera close to the cell, and showing it again takes it to where the cell is
@@ -161,7 +209,14 @@ export function createInputs({ card, groups, engine, ask }) {
 			const whole = viewer.framing([n[0] + CLOSE_TILT[0], n[1] + CLOSE_TILT[1], Math.max(n[2], 0.2) + CLOSE_TILT[2]]);
 			const offset = whole.position.clone().sub(whole.target).multiplyScalar(CLOSE_VIEW);
 			const target = whole.target.clone().set(...point.position);
-			viewer.moveTo({ position: target.clone().add(offset), target, zoom: viewer.camera.isOrthographicCamera ? whole.zoom / CLOSE_VIEW : 1 }, true);
+			viewer.moveTo(
+				{
+					position: target.clone().add(offset),
+					target,
+					zoom: viewer.camera.isOrthographicCamera ? whole.zoom / CLOSE_VIEW : 1,
+				},
+				true,
+			);
 			state.close = true;
 		} else if (state.close) {
 			viewer.moveTo(viewer.framing(CAMERA), true);
@@ -198,17 +253,29 @@ function answerFigure({ cpModels, cp, sigma, cfd }) {
 	const x = (v) => `${50 + (50 * (v - mid)) / half}%`;
 	const item = (key, swatch) => h('span', { class: 'copy-block' }, h('i', { class: swatch }), copied(h('span'), key));
 	const number = (key, value) => h('div', {}, copied(h('dt'), key), h('dd', { class: 'num' }, value));
-	return h('div', { class: 'answer' },
-		h('div', { class: 'answer-strip' },
+	return h(
+		'div',
+		{ class: 'answer' },
+		h(
+			'div',
+			{ class: 'answer-strip' },
 			cpModels.map((v) => h('i', { class: 'answer-network', style: `left: ${x(v)}` })),
 			h('i', { class: 'answer-mean', style: `left: ${x(cp)}` }),
-			h('i', { class: 'answer-cfd', style: `left: ${x(cfd)}` })),
-		h('p', { class: 'answer-key copy-block' },
+			h('i', { class: 'answer-cfd', style: `left: ${x(cfd)}` }),
+		),
+		h(
+			'p',
+			{ class: 'answer-key copy-block' },
 			item('inputs.car.network', 'key-network'),
 			item('inputs.car.mean', 'key-mean'),
-			item('inputs.car.cfd', 'key-cfd')),
-		h('dl', { class: 'answer-numbers' },
+			item('inputs.car.cfd', 'key-cfd'),
+		),
+		h(
+			'dl',
+			{ class: 'answer-numbers' },
 			number('inputs.car.cp', signed(cp, 3)),
 			number('inputs.car.spread', sigma.toFixed(3)),
-			number('inputs.car.cfdValue', signed(cfd, 3))));
+			number('inputs.car.cfdValue', signed(cfd, 3)),
+		),
+	);
 }

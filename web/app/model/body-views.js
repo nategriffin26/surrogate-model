@@ -14,7 +14,8 @@ export const num = (v, digits = 2) => signed(v, digits);
 const metres = (v) => `${num(v)} m`;
 export const cm = (dx) => `${Math.round(Math.abs(dx) * 100)} cm`;
 const f1 = (v) => v.toFixed(1);
-const pathOf = (points, close = false) => points.map(([x, y], i) => `${i ? 'L' : 'M'}${f1(x)} ${f1(y)}`).join('') + (close ? 'Z' : '');
+const pathOf = (points, close = false) =>
+	points.map(([x, y], i) => `${i ? 'L' : 'M'}${f1(x)} ${f1(y)}`).join('') + (close ? 'Z' : '');
 
 /** An arrow from (x1, y1) to (x2, y2) with an open head; nothing when it is shorter than its head. */
 function arrow(x1, y1, x2, y2, cls, head = 5) {
@@ -32,7 +33,9 @@ function arrow(x1, y1, x2, y2, cls, head = 5) {
 function dimension(x1, y1, x2, y2, text, cls, where = 'above') {
 	const horizontal = Math.abs(y2 - y1) < Math.abs(x2 - x1);
 	const t = 4;
-	const ticks = horizontal ? `M${f1(x1)} ${f1(y1 - t)}V${f1(y1 + t)}M${f1(x2)} ${f1(y2 - t)}V${f1(y2 + t)}` : `M${f1(x1 - t)} ${f1(y1)}H${f1(x1 + t)}M${f1(x2 - t)} ${f1(y2)}H${f1(x2 + t)}`;
+	const ticks = horizontal
+		? `M${f1(x1)} ${f1(y1 - t)}V${f1(y1 + t)}M${f1(x2)} ${f1(y2 - t)}V${f1(y2 + t)}`
+		: `M${f1(x1 - t)} ${f1(y1)}H${f1(x1 + t)}M${f1(x2 - t)} ${f1(y2)}H${f1(x2 + t)}`;
 	const mx = (x1 + x2) / 2;
 	const my = (y1 + y2) / 2;
 	const label = horizontal
@@ -49,7 +52,10 @@ function sized(node, draw) {
 	let last = -1;
 	const run = () => {
 		const width = Math.floor(node.getBoundingClientRect().width);
-		if (width > 0 && width !== last) { last = width; draw(width); }
+		if (width > 0 && width !== last) {
+			last = width;
+			draw(width);
+		}
 	};
 	new ResizeObserver(() => requestAnimationFrame(run)).observe(node);
 	run();
@@ -67,7 +73,13 @@ function movable(svg, toWorld, pick) {
 	};
 	// A finger on the handle drags the cell rather than the page. Browsers ignore touch-action inside an svg, so the
 	// touch itself is held; elsewhere on the figure a finger still scrolls the page.
-	svg.addEventListener('touchstart', (e) => { if (e.target.closest('.handle')) e.preventDefault(); }, { passive: false });
+	svg.addEventListener(
+		'touchstart',
+		(e) => {
+			if (e.target.closest('.handle')) e.preventDefault();
+		},
+		{ passive: false },
+	);
 	svg.addEventListener('pointerdown', (e) => {
 		if (!e.target.closest('.handle')) return;
 		dragging = true;
@@ -75,11 +87,18 @@ function movable(svg, toWorld, pick) {
 		svg.classList.add('dragging');
 		e.preventDefault();
 	});
-	svg.addEventListener('pointermove', (e) => { if (dragging) pick(...at(e)); });
-	const stop = () => { dragging = false; svg.classList.remove('dragging'); };
+	svg.addEventListener('pointermove', (e) => {
+		if (dragging) pick(...at(e));
+	});
+	const stop = () => {
+		dragging = false;
+		svg.classList.remove('dragging');
+	};
 	svg.addEventListener('pointerup', stop);
 	svg.addEventListener('pointercancel', stop);
-	svg.addEventListener('click', (e) => { if (!e.target.closest('.handle') && e.target.closest('.pickable')) pick(...at(e)); });
+	svg.addEventListener('click', (e) => {
+		if (!e.target.closest('.handle') && e.target.closest('.pickable')) pick(...at(e));
+	});
 }
 
 /**
@@ -93,7 +112,9 @@ export function view(node, { frame, paint, pick = null, label }) {
 	node.append(svg);
 	let current = null;
 	let state = null;
-	const draw = () => { if (current && state) svg.innerHTML = paint(current, state); };
+	const draw = () => {
+		if (current && state) svg.innerHTML = paint(current, state);
+	};
 	sized(node, (width) => {
 		current = frame(width);
 		svg.setAttribute('width', current.width);
@@ -102,7 +123,14 @@ export function view(node, { frame, paint, pick = null, label }) {
 		draw();
 	});
 	if (pick) movable(svg, (px, py) => current.toWorld(px, py), pick);
-	return { svg, update(s) { state = s; draw(); }, redraw: draw };
+	return {
+		svg,
+		update(s) {
+			state = s;
+			draw();
+		},
+		redraw: draw,
+	};
 }
 
 // ---- the body from the side ----
@@ -118,7 +146,11 @@ export function sideFrame(width, { range, below, above = 0.12, ladder = 0, pad =
 	const z0 = LOWEST - below;
 	const bodyHeight = (HIGHEST + above - z0) * k;
 	return {
-		width, height: Math.round(bodyHeight + 2 * pad + ladder), k, range, pad,
+		width,
+		height: Math.round(bodyHeight + 2 * pad + ladder),
+		k,
+		range,
+		pad,
 		X: (x) => pad + (x - range[0]) * k,
 		Y: (z) => pad + (HIGHEST + above - z) * k,
 		toWorld: (px, py) => [range[0] + (px - pad) / k, HIGHEST + above - (py - pad) / k],
@@ -127,9 +159,19 @@ export function sideFrame(width, { range, below, above = 0.12, ladder = 0, pad =
 }
 
 function sideBody({ X, Y }) {
-	return `<path class="body pickable" d="${pathOf(SIDE.map(([x, z]) => [X(x), Y(z)]), true)}"/>`
-		+ markup('text', 'inputs.side.nose', {}, `class="end-label" x="${f1(X(NOSE) - 4)}" y="${f1(Y(LOWEST + 0.42) + 4)}" text-anchor="end"`)
-		+ markup('text', 'inputs.side.tail', {}, `class="end-label" x="${f1(X(TAIL) + 4)}" y="${f1(Y(LOWEST + 0.62) + 4)}"`);
+	return (
+		`<path class="body pickable" d="${pathOf(
+			SIDE.map(([x, z]) => [X(x), Y(z)]),
+			true,
+		)}"/>` +
+		markup(
+			'text',
+			'inputs.side.nose',
+			{},
+			`class="end-label" x="${f1(X(NOSE) - 4)}" y="${f1(Y(LOWEST + 0.42) + 4)}" text-anchor="end"`,
+		) +
+		markup('text', 'inputs.side.tail', {}, `class="end-label" x="${f1(X(TAIL) + 4)}" y="${f1(Y(LOWEST + 0.62) + 4)}"`)
+	);
 }
 
 /** The cell and its facing, as seen from the side; the handle round it takes the pointer. */
@@ -148,14 +190,27 @@ function sidePosition({ X, Y, range }, { position: p }) {
 	out += dimension(X(p.x), level, X(p.tail), level, metres(p.toTail), 'dim dim-position', 'below');
 	const left = p.x - NOSE > LENGTH / 2;
 	const dx = left ? -12 : 12;
-	out += dimension(X(p.x) + dx, Y(LOWEST), X(p.x) + dx, Y(p.z), metres(p.height), 'dim dim-position', left ? 'left' : 'right');
+	out += dimension(
+		X(p.x) + dx,
+		Y(LOWEST),
+		X(p.x) + dx,
+		Y(p.z),
+		metres(p.height),
+		'dim dim-position',
+		left ? 'left' : 'right',
+	);
 	return out;
 }
 
 /** The surface reach of each size round the cell, the shown one strong. */
 function sideRings({ X, Y, k }, { position: { x, z }, surface }, size) {
 	const shades = sizeShades(COLORS.surface, surface.length);
-	return surface.map((s, si) => `<circle class="ring${si === size ? ' on' : ''}" style="--shade: ${shades[si]}" cx="${f1(X(x))}" cy="${f1(Y(z))}" r="${f1(Math.max(1.5, s.reach * k))}"/>`).join('');
+	return surface
+		.map(
+			(s, si) =>
+				`<circle class="ring${si === size ? ' on' : ''}" style="--shade: ${shades[si]}" cx="${f1(X(x))}" cy="${f1(Y(z))}" r="${f1(Math.max(1.5, s.reach * k))}"/>`,
+		)
+		.join('');
 }
 
 /** The stations as lines across the body, the shown one strong with its reads above and below the cell. */
@@ -172,7 +227,9 @@ function sideStations({ X, Y, range }, { position: p, stations }, shown) {
 	const sx = X(read.x);
 	if (sx > X(range[0]) && sx < X(range[1])) {
 		out += `<circle class="station-cell" cx="${f1(sx)}" cy="${f1(Y(p.z))}" r="3.5"/>`;
-		out += arrow(sx, Y(p.z), sx, Y(p.z + read.above), 'read-arrow', 4) + arrow(sx, Y(p.z), sx, Y(p.z - read.below), 'read-arrow', 4);
+		out +=
+			arrow(sx, Y(p.z), sx, Y(p.z + read.above), 'read-arrow', 4) +
+			arrow(sx, Y(p.z), sx, Y(p.z - read.below), 'read-arrow', 4);
 	}
 	return out;
 }
@@ -194,13 +251,23 @@ function sideLadder({ X, width, pad, ladderTop, range }, { position: p, stations
 		const scale = thumb / 2.2;
 		const mid = (LOWEST + HIGHEST) / 2;
 		const ty = (z) => top + thumb * 0.36 - (z - mid) * scale;
-		const shape = ring.length ? `<path class="thumb" d="${pathOf(ring.map(([y, z]) => [cx + y * scale, ty(z)]), true)}"/>` : `<line class="thumb-empty" x1="${f1(cx - thumb * 0.3)}" x2="${f1(cx + thumb * 0.3)}" y1="${f1(ty(LOWEST))}" y2="${f1(ty(LOWEST))}"/>`;
+		const shape = ring.length
+			? `<path class="thumb" d="${pathOf(
+					ring.map(([y, z]) => [cx + y * scale, ty(z)]),
+					true,
+				)}"/>`
+			: `<line class="thumb-empty" x1="${f1(cx - thumb * 0.3)}" x2="${f1(cx + thumb * 0.3)}" y1="${f1(ty(LOWEST))}" y2="${f1(ty(LOWEST))}"/>`;
 		const label = String(Math.round(Math.abs(dx) * 100));
 		out += `<g class="slot${st === shown ? ' on' : ''}" data-station="${st}"><rect class="slot-hit" x="${f1(cx - slot / 2)}" y="${f1(top - 4)}" width="${f1(slot)}" height="${f1(thumb * 0.72 + 30)}" rx="4"/>${shape}<circle class="thumb-cell" cx="${f1(cx + p.y * scale)}" cy="${f1(ty(p.z))}" r="1.8"/><text class="slot-label" x="${f1(cx)}" y="${f1(top + thumb * 0.72 + 20)}" text-anchor="middle">${label}</text></g>`;
 	});
 	const labelY = top + thumb * 0.72 + 34;
 	out += markup('text', 'inputs.ladder.ahead', {}, `class="ladder-end" x="${pad}" y="${f1(labelY)}"`);
-	out += markup('text', 'inputs.ladder.behind', {}, `class="ladder-end" x="${f1(width - pad)}" y="${f1(labelY)}" text-anchor="end"`);
+	out += markup(
+		'text',
+		'inputs.ladder.behind',
+		{},
+		`class="ladder-end" x="${f1(width - pad)}" y="${f1(labelY)}" text-anchor="end"`,
+	);
 	return out;
 }
 /** The ladder's height in pixels for a side view `width` wide with `count` stations. */
@@ -225,7 +292,9 @@ export function endFrame(width, maxHeight, pad = 14) {
 	const k = Math.min((width - 2 * pad) / (2 * yHalf), (maxHeight - 2 * pad) / (z1 - z0));
 	const cx = width / 2;
 	return {
-		width, height: Math.round((z1 - z0) * k + 2 * pad), k,
+		width,
+		height: Math.round((z1 - z0) * k + 2 * pad),
+		k,
 		X: (y) => cx + y * k,
 		Y: (z) => pad + (z1 - z) * k,
 		toWorld: (px, py) => [(px - cx) / k, z1 - (py - pad) / k],
@@ -234,7 +303,12 @@ export function endFrame(width, maxHeight, pad = 14) {
 
 function endSlice({ X, Y }, x, cls) {
 	const ring = outline(x, 240).points;
-	return ring.length ? `<path class="${cls}" d="${pathOf(ring.map(([y, z]) => [X(y), Y(z)]), true)}"/>` : '';
+	return ring.length
+		? `<path class="${cls}" d="${pathOf(
+				ring.map(([y, z]) => [X(y), Y(z)]),
+				true,
+			)}"/>`
+		: '';
 }
 
 /** The four reads of one station: its area, and how far it reaches outboard of, above and below the cell's place. */
@@ -245,7 +319,10 @@ function endReads({ X, Y }, { position: { y, z }, stations }, station) {
 	const side = out > 0 ? 'start' : 'end';
 	const nudge = out > 0 ? 6 : -6;
 	let s = `<circle class="station-cell" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="4"/>`;
-	s += arrow(X(y), Y(z), X(out * reach), Y(z), 'read-arrow') + arrow(X(y), Y(z), X(y), Y(z + read.above), 'read-arrow') + arrow(X(y), Y(z), X(y), Y(z - read.below), 'read-arrow');
+	s +=
+		arrow(X(y), Y(z), X(out * reach), Y(z), 'read-arrow') +
+		arrow(X(y), Y(z), X(y), Y(z + read.above), 'read-arrow') +
+		arrow(X(y), Y(z), X(y), Y(z - read.below), 'read-arrow');
 	s += `<text class="read-text" x="${f1((X(y) + X(out * reach)) / 2)}" y="${f1(Y(z) - 7)}" text-anchor="middle">${num(read.outboard)}</text>`;
 	s += `<text class="read-text" x="${f1(X(y) + nudge)}" y="${f1((Y(z) + Y(z + read.above)) / 2 + 4)}" text-anchor="${side}">${num(read.above)}</text>`;
 	s += `<text class="read-text" x="${f1(X(y) + nudge)}" y="${f1((Y(z) + Y(z - read.below)) / 2 + 4)}" text-anchor="${side}">${num(read.below)}</text>`;
@@ -259,7 +336,11 @@ export function paintEnd(frame, state, { position = false, station = null }) {
 	const { x, y, z, normal } = state.position;
 	let out = `<line class="centre-plane" x1="${f1(X(0))}" x2="${f1(X(0))}" y1="${f1(Y(HIGHEST + 0.1))}" y2="${f1(Y(LOWEST - 0.1))}"/><line class="lowest" x1="8" x2="${width - 8}" y1="${f1(Y(LOWEST))}" y2="${f1(Y(LOWEST))}"/>`;
 	if (station === null) out += endSlice(frame, x, 'body pickable');
-	else out += endSlice(frame, x, 'own-slice') + endSlice(frame, state.stations[station].x, 'slice') + endSlice(frame, x, 'pick-area pickable');
+	else
+		out +=
+			endSlice(frame, x, 'own-slice') +
+			endSlice(frame, state.stations[station].x, 'slice') +
+			endSlice(frame, x, 'pick-area pickable');
 	if (position) out += dimension(X(0), Y(z), X(y), Y(z), metres(y), 'dim dim-position', 'above');
 	if (station !== null) out += endReads(frame, state, station);
 	return `${out}${arrow(X(y), Y(z), X(y) + normal[1] * 30, Y(z) - normal[2] * 30, 'facing')}<g class="handle"><circle class="handle-area" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="22"/><circle class="cell-dot" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="5"/></g>`;
@@ -297,8 +378,13 @@ function patch({ position: p, surface }, size, radius) {
 	// its very nose or tail, where the outline closes to a point.
 	const own = outline(Math.min(Math.max(p.x, NOSE + 1e-4), TAIL - 1e-4), ROUND).points;
 	let start = 0;
-	own.forEach(([y, z], m) => { if (Math.hypot(y - p.y, z - p.z) < Math.hypot(own[start][0] - p.y, own[start][1] - p.z)) start = m; });
-	const perimeter = own.reduce((sum, q, m) => sum + Math.hypot(q[0] - own[(m + 1) % ROUND][0], q[1] - own[(m + 1) % ROUND][1]), 0);
+	own.forEach(([y, z], m) => {
+		if (Math.hypot(y - p.y, z - p.z) < Math.hypot(own[start][0] - p.y, own[start][1] - p.z)) start = m;
+	});
+	const perimeter = own.reduce(
+		(sum, q, m) => sum + Math.hypot(q[0] - own[(m + 1) % ROUND][0], q[1] - own[(m + 1) % ROUND][1]),
+		0,
+	);
 	const roundStep = Math.max(1, Math.round(((2 * reach) / 12 / perimeter) * ROUND));
 
 	const layers = { aheadFront: [], aheadBack: [], behindFront: [], behindBack: [] };
@@ -320,7 +406,9 @@ function patch({ position: p, surface }, size, radius) {
 		const w = Math.exp(-distance2(mid) / (2 * sigma * sigma));
 		const front = dot(normalAt(j, m), into) < 0;
 		layers[`${mid[0] < p.x ? 'ahead' : 'behind'}${front ? 'Front' : 'Back'}`].push({
-			a: project(q1.map((v, i) => v - centre[i])), b: project(q2.map((v, i) => v - centre[i])), w,
+			a: project(q1.map((v, i) => v - centre[i])),
+			b: project(q2.map((v, i) => v - centre[i])),
+			w,
 		});
 	};
 	// Lines across the body (one x each) and along it (one place round the outline each).
@@ -330,7 +418,8 @@ function patch({ position: p, surface }, size, radius) {
 	}
 	for (let k = -Math.floor(ROUND / 2 / roundStep); k <= Math.floor(ROUND / 2 / roundStep); k++) {
 		const m = (((start + k * roundStep) % ROUND) + ROUND) % ROUND;
-		for (let j = 0; j < FINE_X - 1; j++) if (rings[j].length && rings[j + 1].length) add(rings[j][m], rings[j + 1][m], j, m);
+		for (let j = 0; j < FINE_X - 1; j++)
+			if (rings[j].length && rings[j + 1].length) add(rings[j][m], rings[j + 1][m], j, m);
 	}
 	return { project: (v) => [dot(v, e1), -dot(v, up)], layers };
 }
@@ -338,8 +427,15 @@ function patch({ position: p, surface }, size, radius) {
 /** Line work of a patch layer as paths, one per band of weight, so the faint and the strong draw apart. */
 function patchPaths(segments, cx, cy, cls) {
 	const bands = [[], [], [], [], []];
-	for (const { a, b, w } of segments) bands[Math.min(4, Math.floor(w * 5))].push(`M${f1(cx + a[0])} ${f1(cy + a[1])}L${f1(cx + b[0])} ${f1(cy + b[1])}`);
-	return bands.map((d, i) => (d.length ? `<path class="${cls}" style="opacity: ${(0.14 + 0.86 * ((i + 0.5) / 5)).toFixed(2)}" d="${d.join('')}"/>` : '')).join('');
+	for (const { a, b, w } of segments)
+		bands[Math.min(4, Math.floor(w * 5))].push(`M${f1(cx + a[0])} ${f1(cy + a[1])}L${f1(cx + b[0])} ${f1(cy + b[1])}`);
+	return bands
+		.map((d, i) =>
+			d.length
+				? `<path class="${cls}" style="opacity: ${(0.14 + 0.86 * ((i + 0.5) / 5)).toFixed(2)}" d="${d.join('')}"/>`
+				: '',
+		)
+		.join('');
 }
 
 export function patchFrame(width, height) {
@@ -353,8 +449,12 @@ export function paintPatch(frame, state, size, part) {
 	const dimAhead = part === 2 ? ' dim' : '';
 	const dimBehind = part === 1 ? ' dim' : '';
 	let out = `<circle class="reach" cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(radius)}"/>`;
-	out += patchPaths(layers.aheadBack, cx, cy, `patch-line back${dimAhead}`) + patchPaths(layers.behindBack, cx, cy, `patch-line back${dimBehind}`);
-	out += patchPaths(layers.aheadFront, cx, cy, `patch-line${dimAhead}`) + patchPaths(layers.behindFront, cx, cy, `patch-line${dimBehind}`);
+	out +=
+		patchPaths(layers.aheadBack, cx, cy, `patch-line back${dimAhead}`) +
+		patchPaths(layers.behindBack, cx, cy, `patch-line back${dimBehind}`);
+	out +=
+		patchPaths(layers.aheadFront, cx, cy, `patch-line${dimAhead}`) +
+		patchPaths(layers.behindFront, cx, cy, `patch-line${dimBehind}`);
 	const length = radius * 0.72;
 	const [fx, fy] = project(state.position.normal);
 	const [mx, my] = project(state.surface[size].parts[part].facing);
@@ -362,7 +462,12 @@ export function paintPatch(frame, state, size, part) {
 	out += arrow(cx, cy, cx + mx * length, cy + my * length, 'mean-facing', 7);
 	out += `<circle class="cell-dot" cx="${f1(cx)}" cy="${f1(cy)}" r="4.5"/>`;
 	out += markup('text', 'inputs.patch.ahead', {}, `class="patch-side" x="${f1(cx - radius)}" y="${f1(height - 4)}"`);
-	out += markup('text', 'inputs.patch.behind', {}, `class="patch-side" x="${f1(cx + radius)}" y="${f1(height - 4)}" text-anchor="end"`);
+	out += markup(
+		'text',
+		'inputs.patch.behind',
+		{},
+		`class="patch-side" x="${f1(cx + radius)}" y="${f1(height - 4)}" text-anchor="end"`,
+	);
 	out += `<text class="patch-size" x="${f1(cx)}" y="${f1(height - 4)}" text-anchor="middle">${cm(state.surface[size].scale)}</text>`;
 	return out;
 }
@@ -380,18 +485,21 @@ export function networkMarkup(width, { cps, cp }, layers) {
 	const top = 16;
 	let out = '';
 	// The cards, the front one drawn with its layers, the others behind it.
-	for (let k = cps.length - 1; k >= 0; k--) out += `<rect class="net-card" x="${f1(x0 + k * 5)}" y="${f1(top - k * 4)}" width="${f1(cw)}" height="${ch}" rx="6"/>`;
+	for (let k = cps.length - 1; k >= 0; k--)
+		out += `<rect class="net-card" x="${f1(x0 + k * 5)}" y="${f1(top - k * 4)}" width="${f1(cw)}" height="${ch}" rx="6"/>`;
 	const cols = layers.map((_, i) => x0 + 22 + (i * (cw - 44)) / (layers.length - 1));
 	const dots = (n) => Math.min(n, 9);
 	const dy = (j, count) => top + ch / 2 + (j - (count - 1) / 2) * 5.6;
 	layers.forEach((n, i) => {
 		if (i === layers.length - 1) return;
-		for (let j = 0; j < dots(n); j++) for (let m = 0; m < dots(layers[i + 1]); m++) {
-			out += `<line class="net-edge" x1="${f1(cols[i])}" y1="${f1(dy(j, dots(n)))}" x2="${f1(cols[i + 1])}" y2="${f1(dy(m, dots(layers[i + 1])))}"/>`;
-		}
+		for (let j = 0; j < dots(n); j++)
+			for (let m = 0; m < dots(layers[i + 1]); m++) {
+				out += `<line class="net-edge" x1="${f1(cols[i])}" y1="${f1(dy(j, dots(n)))}" x2="${f1(cols[i + 1])}" y2="${f1(dy(m, dots(layers[i + 1])))}"/>`;
+			}
 	});
 	layers.forEach((n, i) => {
-		for (let j = 0; j < dots(n); j++) out += `<circle class="net-node" cx="${f1(cols[i])}" cy="${f1(dy(j, dots(n)))}" r="1.9"/>`;
+		for (let j = 0; j < dots(n); j++)
+			out += `<circle class="net-node" cx="${f1(cols[i])}" cy="${f1(dy(j, dots(n)))}" r="1.9"/>`;
 		out += `<text class="net-count" x="${f1(cols[i])}" y="${top + ch + 15}" text-anchor="middle">${n}</text>`;
 	});
 	out += `<text class="net-times" x="${f1(x0 + cw + 28)}" y="${f1(top + ch / 2 - 4)}">×${cps.length}</text>`;
@@ -401,10 +509,17 @@ export function networkMarkup(width, { cps, cp }, layers) {
 	const ax = (v) => pad + ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * (width - 2 * pad);
 	const line = top + ch + 64;
 	out += `<line class="answer-axis" x1="${pad}" x2="${width - pad}" y1="${line}" y2="${line}"/>`;
-	for (const v of [-1, 0, 1]) out += `<line class="answer-grid" x1="${f1(ax(v))}" x2="${f1(ax(v))}" y1="${line - 3}" y2="${line + 3}"/><text class="answer-tick" x="${f1(ax(v))}" y="${line + 17}" text-anchor="middle">${num(v, 0)}</text>`;
-	for (const v of cps) out += `<line class="answer-network" x1="${f1(ax(v))}" x2="${f1(ax(v))}" y1="${line - 9}" y2="${line + 9}"/>`;
+	for (const v of [-1, 0, 1])
+		out += `<line class="answer-grid" x1="${f1(ax(v))}" x2="${f1(ax(v))}" y1="${line - 3}" y2="${line + 3}"/><text class="answer-tick" x="${f1(ax(v))}" y="${line + 17}" text-anchor="middle">${num(v, 0)}</text>`;
+	for (const v of cps)
+		out += `<line class="answer-network" x1="${f1(ax(v))}" x2="${f1(ax(v))}" y1="${line - 9}" y2="${line + 9}"/>`;
 	out += `<circle class="answer-mean" cx="${f1(ax(cp))}" cy="${line}" r="6"/>`;
-	out += markup('text', 'inputs.answer.value', { cp: num(cp) }, `class="answer-value" x="${f1(Math.min(Math.max(ax(cp), pad + 30), width - pad - 30))}" y="${line - 15}" text-anchor="middle"`);
+	out += markup(
+		'text',
+		'inputs.answer.value',
+		{ cp: num(cp) },
+		`class="answer-value" x="${f1(Math.min(Math.max(ax(cp), pad + 30), width - pad - 30))}" y="${line - 15}" text-anchor="middle"`,
+	);
 	const key = line + 40;
 	const kx = width / 2 - 92;
 	out += `<line class="answer-network" x1="${f1(kx)}" x2="${f1(kx)}" y1="${key - 10}" y2="${key + 2}"/>${markup('text', 'inputs.answer.network', {}, `class="answer-key" x="${f1(kx + 7)}" y="${key}"`)}`;
@@ -434,17 +549,29 @@ export function vectorLayout(places, blocks, cell) {
 	const rows = 1 + Math.max(...places.map((place) => place.row));
 	let x = 0;
 	const origin = {};
-	for (const block of blocks) { origin[block.group] = x; x += block.cols * step - GAP + BLOCK_GAP; }
+	for (const block of blocks) {
+		origin[block.group] = x;
+		x += block.cols * step - GAP + BLOCK_GAP;
+	}
 	return {
-		width: x - BLOCK_GAP, height: top + rows * step - GAP, origin, blocks,
-		squares: places.map((c) => ({ x: origin[c.group] + c.col * step, y: top + c.row * step, size: cell, group: c.group })),
+		width: x - BLOCK_GAP,
+		height: top + rows * step - GAP,
+		origin,
+		blocks,
+		squares: places.map((c) => ({
+			x: origin[c.group] + c.col * step,
+			y: top + c.row * step,
+			size: cell,
+			group: c.group,
+		})),
 	};
 }
 
 /** The squares of `layout`, each shaded by the number as the first network reads it (`standard`), the shown ones outlined. */
 export function vectorSquares(layout, standard, shown) {
 	let out = '';
-	for (const block of layout.blocks) out += `<text class="block-name" style="fill: ${COLORS[block.group]}" x="${f1(layout.origin[block.group])}" y="11">${block.count}</text>`;
+	for (const block of layout.blocks)
+		out += `<text class="block-name" style="fill: ${COLORS[block.group]}" x="${f1(layout.origin[block.group])}" y="11">${block.count}</text>`;
 	layout.squares.forEach((sq, i) => {
 		out += `<rect class="square${shown.has(i) ? ' selected' : ''}" data-col="${i}" data-group="${sq.group}" x="${f1(sq.x)}" y="${f1(sq.y)}" width="${f1(sq.size)}" height="${f1(sq.size)}" rx="1.5" style="fill: ${shade(standard[i], 1.5)}"/>`;
 	});
