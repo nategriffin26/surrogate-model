@@ -150,14 +150,14 @@
 .model-page .dimension line { stroke: var(--group, var(--steel)); stroke-width: 1.3; }
 .model-page .dimension circle { fill: var(--group, var(--steel)); }
 .model-page .drawing .dimension text { fill: var(--heading); }
-.model-page .drawing .size-label { fill: var(--group); font-weight: 600; }
+.model-page .drawing .size-label { fill: var(--shade); font-weight: 600; }
+.model-page .size-ring { fill: var(--shade); fill-opacity: 0.1; stroke: var(--shade); stroke-width: 1.4; }
+.model-page .size-normal line { stroke: var(--shade); stroke-width: 2; }
+.model-page .size-normal circle { fill: var(--shade); }
 .model-page .station line { stroke: var(--group); stroke-width: 1.6; }
 .model-page .station circle { fill: var(--group); }
 .model-page .station.empty { fill: #fff; stroke: var(--group); stroke-width: 1.3; }
 .model-page .station.other { fill: var(--group); opacity: 0.6; }
-.model-page .soft-stop { stop-color: var(--group); }
-.model-page .mean-normal { stroke: var(--group); stroke-width: 1.4; }
-.model-page .mean-normal-tip { fill: var(--group); }
 .model-page .flow-view { display: flex; flex-direction: column; gap: 4px; }
 .model-page .drawing-label { color: var(--muted); font-size: 11.5px; }
 .model-page .overlaid { position: relative; }
@@ -217,7 +217,6 @@
 .model-page :is(.scatter-axes, .calibration) .diagonal { stroke: var(--heading); stroke-dasharray: 4 3; opacity: 0.45; }
 .model-page .spread-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 56px; }
 .model-page .spread-charts { display: flex; flex-direction: column; gap: 26px; }
-.model-page .size-leader { fill: none; stroke: var(--group); stroke-width: 0.8; opacity: 0.6; }
 .model-page .calibration { display: block; overflow: visible; }
 .model-page .calibration-line { fill: none; stroke: var(--violet); stroke-width: 2; }
 .model-page .calibration-dot { fill: var(--violet); stroke: #fff; stroke-width: 1.5; }

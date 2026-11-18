@@ -1,5 +1,6 @@
 // Small pieces every figure on the page is built from: a section's head, rows of bars, the chips that say which
-// groups of inputs a model was given, colour bars, and the shade of a value as a network reads it.
+// groups of inputs a model was given, colour bars, the shade of a value as a network reads it, and the shades that
+// tell the sizes of nearby surface apart.
 
 import { h } from '../dom.js';
 import { niceTicks } from '../format.js';
@@ -69,6 +70,19 @@ export function shade(value, scale) {
 	const [r, g, b] = value < 0 ? NEGATIVE : POSITIVE;
 	const mix = (c) => Math.round(255 + (c - 255) * strength);
 	return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
+const INK = [13, 34, 51];
+
+/** A colour per size of nearby surface, smallest first: the group's colour, darker for the smallest, lighter for the largest. */
+export function sizeShades(hex, count) {
+	const colour = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+	return Array.from({ length: count }, (_, k) => {
+		const t = -0.35 + (0.95 * k) / Math.max(count - 1, 1);
+		const towards = t < 0 ? INK : [255, 255, 255];
+		const mixed = colour.map((c, i) => Math.round(c + (towards[i] - c) * Math.abs(t)));
+		return `#${mixed.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+	});
 }
 
 /** A picture of the car in a frame that keeps its shape, with marks placed on it at shares of its size. */

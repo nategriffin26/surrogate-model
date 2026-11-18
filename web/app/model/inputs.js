@@ -15,6 +15,14 @@ import { Stencil } from './stencil.js';
 const CLICK_SLOP = 4;
 /** The drawings' width at most, in CSS pixels. */
 const DRAWING = 320;
+/** Where the page's car is seen from: ahead, to the left (−y) side and above. */
+export const CAMERA = [-1, -1.3, 0.75];
+/**
+ * While nearby surface is chosen the car is seen close to the point: from outside, along the point's facing tipped
+ * by this toward the page's own view (and never from below), at CLOSE_VIEW of the distance that frames the car.
+ */
+const CLOSE_TILT = [-0.7, -0.9, 0.6];
+const CLOSE_VIEW = 0.2;
 
 /** A point to explain: where it is, and the normal of the working-mesh vertex there. */
 export function requestAt(point, vertex, normals) {
@@ -35,7 +43,8 @@ export function createInputs({ card, groups, ask }) {
 	const answer = h('div', { class: 'point-answer' });
 	const fieldKey = h('div', { class: 'field-key', hidden: true });
 	carHost.append(fieldKey);
-	const state = { group: groups[0], network: 0, case: null, point: null, width: DRAWING };
+	// `close`: whether the camera is in nearby surface's close view of the point.
+	const state = { group: groups[0], network: 0, case: null, point: null, width: DRAWING, close: false };
 
 	const rows = groups.map((group) => {
 		const drawings = h('div', { class: 'group-drawings' });
@@ -77,6 +86,7 @@ export function createInputs({ card, groups, ask }) {
 		for (const row of rows) row.el.setAttribute('aria-checked', String(row.group === group));
 		showField();
 		drawMarks();
+		frame();
 	}
 
 	/** The car in clay, or coloured by the potential flow's pressure while that group is chosen. */
@@ -195,13 +205,34 @@ export function createInputs({ card, groups, ask }) {
 		if (press?.handle) e.stopImmediatePropagation();
 	}, { capture: true });
 
+	/**
+	 * Choosing nearby surface takes the camera close to the point, and choosing it again takes it to where the point
+	 * is now; any other group brings the whole car back. Dragging the point leaves the camera where it is.
+	 */
+	function frame() {
+		const point = state.point?.explanation;
+		if (state.group.id === 'surface' && point) {
+			const n = point.normal;
+			const whole = viewer.framing([n[0] + CLOSE_TILT[0], n[1] + CLOSE_TILT[1], Math.max(n[2], 0.2) + CLOSE_TILT[2]]);
+			const offset = whole.position.clone().sub(whole.target).multiplyScalar(CLOSE_VIEW);
+			const target = whole.target.clone().set(...point.position);
+			viewer.moveTo({ position: target.clone().add(offset), target, zoom: viewer.camera.isOrthographicCamera ? whole.zoom / CLOSE_VIEW : 1 }, true);
+			state.close = true;
+		} else if (state.close) {
+			viewer.moveTo(viewer.framing(CAMERA), true);
+			state.close = false;
+		}
+	}
+
 	choose(state.group);
 
 	return {
 		el,
 		viewer,
 		stencil,
+		/** A newly opened car is framed whole by the page; nearby surface's close view follows its first point. */
 		setCase(caseView) {
+			if (caseView.surface !== state.case?.surface) state.close = false;
 			state.case = caseView;
 			showField();
 			drawRows();
@@ -211,6 +242,7 @@ export function createInputs({ card, groups, ask }) {
 			drawMarks();
 			drawRows();
 			showAnswer();
+			if (state.group.id === 'surface' && !state.close) frame();
 		},
 		setNetwork(k) {
 			state.network = k;

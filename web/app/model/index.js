@@ -14,7 +14,7 @@ import { createDrag } from './drag.js';
 import { arrowDefinition, silhouettes } from './drawings.js';
 import { surfaceFlow } from './flow.js';
 import { inputGroups } from './groups.js';
-import { createInputs, requestAt } from './inputs.js';
+import { CAMERA, createInputs, requestAt } from './inputs.js';
 import { measure } from './measures.js';
 import { createNetworks } from './networks.js';
 import { createOverview } from './overview.js';
@@ -23,9 +23,6 @@ import { createPointwise } from './pointwise.js';
 import { createSpread } from './spread.js';
 import { caseStats } from './stats.js';
 import { loadTrainingCars } from './training.js';
-
-/** Where the page's car is first seen from: ahead, to the left (−y) side and above. */
-const CAMERA = [-1, -1.3, 0.75];
 
 /**
  * Where the page starts on a car: the working-mesh vertex facing up nearest a point on the hood, three tenths of the

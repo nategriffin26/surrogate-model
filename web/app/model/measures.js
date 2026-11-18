@@ -1,6 +1,6 @@
 // What the networks were told at a point, as places on and around the car, in world coordinates: each distance at
 // the place `engine/features.js` measures it to, the plan-view outline's heights as the car's own cuts there, each
-// size of nearby surface as the Gaussian it is weighted by, and the potential flow as its velocity along the surface.
+// size of nearby surface with the mean normal it finds, and the potential flow as its velocity along the surface.
 // The page draws these on the car and in its flat drawings.
 
 import { featureLayout } from '../../engine/features.js';
@@ -24,10 +24,10 @@ const layoutOf = (definition) => {
  *   read over, `side` the side of the centre plane (+1 or −1) they are read on; `own` for the plane through the point
  * @typedef {{ type: 'guide', layer: string, from: number[], to: number[], columns: number[] }} Guide
  *   a distance measured from the point itself: to a face of the car's bounding box, or outboard to the outline
- * @typedef {{ type: 'neighbourhood', layer: 'surface', at: number[], scale: number, sigma: number, normal: number[],
+ * @typedef {{ type: 'neighbourhood', layer: 'surface', at: number[], scale: number, normal: number[],
  *   columns: number[] }} Neighbourhood
- *   one size of nearby surface: the Gaussian of standard deviation `sigma` about the point that weights the surface,
- *   and the mean normal of the surface under it
+ *   one size of nearby surface: the surface within about `scale` of the point (weighted by a Gaussian that fades
+ *   with distance), and its mean normal
  * @typedef {{ type: 'velocity', layer: 'flow', at: number[], velocity: number[], columns: number[] }} Velocity
  *   the potential flow's velocity along the surface at the point, in units of the stream's speed
  * @typedef {Reading | Cut | Guide | Neighbourhood | Velocity} Mark
@@ -81,11 +81,11 @@ export function measure(columns, lookups, { position, normal, features }) {
 	}
 	marks.push(...cuts.values());
 
-	// Nearby surface: per size, the Gaussian about the point and the mean normal under it, its first three inputs.
+	// Nearby surface: per size, the mean normal of the surface about the point, its first three inputs.
 	const sizes = new Map();
 	columns.forEach((column, i) => {
 		if (column.kind !== 'surface') return;
-		if (!sizes.has(column.scale)) sizes.set(column.scale, { type: 'neighbourhood', layer: 'surface', at: position, scale: column.scale, sigma: column.sigma, normal: [], columns: [] });
+		if (!sizes.has(column.scale)) sizes.set(column.scale, { type: 'neighbourhood', layer: 'surface', at: position, scale: column.scale, normal: [], columns: [] });
 		const size = sizes.get(column.scale);
 		if (column.part === 'whole' && size.normal.length < 3) size.normal.push(features[i]);
 		size.columns.push(i);

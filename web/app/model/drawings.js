@@ -5,18 +5,14 @@
 
 import { h, s } from '../dom.js';
 import { signed } from '../format.js';
-import { colorBar } from './charts.js';
+import { colorBar, sizeShades } from './charts.js';
 
 /** Length of the drawn facing arrow, in metres. */
 const ARROW = 0.32;
-/** Length of a drawn mean normal of nearby surface, in metres: longer than the facing arrow, so both are seen. */
-const MEAN_NORMAL = 0.42;
 /** Length of a drawn flow velocity in the flow pictures, in metres per unit of the stream's speed. */
 const FLOW_ARROW = 0.2;
 /** Margin around a drawing's content, in pixels. */
 const PAD = 10;
-/** Half the size of the close-up around the point, in metres along x. */
-const CLOSE = 0.85;
 const metres = (v) => `${signed(v, 2)} m`;
 
 /**
@@ -165,40 +161,44 @@ function flowDrawing({ width, marks, flow }) {
 }
 
 /**
- * Nearby surface: the cut through the point close up, under the Gaussians that weight the surface at each size, with
- * the mean normal each size finds there. Seen from the side, or from above when the point faces sideways.
+ * Nearby surface: the cut through the point, with each size as a ring of its radius about the point and the mean
+ * normal it finds there as an arrow, longer for each larger size. Seen from the side, or from above when the point
+ * faces sideways.
  */
-function surfaceDrawing({ width, explanation, marks, cutter }) {
+function surfaceDrawing({ width, explanation, marks, cutter, color }) {
 	const { position, normal } = explanation;
 	const sideways = Math.abs(normal[1]) > Math.max(Math.abs(normal[0]), Math.abs(normal[2]));
 	const b = sideways ? 1 : 2;
 	const cutAxis = sideways ? 2 : 1;
-	const view = area(width, [position[0] - CLOSE, position[0] + CLOSE], [position[b] - CLOSE * 0.55, position[b] + CLOSE * 0.55],
-		`Nearby surface around the point, weighted less the farther it lies, ${sideways ? 'from above' : 'from the side'}`);
+	const sizes = marks.filter((m) => m.type === 'neighbourhood').sort((p, q) => p.scale - q.scale);
+	const shades = sizeShades(color, sizes.length);
+	const reach = 1.25 * Math.max(...sizes.map((m) => m.scale));
+	const view = area(width, [position[0] - reach, position[0] + reach], [position[b] - reach * 0.5, position[b] + reach * 0.62],
+		`Nearby surface at ${sizes.length} sizes about the point, ${sideways ? 'from above' : 'from the side'}`);
 	const clip = `model-clip-${++clips}`;
-	const soft = `model-soft-${clips}`;
 	const [px, py] = view.at(position[0], position[b]);
 	const perMetre = view.at(position[0] + 1, position[b])[0] - px;
-	// A Gaussian's opacity at 0, 1, 2 and 3 standard deviations, where the blur stops.
-	view.svg.append(s('defs', {},
-		s('clipPath', { id: clip }, s('rect', { x: 0, y: 0, width, height: view.height })),
-		s('radialGradient', { id: soft }, [0, 1, 2, 3].map((k) => s('stop', { class: 'soft-stop', offset: k / 3, 'stop-opacity': (0.3 * Math.exp(-0.5 * k * k)).toFixed(3) })))));
-	const sizes = marks.filter((m) => m.type === 'neighbourhood').sort((p, q) => p.sigma - q.sigma);
+	const shade = (k) => `--shade: ${shades[k]}`;
 	const content = s('g', { 'clip-path': `url(#${clip})` },
-		sizes.toReversed().map((size) => s('circle', { cx: px, cy: py, r: 3 * size.sigma * perMetre, fill: `url(#${soft})` })),
+		sizes.map((size, k) => s('circle', { class: 'size-ring', cx: px, cy: py, r: size.scale * perMetre, style: shade(k) })).toReversed(),
 		s('path', { class: 'cut', d: segmentsPath(cutter.cut(cutAxis, position[cutAxis]), view.at, 0, b) }));
-	const labels = s('g', {});
-	sizes.forEach((size, i) => {
+	const arrow = 0.8 * reach;
+	sizes.forEach((size, k) => {
+		const [lx, ly] = view.at(position[0] + size.scale * 0.72, position[b] + size.scale * 0.72);
+		content.append(s('text', { class: 'size-label', x: lx + 2, y: ly - 2, style: shade(k) }, `${Math.round(size.scale * 100)}`));
 		const length = Math.hypot(...size.normal);
 		if (length === 0) return;
-		const [tx, ty] = view.at(position[0] + (size.normal[0] / length) * MEAN_NORMAL, position[b] + (size.normal[b] / length) * MEAN_NORMAL);
-		content.append(s('line', { class: 'mean-normal', x1: px, y1: py, x2: tx, y2: ty }), s('circle', { class: 'mean-normal-tip', cx: tx, cy: ty, r: 2.5 }));
-		const y = PAD + 8 + i * 15;
-		labels.append(
-			s('polyline', { class: 'size-leader', points: `${tx},${ty} ${width - PAD - 40},${y - 4}` }),
-			s('text', { class: 'size-label', x: width - PAD, y, 'text-anchor': 'end' }, `${Math.round(size.scale * 100)} cm`));
+		const tip = arrow * (0.55 + 0.15 * k);
+		const [tx, ty] = view.at(position[0] + (size.normal[0] / length) * tip, position[b] + (size.normal[b] / length) * tip);
+		content.append(s('g', { class: 'size-normal', style: shade(k) },
+			s('line', { x1: px, y1: py, x2: tx, y2: ty }),
+			s('circle', { cx: tx, cy: ty, r: 2.6 })));
 	});
-	view.svg.append(content, labels, pointMark(view.at, position, normal, 0, b));
+	view.svg.append(
+		s('clipPath', { id: clip }, s('rect', { x: 0, y: 0, width, height: view.height })),
+		content,
+		s('text', { x: width - PAD, y: view.height - PAD, 'text-anchor': 'end' }, 'cm'),
+		pointMark(view.at, position, normal, 0, b));
 	return [view.svg];
 }
 
@@ -236,7 +236,7 @@ function outlineDrawing({ width, explanation, marks, outlines, cutter, bounds })
 const DRAWINGS = { position: positionDrawing, flow: flowDrawing, surface: surfaceDrawing, outline: outlineDrawing };
 
 /**
- * A group's drawing at the point.
+ * A group's drawing at the point, in the group's colour.
  * @param {import('./groups.js').InputGroup} group
  * @param {{ width: number, explanation: object, marks: object[], outlines: object, cutter: object, bounds: number[],
  *   yCenter: number, columns: object[], flow: object | null }} at  `marks` are the group's own; `columns` the
@@ -246,7 +246,7 @@ const DRAWINGS = { position: positionDrawing, flow: flowDrawing, surface: surfac
  */
 export function drawGroup(group, at) {
 	if (!(group.id in DRAWINGS)) throw new Error(`The page has no drawing for the inputs “${group.name}”.`);
-	return DRAWINGS[group.id](at);
+	return DRAWINGS[group.id]({ ...at, color: group.color });
 }
 
 /** The surface around the point close up, as the round inset of the overview. */

@@ -1,13 +1,14 @@
 // The marks of `measures.js` for one group of inputs, drawn on the page's car in the group's colour. Everything is
 // depth-tested against the car: what lies on the surface or in front of it is drawn in full, what the car hides is
 // drawn faintly, so the eye can tell which is which. Cuts are the car's own outlines, lifted a hair off the surface;
-// nearby surface is tinted by its Gaussians about the point, with each size's mean normal; the potential flow is an
-// arrow of its velocity along the surface. The point is a handle the reader drags.
+// nearby surface is a crisp ring on the surface at each size, with each size's mean normal as an arrow; the potential
+// flow is an arrow of its velocity along the surface. The point is a handle the reader drags.
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { sizeShades } from './charts.js';
 import { SurfaceCutter } from './cuts.js';
 
 /** Length of the drawn normal, in metres. */
@@ -20,10 +21,17 @@ const SPAN_MARGIN = 0.06;
 const DOT_LIFT = 0.012;
 /** Dot diameters in CSS pixels. */
 const DOT = { handle: 21, reading: 6 };
+/**
+ * While the rings of nearby surface are drawn, the handle is a small ink dot, so the smallest ring (3 cm, about 7 px
+ * across at the page's close view on a phone) is seen around it.
+ */
+const SMALL_HANDLE = 9;
 /** How near the pointer, in CSS pixels, the handle must be to be under it. */
 const REACH = 14;
-/** At most this many sizes of nearby surface are tinted at once. */
-const GAUSSIANS = 4;
+/** At most this many sizes of nearby surface are ringed at once. */
+const SIZES = 4;
+/** Length of the mean normal drawn for the smallest size of nearby surface, in metres, and how much longer each next one is. */
+const MEAN_NORMAL = [0.1, 0.06];
 /** Length of the drawn flow velocity, in metres per unit of the stream's speed. */
 const FLOW_LENGTH = 0.3;
 const INK = '#0d2233';
@@ -89,28 +97,44 @@ void main() {
 	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
-// The weight a surface element has in a size of nearby surface: its Gaussian about the point, averaged over the sizes.
-const SOFT_FRAGMENT = /* glsl */ `
+// The sizes of nearby surface about the point: a crisp ring at each size's radius, about 1.5 pixels wide whatever the
+// zoom, and inside it a light fill in the shade of the smallest ring that holds the place.
+const RING_FRAGMENT = /* glsl */ `
 uniform vec3 uCentre;
-uniform float uSigma[${GAUSSIANS}];
-uniform float uSizes;
-uniform vec3 uColor;
+uniform float uRadius[${SIZES}];
+uniform vec3 uShade[${SIZES}];
 varying vec3 vWorld;
 void main() {
-	vec3 d = vWorld - uCentre;
-	float r2 = dot(d, d);
-	float total = 0.0;
-	for (int s = 0; s < ${GAUSSIANS}; s++) {
-		if (uSigma[s] > 0.0) total += exp(-0.5 * r2 / (uSigma[s] * uSigma[s]));
+	float d = length(vWorld - uCentre);
+	float w = max(fwidth(d), 1e-6);
+	float fill = 0.0;
+	float line = 0.0;
+	vec3 lineColor = uShade[0];
+	vec3 fillColor = uShade[0];
+	bool inside = false;
+	for (int s = 0; s < ${SIZES}; s++) {
+		if (uRadius[s] <= 0.0) continue;
+		float l = 1.0 - smoothstep(0.7 * w, 1.7 * w, abs(d - uRadius[s]));
+		if (l > line) {
+			line = l;
+			lineColor = uShade[s];
+		}
+		if (d < uRadius[s]) {
+			fill += 0.08;
+			if (!inside) {
+				fillColor = uShade[s];
+				inside = true;
+			}
+		}
 	}
-	float alpha = 0.75 * total / max(uSizes, 1.0);
+	float alpha = max(line * 0.95, fill);
 	if (alpha < 0.01) discard;
-	gl_FragColor = vec4(uColor, alpha);
+	gl_FragColor = vec4(mix(fillColor, lineColor, line), alpha);
 	#include <colorspace_fragment>
 }`;
 
-/** Draw order: the surface tint, lines, dots, the handle. */
-const ORDER = { tint: 3, line: 5, dot: 7, handle: 8 };
+/** Draw order: the rings on the surface, lines, dots, the handle. */
+const ORDER = { rings: 3, line: 5, dot: 7, handle: 8 };
 
 export class Stencil {
 	constructor(viewer) {
@@ -135,32 +159,31 @@ export class Stencil {
 		this.cone.renderOrder = ORDER.handle;
 		this.flowCone = new THREE.Mesh(this.cone.geometry, new THREE.MeshBasicMaterial());
 		this.flowCone.renderOrder = ORDER.handle;
-		this.softMaterial = new THREE.ShaderMaterial({
+		this.ringMaterial = new THREE.ShaderMaterial({
 			uniforms: {
 				uCentre: { value: new THREE.Vector3() },
-				uSigma: { value: new Array(GAUSSIANS).fill(0) },
-				uSizes: { value: 1 },
-				uColor: { value: new THREE.Color() },
+				uRadius: { value: new Array(SIZES).fill(0) },
+				uShade: { value: Array.from({ length: SIZES }, () => new THREE.Color()) },
 				uLift: { value: 0.002 },
 			},
-			vertexShader: TINT_VERTEX, fragmentShader: SOFT_FRAGMENT, transparent: true, depthWrite: false,
+			vertexShader: TINT_VERTEX, fragmentShader: RING_FRAGMENT, transparent: true, depthWrite: false,
 			polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
 		});
 	}
 
-	/** The car the marks are drawn on; its working mesh is cut for the outline and tinted under the Gaussians. */
+	/** The car the marks are drawn on; its working mesh is cut for the outline and ringed for nearby surface. */
 	setCar(result) {
 		if (this.car?.result === result) return;
-		this.car?.soft.geometry.dispose();
+		this.car?.rings.geometry.dispose();
 		const { mesh, lookups } = result;
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
 		geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
 		geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-		const soft = new THREE.Mesh(geometry, this.softMaterial);
-		soft.renderOrder = ORDER.tint;
-		soft.frustumCulled = false;
-		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), soft, segments: new WeakMap() };
+		const rings = new THREE.Mesh(geometry, this.ringMaterial);
+		rings.renderOrder = ORDER.rings;
+		rings.frustumCulled = false;
+		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), rings, segments: new WeakMap() };
 	}
 
 	/**
@@ -206,11 +229,8 @@ export class Stencil {
 		const dots = [];
 		const color = new THREE.Color(hex);
 		const ink = new THREE.Color(INK);
-		const soft = this.softMaterial.uniforms;
-		soft.uSigma.value.fill(0);
-		soft.uColor.value.copy(color);
-		soft.uCentre.value.fromArray(point.position);
-		let sizes = 0;
+		const sizes = marks.filter((m) => m.type === 'neighbourhood').sort((p, q) => p.scale - q.scale).slice(0, SIZES);
+		const shades = sizeShades(hex, sizes.length).map((shade) => new THREE.Color(shade));
 
 		for (const mark of marks) {
 			if (mark.type === 'reading') {
@@ -224,11 +244,6 @@ export class Stencil {
 					const lift = (k) => positions[i + k] + normals[i + k] * CUT_LIFT;
 					addLine(style, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], color);
 				}
-			} else if (mark.type === 'neighbourhood') {
-				// The Gaussian on the surface, and the mean normal under it as a line from the point.
-				if (sizes < GAUSSIANS) soft.uSigma.value[sizes++] = mark.sigma;
-				const length = Math.hypot(...mark.normal);
-				if (length > 0) addLine('minor', mark.at, mark.at.map((p, k) => p + (mark.normal[k] / length) * NORMAL_LENGTH), color);
 			} else if (mark.type === 'velocity') {
 				// At a stagnation point the flow has no velocity along the surface, and nothing is drawn.
 				const speed = Math.hypot(...mark.velocity);
@@ -241,9 +256,21 @@ export class Stencil {
 				group.add(this.flowCone);
 			}
 		}
-		// Each size's weights are averaged, so surface near the point, counted at every size, is tinted the most.
-		soft.uSizes.value = sizes;
-		if (sizes) group.add(this.car.soft);
+		// Nearby surface: a ring at each size's radius, and the mean normal under it as an arrow from the point, longer
+		// for each larger size so all are seen.
+		if (sizes.length) {
+			const rings = this.ringMaterial.uniforms;
+			rings.uCentre.value.fromArray(point.position);
+			rings.uRadius.value.fill(0);
+			sizes.forEach((size, k) => {
+				rings.uRadius.value[k] = size.scale;
+				rings.uShade.value[k].copy(shades[k]);
+				const length = Math.hypot(...size.normal);
+				const reach = MEAN_NORMAL[0] + MEAN_NORMAL[1] * k;
+				if (length > 0) addLine('major', size.at, size.at.map((p, c) => p + (size.normal[c] / length) * reach), shades[k]);
+			});
+			group.add(this.car.rings);
+		}
 
 		// The point: its facing as an arrow, and the handle.
 		const tip = point.position.map((p, k) => p + point.normal[k] * NORMAL_LENGTH);
@@ -251,7 +278,7 @@ export class Stencil {
 		this.cone.position.fromArray(tip);
 		this.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...point.normal));
 		group.add(this.cone);
-		dots.push({ at: point.position, size: DOT.handle, style: 2, color: ink });
+		dots.push(sizes.length ? { at: point.position, size: SMALL_HANDLE, style: 0, color: ink } : { at: point.position, size: DOT.handle, style: 2, color: ink });
 
 		for (const [key, { positions, colors }] of Object.entries(lines)) {
 			const geometry = new LineSegmentsGeometry().setPositions(positions).setColors(colors);
@@ -289,11 +316,11 @@ export class Stencil {
 		this.viewer.setMarkers(null);
 	}
 
-	/** Free what the last drawing made; materials, the cones and the car's tinted surface are kept. */
+	/** Free what the last drawing made; materials, the cones and the car's ringed surface are kept. */
 	release() {
 		if (!this.object) return;
 		const freed = new Set();
-		const kept = new Set([this.cone.geometry, this.car?.soft.geometry]);
+		const kept = new Set([this.cone.geometry, this.car?.rings.geometry]);
 		this.object.traverse((o) => {
 			if (!o.geometry || kept.has(o.geometry) || freed.has(o.geometry)) return;
 			freed.add(o.geometry);
