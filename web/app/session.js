@@ -36,10 +36,13 @@ export class Session extends EventTarget {
 			field: 'cp',
 			maps: null,
 			display: { edges: false, ground: true },
-			/** The section: whether it is drawn and plotted, the axis its plane is normal to, and where it crosses it, in metres. */
-			section: { on: true, axis: 1, offset: 0 },
-			dock: 'section',
-			dockCollapsed: false,
+			/**
+			 * The section: whether it is drawn and plotted, the axis its plane is normal to, and where it crosses it, in
+			 * metres. It starts off, on the centreline, with the dock closed on the probe table.
+			 */
+			section: { on: false, axis: 1, offset: 0 },
+			dock: 'probes',
+			dockCollapsed: true,
 			/** The probe set in use: the one clicks add to and the probe table shows; or null. */
 			probeSet: null,
 		};

@@ -486,15 +486,7 @@ function showWork(c) {
 /** Put a case on screen, or bring the screen up to date with it: its surface, its result and everything drawn from it. */
 function present(c) {
 	const arriving = Boolean(c?.result && !c.arrived);
-	if (arriving) {
-		c.arrived = true;
-		// Every car opens on its centreline section. A variant opens as its car was left, in the tab it was made from.
-		if (!c.variant) {
-			Object.assign(view.section, { on: true, axis: 1, offset: 0 });
-			view.dock = 'section';
-			view.dockCollapsed = false;
-		}
-	}
+	if (arriving) c.arrived = true;
 	if (c?.result && !view.maps) view.maps = defaultMaps(c.result.mesh);
 	const surface = c?.surface ?? null;
 	if (viewer.surface !== surface) {
