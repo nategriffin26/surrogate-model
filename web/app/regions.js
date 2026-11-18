@@ -735,6 +735,8 @@ export function createRegionsPanel({ regions, session, viewer, host, run }) {
 		const terms = view.selection?.terms ?? [];
 		steps.replaceChildren(...terms.map((t) => h('li', {}, h('span', { class: 'regions-op', title: OP_LABELS[t.op] }, OP_SIGNS[t.op]), regions.describe(t.rule))));
 		save.hidden = terms.length === 0;
+		// With no selection and no saved region the column gives its width to the histogram beside it.
+		el.hidden = terms.length === 0 && session.regions.length === 0;
 		saved.replaceChildren(...session.regions.map((r) => h('div', { class: 'regions-row' },
 			h('span', { class: 'regions-row-name' }, r.name),
 			h('button', { type: 'button', class: 'link-button', title: `Combine ${r.name} with the selection as the mode says`, onclick: () => apply({ kind: 'region', region_id: r.id }) }, 'Select'),
@@ -746,7 +748,8 @@ export function createRegionsPanel({ regions, session, viewer, host, run }) {
 		if (drawing) use(drawing);
 	}
 
-	return { el, controls, render, stop };
+	/** apply(rule) selects a rule combined with the selection as the mode says; combined(rule) gives the steps it would. */
+	return { el, controls, render, stop, apply, combined };
 }
 
 /** Where the line at height y crosses a polygon's edges, in order: by the even-odd rule, inside runs between pairs. */

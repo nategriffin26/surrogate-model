@@ -32,13 +32,12 @@ th:first-child, td:first-child { text-align: left; padding-left: 0; }
 .key i { display: inline-block; width: 18px; margin-right: 6px; vertical-align: middle; }
 `;
 
-/**
- * The theme's colours and fonts, and the plot's styles, as the page has them: one source for the tool and the report.
- * Only the app's own sheets are read; the font service's, from another origin, cannot be.
- */
+/** The app's own stylesheets; the report reads nothing it could not reach offline. */
+const ownSheets = () => [...document.styleSheets].filter((sheet) => !sheet.href || new URL(sheet.href).origin === location.origin);
+
+/** The theme's colours and fonts, and the plot's styles, as the page has them: one source for the tool and the report. */
 function carriedStyles() {
-	const own = [...document.styleSheets].filter((sheet) => !sheet.href || new URL(sheet.href).origin === location.origin);
-	const rules = own.flatMap((sheet) => [...sheet.cssRules]);
+	const rules = ownSheets().flatMap((sheet) => [...sheet.cssRules]);
 	return rules.filter((rule) => rule.selectorText === ':root' || rule.selectorText?.startsWith('svg ')).map((rule) => rule.cssText).join('\n');
 }
 
@@ -48,6 +47,17 @@ const dataUrl = (blob) => new Promise((resolve, reject) => {
 	reader.onerror = () => reject(reader.error);
 	reader.readAsDataURL(blob);
 });
+
+/** The theme's @font-face rules with each vendored file inlined as a data URL, so the report keeps its faces offline. */
+async function carriedFaces() {
+	const faces = ownSheets().flatMap((sheet) => [...sheet.cssRules].filter((rule) => rule instanceof CSSFontFaceRule).map((rule) => ({ rule, base: sheet.href })));
+	const inlined = await Promise.all(faces.map(async ({ rule, base }) => {
+		const [, file] = rule.style.getPropertyValue('src').match(/url\("?([^")]+)"?\)/);
+		const data = await dataUrl(await (await fetch(new URL(file, base))).blob());
+		return rule.cssText.replace(file, data);
+	}));
+	return inlined.join('\n');
+}
 
 /** app: { session, engine, regions, section, comparison, variants }. Defines the report export. */
 export function defineReport({ session, engine, regions, section, comparison, variants }) {
@@ -135,7 +145,7 @@ export function defineReport({ session, engine, regions, section, comparison, va
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(c.name)}, report</title>
-<style>${carriedStyles()}${STYLE}</style>
+<style>${await carriedFaces()}${carriedStyles()}${STYLE}</style>
 </head>
 <body>
 <main>

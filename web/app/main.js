@@ -170,10 +170,16 @@ const probes = createProbes({ host: overlay, engine, viewer, active, session, wo
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
 defineReport({ session, engine, regions, section, comparison, variants });
 const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
+const histogram = createHistogramPanel({ session, regions, active: described, combine: regionsPanel });
 /** The dock's panel tabs; each one's `stop` undoes what it shows on the car when another tab is chosen. */
 const panels = [
-	{ name: 'regions', label: 'Regions', ...regionsPanel },
-	{ name: 'histogram', label: 'Histogram', ...createHistogramPanel({ session, regions, active: described, run }) },
+	// The selection and the saved regions beside the field's distribution, whose brushed range is one more rule.
+	{
+		name: 'regions', label: 'Regions', controls: regionsPanel.controls,
+		el: h('div', { class: 'dock-row' }, regionsPanel.el, histogram.el),
+		render: () => { regionsPanel.render(); histogram.render(); },
+		stop: () => { regionsPanel.stop(); histogram.stop(); },
+	},
 	{ name: 'compare', label: 'Compare', ...comparison.panel },
 	{ name: 'variants', label: 'Variants', ...variants.panel },
 	{ name: 'layers', label: 'Layers', ...annotations.panel },

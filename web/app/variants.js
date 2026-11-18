@@ -486,7 +486,9 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 	const problem = h('p', { class: 'variants-problem', role: 'alert', hidden: true });
 	const table = h('table', { class: 'variants-table' });
 	const basis = h('p', { class: 'variants-basis' }, 'Variants are predicted on the simplified mesh of 600,000 triangles, and compared with their car predicted unchanged on it.');
-	const el = h('div', { class: 'variants' }, form, problem, table, basis);
+	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
+	const sectionSlot = h('div', { class: 'section-slot' });
+	const el = h('div', { class: 'variants' }, form, problem, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
 	const csv = h('button', { type: 'button', class: 'tool', onclick: () => run('download_export', { export: 'study' }).catch(() => {}) }, icon('download'), 'CSV');
 	const controls = h('div', { class: 'variants-controls' }, csv);
 
@@ -527,7 +529,7 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		make.disabled = making || !c?.result;
 		make.textContent = making ? 'Predicting…' : 'Make variant';
 		const { root, variants } = c?.result ? studyOf(c) : { root: null, variants: [] };
-		table.hidden = !variants.length || !root.baseline;
+		table.hidden = basis.hidden = !variants.length || !root.baseline;
 		csv.disabled = table.hidden;
 		if (table.hidden) return table.replaceChildren();
 		const base = numbers(root.baseline);
@@ -547,6 +549,6 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 	return {
 		/** The study of case c, as read_study gives it, or null when its car has no variants open. */
 		study: (c) => (studyOf(c).variants.length ? studyOut(c) : null),
-		panel: { el, controls, render, count, stop: () => {} },
+		panel: { el, controls, render, count, sectionSlot, stop: () => {} },
 	};
 }

@@ -303,7 +303,9 @@ export function createComparison({ session, regions, update, run }) {
 	const table = h('table', { class: 'compare-table' });
 	const note = h('p', { class: 'compare-note' });
 	const empty = h('div', { class: 'compare-empty' });
-	const el = h('div', { class: 'compare' }, empty, table, note);
+	// The section plot sits beside the table, so a difference in the numbers can be found along the car.
+	const sectionSlot = h('div', { class: 'section-slot' });
+	const el = h('div', { class: 'compare dock-row' }, h('div', { class: 'dock-numbers' }, empty, table, note), sectionSlot);
 
 	/** What case c can be compared with: its CFD when it carries one, and every other case with a result. */
 	const targets = (c) => [
@@ -358,7 +360,7 @@ export function createComparison({ session, regions, update, run }) {
 		panes,
 		/** The comparison table of case c, as read_comparison gives it, or null when c is compared with nothing. */
 		read: (c) => (compared(c) ? comparisonOut(c) : null),
-		panel: { el, controls, render, stop: () => {} },
+		panel: { el, controls, render, sectionSlot, stop: () => {} },
 	};
 }
 

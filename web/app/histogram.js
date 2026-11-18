@@ -1,7 +1,8 @@
-// The distribution of the field shown: the area of the car's faces in each band of values, as bars coloured as the car
-// is, across the colour scale, with the area beyond either end of it beside the bars. Over the selection when there
-// is one, with the whole car's outline behind. A range brushed across the bars tints its faces on the car and, with
-// Select, becomes the selection as a field rule. Sums run over the working mesh's faces, as the regions' do.
+// The distribution of the field shown, beside the selection in the Regions tab: the area of the car's faces in each
+// band of values, as bars coloured as the car is, across the colour scale, with the area beyond either end of it
+// beside the bars. Over the selection when there is one, with the whole car's outline behind. A range brushed across
+// the bars tints its faces on the car and, with Select, joins the selection as a field rule, combined as the tab's
+// mode says. Sums run over the working mesh's faces, as the regions' do.
 
 import { finite, oneOf, round } from './checks.js';
 import { h, s } from './dom.js';
@@ -98,25 +99,28 @@ export function defineHistogramOperations({ session, regions }) {
 }
 
 /**
- * The Histogram tab: bars of the field shown, a range brushed across them, and Select. regions: the selection and
- * the faces; run(name, args) runs an operation.
+ * The histogram in the Regions tab: bars of the field shown, a range brushed across them, and Select, which combines
+ * the range with the selection as the tab's mode says. regions: the selection and the faces; combine: the Regions
+ * panel's apply(rule) and combined(rule).
  */
-export function createHistogramPanel({ session, regions, active, run }) {
+export function createHistogramPanel({ session, regions, active, combine }) {
 	const view = session.view;
 	const svg = s('svg', { class: 'histogram-plot' });
-	const el = h('div', { class: 'histogram' }, svg);
 	/** The range brushed across the bars, in the field's units, for the field it was brushed on; or null. */
 	let range = null;
 	let frame = null;
+	const rangeRule = () => ({ kind: 'field', field: range.field, min: round(range.min, 4), max: round(range.max, 4) });
 
 	const readout = h('span', { class: 'histogram-readout num' });
 	const select = h('button', { type: 'button', class: 'tool', onclick: () => {
-		const { field, min, max } = range;
+		const rule = rangeRule();
 		clearRange();
-		run('select_region', { terms: [{ op: 'replace', rule: { kind: 'field', field, min: round(min, 4), max: round(max, 4) } }] }).catch(() => {});
+		combine.apply(rule);
 	} }, 'Select');
 	const clear = h('button', { type: 'button', class: 'tool', onclick: () => clearRange() }, 'Clear range');
-	const controls = h('div', { class: 'histogram-controls' }, readout, select, clear);
+	// Over the bars, and only while a range is brushed: the actions belong to the range, not to the tab.
+	const actions = h('div', { class: 'histogram-actions', hidden: true }, readout, select, clear);
+	const el = h('div', { class: 'histogram' }, svg, actions);
 
 	function clearRange() {
 		range = null;
@@ -124,9 +128,9 @@ export function createHistogramPanel({ session, regions, active, run }) {
 		render();
 	}
 
-	/** The faces in the brushed range, tinted on the car until they are selected or the range is cleared. */
+	/** The faces the brushed range would leave selected, tinted on the car until it is selected or cleared. */
 	function previewRange() {
-		regions.preview(range ? [{ op: 'replace', rule: { kind: 'field', field: range.field, min: range.min, max: range.max } }] : null);
+		regions.preview(range ? combine.combined(rangeRule()) : null);
 	}
 
 	function render() {
@@ -136,8 +140,7 @@ export function createHistogramPanel({ session, regions, active, run }) {
 		const map = view.maps?.[FIELDS[field]?.map];
 		if (!c?.result || !map || !HISTOGRAM_FIELDS.includes(field)) {
 			svg.replaceChildren();
-			readout.textContent = '';
-			select.disabled = clear.disabled = true;
+			actions.hidden = true;
 			return;
 		}
 		const cells = regions.cellsOf(c.result);
@@ -148,7 +151,7 @@ export function createHistogramPanel({ session, regions, active, run }) {
 		draw(field, map, whole, selection ? shown : null);
 		const inRange = range ? histogramOf(values, cells.areas, selection?.mask ?? null, range.min, range.max, 1).area[0] : 0;
 		readout.textContent = range ? `${FIELDS[field].symbol} ${signed(range.min, 2)} to ${signed(range.max, 2)} · ${inRange.toFixed(2)} m² · ${percent(inRange / shown.total)}` : '';
-		select.disabled = clear.disabled = !range;
+		actions.hidden = !range;
 	}
 
 	/** Bars into the SVG at its box's size: the whole car's, or the selection's over the whole car's outline. */
@@ -221,5 +224,5 @@ export function createHistogramPanel({ session, regions, active, run }) {
 		if (range) clearRange();
 	}
 
-	return { el, controls, render, stop };
+	return { el, render, stop };
 }

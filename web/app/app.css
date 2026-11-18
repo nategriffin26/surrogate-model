@@ -322,7 +322,16 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .key-remove .icon { width: 10px; height: 10px; }
 .key-item:has(.key-remove) { pointer-events: auto; }
 .dock-body { position: relative; min-height: 0; overflow: hidden; }
+.section-plot { position: absolute; inset: 0; }
 .plot { position: absolute; inset: 0; display: block; }
+.dock-table { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; }
+/* A panel's numbers and a plot share the dock's width: the section beside a table, the histogram beside the selection. */
+.dock-row { display: flex; gap: 28px; height: 100%; min-height: 0; }
+.dock-numbers { flex: none; max-width: 60%; overflow-y: auto; }
+/* A note under a table wraps to the table's width rather than widening the column and narrowing the plot. */
+.dock-numbers > p { contain: inline-size; }
+.section-slot { position: relative; flex: 1; min-width: 300px; }
+.section-slot:empty { display: none; }
 .plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
 .plot-readout { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
 .plot-readout b { color: var(--heading); font-weight: 600; }
@@ -380,7 +389,6 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .extreme-marker.min span { color: #3b4cc0; }
 
 /* ---- probes table ---- */
-.dock-table { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; }
 .probe-table { width: 100%; max-width: 760px; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .probe-table th { position: sticky; top: 0; background: #fff; text-align: right; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
 .probe-table th:first-child { text-align: left; }
@@ -401,15 +409,15 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .stations-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* ---- histogram ---- */
-.histogram { position: relative; height: 100%; min-height: 120px; }
+.histogram { position: relative; flex: 1; min-width: 300px; min-height: 120px; }
 .histogram-plot { position: absolute; inset: 0; display: block; cursor: crosshair; touch-action: none; }
 .histogram-outline { fill: none; stroke: var(--muted); stroke-width: 1; stroke-linejoin: round; }
 .histogram-range { fill: rgba(11, 111, 191, 0.1); stroke: var(--link); stroke-width: 1; }
 .histogram-beyond text { font: 11px var(--body); fill: var(--faint); font-variant-numeric: tabular-nums; }
-.histogram-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
-.histogram-controls .tool { height: 28px; }
+/* A brushed range's numbers and actions, centred over the top of the bars. */
+.histogram-actions { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 0 4px; border-radius: 6px; background: rgba(255, 255, 255, 0.92); white-space: nowrap; }
+.histogram-actions .tool { height: 26px; }
 .histogram-readout { margin-right: 10px; color: var(--heading); font-size: 12.5px; }
-.histogram-readout:empty { display: none; }
 
 /* ---- compare ---- */
 .compare-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
@@ -432,6 +440,8 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 /* ---- variants ---- */
 .variants-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
 .variants-controls .tool { height: 28px; }
+.variants { display: flex; flex-direction: column; height: 100%; }
+.variants > .dock-row { flex: 1; height: auto; }
 .variants-form { display: flex; align-items: center; gap: 6px; padding: 8px 0; font-size: 13px; }
 .variants-part { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
 .variants-part[hidden] { display: none; }
@@ -459,7 +469,7 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .regions-controls .icon { width: 14px; height: 14px; }
 /* Menus in the dock open upward, into the view, rather than below the window. */
 .dock .popover { top: auto; bottom: calc(100% + 6px); animation: none; }
-.regions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 280px); gap: 28px; max-width: 900px; padding-top: 6px; font-size: 13px; }
+.regions { flex: none; display: flex; flex-direction: column; gap: 16px; width: 300px; overflow-y: auto; padding-top: 6px; font-size: 13px; }
 .regions-steps { margin: 0; padding: 0; list-style: none; color: var(--heading); line-height: 1.8; }
 .regions-op { display: inline-block; width: 16px; color: var(--muted); }
 .regions-save { display: flex; gap: 6px; margin-top: 8px; }

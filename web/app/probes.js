@@ -229,7 +229,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 
 	defineOperation({
 		name: 'place_probe',
-		description: 'Pin a probe at the surface cell nearest a point, in a probe set (default the set in use; a first set is made if there is none). On a dropped file the cell is the file\'s own polygon with the values predicted for it; on a bundled example, the working-mesh triangle, valued at its centre. The probe keeps that cell\'s centre, so every car reads it at its own cell nearest there. Returns the probe read on the case: its number in the set, the file cell index when there is one, its centre and outward normal, Cp and the spread σ(Cp).',
+		description: 'Place a probe at the surface cell nearest a point, in a probe set (default the set in use; a first set is made if there is none). On a dropped file the cell is the file\'s own polygon with the values predicted for it; on a bundled example, the working-mesh triangle, valued at its centre. The probe keeps that cell\'s centre, so every car reads it at its own cell nearest there. Returns the probe read on the case: its number in the set, the file cell index when there is one, its centre and outward normal, Cp and the spread σ(Cp).',
 		parameters: {
 			type: 'object',
 			properties: { point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] in metres; snapped to the nearest surface cell.' }, case_id: caseId, set_id: setId },
@@ -374,7 +374,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 		label: 'Probes',
 		format: 'CSV',
 		title: 'The probe table of the set in use: number, label, file cell, position, Cp and σ',
-		unavailable: () => (session.probeSets.find((x) => x.id === view.probeSet)?.probes.length ? null : 'There are no probes in use. Click the car to pin one.'),
+		unavailable: () => (session.probeSets.find((x) => x.id === view.probeSet)?.probes.length ? null : 'There are no probes in use. Click the car to place one.'),
 		make: async (c) => {
 			const set = chosen();
 			return new Blob([probesCsv(c, set, await readSet(engine, c, set))], { type: 'text/csv' });
@@ -533,7 +533,8 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	/** The probe table: the set in use, read on the car shown. */
 	function table(c) {
 		const set = inUse();
-		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, 'No probes');
+		// Placing a probe is a click on the car, which no control in the tab shows.
+		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, 'Click the car to place a probe');
 		const sites = known(c, set);
 		const labels = set.probes.some((p) => p.label);
 		const remove = (n) => run('remove_probe', { number: n });

@@ -7,7 +7,9 @@ import { icon } from './icons.js';
 /**
  * view: the shared view (its dock tab and section). actions: tab(name), collapse(), save(). The section tool
  * supplies the section plot and its controls, the probes their table and its actions. Each of `panels` is a tab of
- * its own, {name, label, el, controls, render(), count?()}, its count shown in the tab when above zero.
+ * its own, {name, label, el, controls, render(), count?(), sectionSlot?}, its count shown in the tab when above zero.
+ * A panel's `sectionSlot` is the place in its layout where the section plot sits, beside its numbers, while the
+ * section is on.
  */
 export function createDock({ section, probes, panels, active, view, actions }) {
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
@@ -20,34 +22,39 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 	const readout = h('div', { class: 'plot-readout' });
 	const table = h('div', { class: 'dock-table' });
 	// The key and the cursor readout sit together at the plot's top left, next to the axis they describe.
-	const body = h('div', { class: 'dock-body' }, svg, h('div', { class: 'plot-head' }, key, readout), table);
+	const sectionPlot = h('div', { class: 'section-plot' }, svg, h('div', { class: 'plot-head' }, key, readout));
+	const body = h('div', { class: 'dock-body' }, sectionPlot, table);
 	const el = h('div', { class: 'dock' }, h('div', { class: 'dock-head' }, tabs, controls, save, collapse), body);
 	new ResizeObserver(() => drawPlotNow()).observe(body);
+
+	const panelShown = () => panels.find((p) => p.name === view.dock);
+	/** Where the section plot is drawn: the whole dock on the Section tab, beside a panel's numbers, or nowhere. */
+	function sectionHost() {
+		if (view.dock === 'section') return body;
+		return view.section.on ? panelShown()?.sectionSlot ?? null : null;
+	}
 
 	function drawPlotNow() {
 		const c = active();
 		if (!c?.result || body.clientHeight < 40) return;
 		readout.replaceChildren();
-		const plotted = view.dock === 'section';
-		svg.style.display = plotted ? '' : 'none';
-		table.hidden = plotted;
-		switch (view.dock) {
-			case 'section':
-				section.drawSection(svg, readout, body.clientWidth, body.clientHeight);
-				return;
-			case 'probes':
-				section.forget();
-				table.replaceChildren(probes.table(c));
-				return;
-			default: {
-				const panel = panels.find((p) => p.name === view.dock);
-				if (!panel) throw new Error(`Unknown dock tab ${view.dock}`);
-				section.forget();
-				// In the page first, so a panel that draws to its own size can measure it.
-				if (table.firstChild !== panel.el) table.replaceChildren(panel.el);
-				panel.render();
-			}
+		table.hidden = view.dock === 'section';
+		if (view.dock === 'probes') table.replaceChildren(probes.table(c));
+		else if (view.dock !== 'section') {
+			const panel = panelShown();
+			if (!panel) throw new Error(`Unknown dock tab ${view.dock}`);
+			// In the page first, so a panel that draws to its own size can measure it.
+			if (table.firstChild !== panel.el) table.replaceChildren(panel.el);
+			panel.render();
 		}
+		const host = sectionHost();
+		if (!host) {
+			sectionPlot.remove();
+			section.forget();
+			return;
+		}
+		if (sectionPlot.parentNode !== host) host.prepend(sectionPlot);
+		section.drawSection(svg, readout, host.clientWidth, host.clientHeight);
 	}
 
 	/** Redraw for the active case: tabs, controls, key and plot. A case still being analysed has no plots yet. */
@@ -71,10 +78,10 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 			svg.replaceChildren();
 			return;
 		}
-		const wanted = [view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : panels.find((p) => p.name === view.dock).controls];
+		const wanted = [view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : panelShown().controls];
 		// The section controls are one element updated in place; detaching it would end a drag on its slider.
 		if (wanted.length !== controls.childNodes.length || wanted.some((node, i) => node !== controls.childNodes[i])) controls.replaceChildren(...wanted);
-		key.replaceChildren(...(view.dock === 'section' ? section.key() : []));
+		key.replaceChildren(...(sectionHost() ? section.key() : []));
 		drawPlotNow();
 	}
 
