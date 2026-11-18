@@ -37,7 +37,7 @@ Evaluated on 120,000 area-weighted cells per car. Cross-validation holds out two
 
 | Model and inputs | CV $R^2$ | Worst-car CV $R^2$ | CV MAE ($C_p$) | CV $C_{d,p}$ MAE | Holdout $R^2$ | Holdout $C_{d,p}$ MAE |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Constant (fold mean $C_p$ and $C_{d,p}$) | 0.0000 | 0.0000 | 0.1661 | **0.0173** | 0.0000 | 0.0332 |
+| Constant (fold mean $C_p$ and $C_{d,p}$) | −0.0031 | −0.0085 | 0.1661 | **0.0173** | −0.0006 | 0.0332 |
 | PointNet whole-car vector (64) + position and facing | 0.5634 | 0.5021 | 0.0976 | 0.0321 | 0.5798 | 0.0311 |
 | Position and facing only (7) | 0.6486 | 0.2510 | 0.0820 | 0.0822 | 0.7375 | 0.1143 |
 | + nearby surface (55) | 0.9364 | 0.8159 | 0.0381 | 0.0213 | **0.9579** | 0.0165 |

@@ -26,7 +26,7 @@ const SAME = 1e-5;
 /**
  * Every mark for an explanation. A mark's `layer` is the kind of the inputs it shows.
  * @param {import('../../engine/result.js').ModelColumn[]} columns
- * @param {import('../../engine/result.js').SurfaceLookups} lookups
+ * @param {import('../../engine/result.js').ResultLookups} lookups
  * @param {import('../../engine/result.js').Explanation} explanation
  * @returns {Mark[]}
  */

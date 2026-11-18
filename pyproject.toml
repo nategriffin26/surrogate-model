@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "drivaer-surrogate"
 version = "0.1.0"
-description = "Surface pressure (Cp) surrogate for DrivAerML cars, and the Cp Predictor browser tool"
+description = "Surface pressure (Cp) surrogate for DrivAerML cars, and Surrogate Model, the browser tool for its predictions"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
