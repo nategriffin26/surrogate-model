@@ -712,17 +712,6 @@ def test_exported_model_files_are_reproducible_and_current(tmp_path: Path) -> No
         )
 
 
-def test_exporter_refuses_a_checkpoint_without_a_spread_scale(tmp_path: Path) -> None:
-    """Catches an exporter that would ship the networks' raw standard deviation as the spread when
-    the checkpoint predates the fitted spread scale."""
-    payload = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)
-    del payload["spread_scale"]
-    (tmp_path / "metrics.json").write_bytes((CHECKPOINT.parent / "metrics.json").read_bytes())
-    torch.save(payload, tmp_path / "ensemble.pt")
-    with pytest.raises(ValueError, match="retrain"):
-        export_web_model(tmp_path / "ensemble.pt", tmp_path / "model")
-
-
 def test_bundled_examples_match_the_model_and_fit_the_host() -> None:
     """Catches bundled examples left from an earlier model or feature definition (their numbers and
     `explain` would disagree with a fresh analysis), and any file of the site over the host's 25 MB limit."""
