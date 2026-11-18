@@ -298,14 +298,31 @@ def _assert_drag_by_facing(forces: dict, expected: dict[str, float]) -> None:
     assert forces["byFacing"]["forward"] + forces["byFacing"]["rearward"] == pytest.approx(forces["cdP"], abs=1e-12)
 
 
+def _assert_totals(numbers: dict, surface: SurfaceMesh, cp: np.ndarray, frontal_area: float) -> None:
+    """`totals` as result.js defines it, against Cp at every polygon."""
+    totals, cp = numbers["totals"], np.asarray(cp, dtype=np.float64)
+    assert totals["area"] == pytest.approx(surface.areas.sum(), rel=1e-9)
+    assert totals["meanCp"] == pytest.approx((cp * surface.areas).sum() / surface.areas.sum(), abs=1e-5)
+    force = -(cp[:, None] * surface.normals * surface.areas[:, None]).sum(axis=0) / frontal_area
+    np.testing.assert_allclose(totals["coefficients"], force, atol=2e-5)
+    assert totals["coefficients"][0] == numbers["forces"]["cdP"]
+    for name, index in (("cpMin", cp.argmin()), ("cpMax", cp.argmax())):
+        assert totals[name]["value"] == pytest.approx(cp[index], abs=1e-4)
+        np.testing.assert_allclose(totals[name]["center"], surface.centers[index], atol=1e-6)
+        np.testing.assert_allclose(totals[name]["normal"], surface.normals[index], atol=1e-5)
+
+
 @requires_runtime
-def test_drag_by_facing_follows_its_definition(car: pv.PolyData, tmp_path: Path) -> None:
-    """Catches a drag split that sums the wrong polygons, weights or field."""
+def test_drag_split_and_totals_follow_their_definitions(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches a drag split or whole-car totals that sum the wrong polygons, weights, normals or field,
+    or extremes placed at another polygon than the one where Cp is lowest or highest."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     outcome = _run_engine("analysis", path, tmp_path / "out")
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
-    expected = _drag_by_facing(read_vtp_surface(path), reference.cp_mean, outcome["geometry"]["frontalArea"])
+    surface = read_vtp_surface(path)
+    expected = _drag_by_facing(surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
     _assert_drag_by_facing(outcome["exact"]["forces"], expected)
+    _assert_totals(outcome["exact"], surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
 
 
 def _assert_polygon(polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMesh, cp: np.ndarray, sigma: np.ndarray) -> None:
@@ -405,19 +422,75 @@ def test_a_surface_given_as_arrays_is_analysed_as_its_file(car: pv.PolyData, tmp
 @requires_runtime
 def test_quick_prediction_matches_the_reference_at_every_polygon(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches `predictQuick` giving other values than the reference at the polygons it is given,
-    summing its forces over other polygons, weights or field, drawing other than the whole surface,
-    or leaving the car held as if it were an analysis."""
+    summing its forces or totals over other polygons, weights or field, drawing other than the whole
+    surface, or leaving the car held as if it were an analysis."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     outcome = _run_engine("quick", path, tmp_path / "out")
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
-    out = tmp_path / "out"
+    out, surface = tmp_path / "out", read_vtp_surface(path)
     np.testing.assert_allclose(_array(out, "cp.f32"), reference.cp_mean, atol=1e-4)
     np.testing.assert_allclose(_array(out, "sigma.f32"), reference.cp_std, atol=1e-4)
-    _assert_drag_by_facing(outcome["forces"], _drag_by_facing(read_vtp_surface(path), reference.cp_mean, outcome["geometry"]["frontalArea"]))
+    _assert_drag_by_facing(outcome["forces"], _drag_by_facing(surface, reference.cp_mean, outcome["geometry"]["frontalArea"]))
+    _assert_totals(outcome, surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
     corners = np.diff(vtk_to_numpy(car.GetPolys().GetOffsetsArray()))
     assert outcome["form"] == "quick"
+    assert outcome["reference"] == {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "own"}
     assert (outcome["triangles"], outcome["vertices"]) == (int((corners - 2).sum()), car.n_points)
     assert not outcome["exportable"] and outcome["sameCells"]
+
+
+@requires_runtime
+def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches a CFD field attached from a second file giving other numbers or fields than the same
+    field read with the car's own file (agreement, CFD drag, working-mesh field, file polygons,
+    export), mapping a file of other polygons onto the wrong polygons or onto the far side of a thin
+    panel, a refusal that does not say why, or a detach that leaves the field behind."""
+    case = car.copy()
+    case.cell_data.clear()
+    bare = case.copy()
+    bare.cell_data["Velocity"] = np.zeros((bare.n_cells, 3), dtype=np.float32)
+    # The car triangulated, with the pentagon fin's back face added on top of it: the nearest polygon
+    # to the fin, at no distance, but facing away from it.
+    fin = car.get_cell(int(np.flatnonzero(np.diff(vtk_to_numpy(car.GetPolys().GetOffsetsArray())) == 5)[0]))
+    back = pv.PolyData(fin.points, faces=[5, 4, 3, 2, 1, 0])
+    back.cell_data["CpMeanTrim"] = np.full(1, 99.0, dtype=np.float32)
+    append = vtkAppendPolyData()
+    for part in (car.triangulate(), back):
+        append.AddInputData(part)
+    append.Update()
+    remeshed = pv.wrap(append.GetOutput())
+    files = [_write_vtp(surface, tmp_path / name) for surface, name in ((car, "car.vtp"), (remeshed, "remeshed.vtp"), (bare, "bare.vtp"))]
+    outcome = _run_engine("reference", _write_vtp(case, tmp_path / "case.vtp"), tmp_path / "out", ",".join(map(str, files)))
+    out, cfd = tmp_path / "out", np.asarray(car.cell_data["CpMeanTrim"])
+
+    alone = outcome["alone"]
+    assert alone["reference"] == {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "own"}
+    assert outcome["before"] == {"reference": None, "cdPCfd": None, "accuracy": None, "meshHasCfd": False}
+    assert outcome["names"] == {"withCfd": ["CpMeanTrim", "pMeanTrim"], "bare": []}
+    assert "no cell array of one number per polygon" in outcome["refusals"]["bare"]
+    assert "CpMissing" in outcome["refusals"]["missing"] and "CpMeanTrim, pMeanTrim" in outcome["refusals"]["missing"]
+    assert outcome["progressed"]
+
+    same = outcome["same"]
+    assert same == {**alone, "reference": {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "polygons"}}
+    np.testing.assert_array_equal(_array(out, "same_mesh_cfd.f32"), _array(out, "alone_mesh_cfd.f32"))
+    np.testing.assert_array_equal(_array(out, "same_returned_cfd.f32"), _array(out, "alone_mesh_cfd.f32"))
+    np.testing.assert_array_equal(_array(out, "same_file_cfd.f32"), cfd)
+    np.testing.assert_array_equal(_read_without_complaint(out / "exported.vtp").cell_data["CpMeanTrim"], cfd)
+
+    # Each polygon takes the value of the remeshed polygon whose centre is nearest among those not facing away.
+    polygons, triangles = read_vtp_surface(tmp_path / "case.vtp"), read_vtp_surface(files[1])
+    distances = np.linalg.norm(polygons.centers[:, None, :].astype(np.float64) - triangles.centers[None, :, :], axis=2)
+    distances[polygons.normals @ triangles.normals.T < 0] = np.inf
+    expected = np.asarray(remeshed.cell_data["CpMeanTrim"])[distances.argmin(axis=1)]
+    np.testing.assert_array_equal(_array(out, "nearest_file_cfd.f32"), expected)
+    nearest = outcome["nearest"]
+    assert nearest["reference"] == {"file": "remeshed.vtp", "array": "CpMeanTrim", "mapping": "nearest"}
+    drag = -(expected.astype(np.float64) * polygons.normals[:, 0] * polygons.areas).sum() / outcome["geometry"]["frontalArea"]
+    assert nearest["cdPCfd"] == pytest.approx(drag, abs=1e-6)
+
+    assert outcome["detached"] == outcome["before"]
+    assert outcome["fileCellsAfterDetach"] is None
 
 
 @requires_runtime

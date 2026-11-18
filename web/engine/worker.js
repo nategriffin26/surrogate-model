@@ -15,6 +15,8 @@
  * Once the result is out, the rest of the polygons are predicted in the background when the device
  * can do all of them in a minute, where the working mesh's pressure changes fastest first. The full
  * mesh's fields fill in as they go, and at the end the surface numbers are summed over every polygon.
+ * From then on the car can be given a reference field from a second file (`attachReference`), which
+ * it holds as if its own file had carried it.
  *
  * Analyses run one at a time, each to its end, in the order asked for: a car's background prediction
  * is part of its analysis, and two files at once would need twice the memory. Only an abort ends one
@@ -22,15 +24,16 @@
  * of the surface it is given at once, with nothing drawn first and nothing left for the background.
  */
 
-import { addCellArrays, CFD_ARRAY, readSurface, writeVtp } from './vtp.js';
+import { addCellArrays, CFD_ARRAY, cellArrayNames, readSurface, writeVtp } from './vtp.js';
 import { boundsOf, checkSurface, measureCells, frontalArea } from './geometry.js';
 import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint, surfaceMesh } from './meshes.js';
-import { cfdDrag, coverage, evenPicks, SurfaceTally } from './analysis.js';
+import { Agreement, cfdDrag, coverage, evenPicks, surfaceAgreement, SurfaceTally } from './analysis.js';
 import { describePolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
+import { buildPointGrid, nearestPoint } from './nearest.js';
 
 /** Helpers: every core but the one the page needs. */
 const HELPERS = Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
@@ -84,7 +87,9 @@ let running = null;
 /**
  * The car analysed last: its file (null when it came as arrays), polygons, lookups and predictions
  * so far, with an index of its polygons for `explain` and `polygonAt`. `complete` once every polygon
- * is predicted, for `exportVtp` and `fileCells`. Let go when its analysis is aborted or the next starts.
+ * is predicted, for `exportVtp`, `fileCells` and references. `surface.cfd` is its reference field,
+ * `ownCfd` the one its file carried, and `sourcePoint` the file point under each working-mesh vertex,
+ * which a new field is put on. Let go when its analysis is aborted or the next starts.
  */
 let lastCar = null;
 /** The lookups `explain` was last given for a result whose polygons are not held, made ready to use. */
@@ -118,6 +123,18 @@ self.onmessage = ({ data }) => {
       break;
     case 'fileCells':
       answerFileCells(data);
+      break;
+    case 'cellArrayNames':
+      cellArrayNames(data.file).then(
+        (names) => self.postMessage({ type: 'answer', id: data.id, answer: names }),
+        (error) => self.postMessage({ type: 'answerFailed', id: data.id, message: error.message }),
+      );
+      break;
+    case 'attachReference':
+      attachReference(data);
+      break;
+    case 'detachReference':
+      detachReference(data);
       break;
     default:
       throw new Error(`Unknown engine request ${data.type}`);
@@ -241,19 +258,23 @@ async function analyze(current, input) {
       sigma: near.average(Float32Array.from(near.cells, (c) => predicted.sigma[c])),
     };
 
-    const estimate = new SurfaceTally(runners.networks, car.frontal);
+    const estimate = new SurfaceTally(runners.networks, car.frontal, cells);
+    const agreement = surface.cfd && new Agreement();
     // The picks and their distinct cells both ascend, so one walk finds each pick's prediction.
     const { models: pickModels, fields: pickFields } = pickBatchDone;
     for (let i = 0, j = 0; i < picks.picks.length; i++) {
       const c = picks.picks[i];
       while (pickedCells[j] < c) j++;
-      estimate.add(picks.weight, cells.normals[3 * c], pickModels, j, pickedCells.length, pickFields.cp[j], surface.cfd?.[c]);
+      estimate.add(picks.weight, c, pickModels, j, pickedCells.length, pickFields.cp[j]);
+      agreement?.add(picks.weight, pickFields.cp[j], surface.cfd[c]);
     }
+    const reference = ownReference(surface);
     const result = {
       form: 'full',
       source: { name: surface.name, cells: cells.areas.length },
       geometry: geometryOf(car),
-      ...surfaceNumbers(estimate, car),
+      ...surfaceNumbers(estimate, agreement ? agreement.accuracy() : null, car.cdPCfd),
+      reference,
       coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: stages.timings,
       device,
@@ -261,7 +282,10 @@ async function analyze(current, input) {
       mesh,
       lookups: lookupsOf(car.context, ensemble.features),
     };
-    lastCar = { id: current.id, file: input.file ?? null, surface, cells, context: car.context, predicted, index: null, complete: false };
+    lastCar = {
+      id: current.id, file: input.file ?? null, surface, cells, context: car.context, frontal: car.frontal, predicted,
+      index: null, complete: false, sourcePoint: working.sourcePoint, showFull: Boolean(full), ownCfd: surface.cfd, reference,
+    };
     post({ type: 'result', result });
     lastCar.index = indexPolygons(surface, cells);
 
@@ -306,8 +330,9 @@ async function predictQuick(current, given) {
     const batch = await predictBatch(current, runners, cells, Uint32Array.from({ length: count }, (_, c) => c), () => {});
     checkpoint(current);
     const { cp, sigma } = batch.fields;
-    const tally = new SurfaceTally(runners.networks, car.frontal);
-    for (let c = 0; c < count; c++) tally.add(cells.areas[c], cells.normals[3 * c], batch.models, c, count, cp[c], surface.cfd?.[c]);
+    const tally = new SurfaceTally(runners.networks, car.frontal, cells);
+    for (let c = 0; c < count; c++) tally.add(cells.areas[c], c, batch.models, c, count, cp[c]);
+    const accuracy = surface.cfd ? surfaceAgreement(cells.areas, cp, surface.cfd) : null;
     const drawn = surfaceMesh(surface, car.flip);
     const mesh = {
       ...displayMesh({ ...drawn, cfd: surface.cfd && car.average.all(surface.cfd) }),
@@ -318,7 +343,8 @@ async function predictQuick(current, given) {
       form: 'quick',
       source: { name: surface.name, cells: count },
       geometry: geometryOf(car),
-      ...surfaceNumbers(tally, car),
+      ...surfaceNumbers(tally, accuracy, car.cdPCfd),
+      reference: ownReference(surface),
       coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: [
         { stage: 'measuring', seconds: (measured - started) / 1000 },
@@ -368,9 +394,14 @@ function measure(surface, layout, progress) {
   return { cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds, cdPCfd };
 }
 
-/** The Result's surface numbers from a tally over polygons. */
-function surfaceNumbers(tally, car) {
-  return { forces: tally.forces(car.cdPCfd), accuracy: car.cdPCfd === null ? null : tally.accuracy() };
+/** The Result's surface numbers: the forces and totals of a tally over polygons, and the agreement with CFD. */
+function surfaceNumbers(tally, accuracy, cdPCfd) {
+  return { forces: tally.forces(cdPCfd), accuracy, totals: tally.totals() };
+}
+
+/** `Result.reference` for a surface's own CFD, as its file or its arrays carried it. */
+function ownReference(surface) {
+  return surface.cfd ? { file: surface.name, array: CFD_ARRAY, mapping: 'own' } : null;
 }
 
 /** An ascending list without its repeats. */
@@ -544,11 +575,9 @@ async function completeSurface(current, runners, post, job) {
   }
   if (!affordable) return false;
 
-  const exact = new SurfaceTally(runners.networks, car.frontal);
+  const exact = new SurfaceTally(runners.networks, car.frontal, cells);
   for (const batch of batches) {
-    batch.cells.forEach((c, j) => {
-      exact.add(cells.areas[c], cells.normals[3 * c], batch.models, j, batch.cells.length, batch.fields.cp[j], surface.cfd?.[c]);
-    });
+    batch.cells.forEach((c, j) => exact.add(cells.areas[c], c, batch.models, j, batch.cells.length, batch.fields.cp[j]));
   }
   await requestsTurn();
   let order;
@@ -569,13 +598,14 @@ async function completeSurface(current, runners, post, job) {
       predicted.cp[c] = fields.cp[i];
       predicted.sigma[c] = fields.sigma[i];
       predicted.done[c] = 1;
-      exact.add(cells.areas[c], cells.normals[3 * c], chunk, i, size, fields.cp[i], surface.cfd?.[c]);
+      exact.add(cells.areas[c], c, chunk, i, size, fields.cp[i]);
       if (field) accumulate(c, fields.cp[i], fields.sigma[i]);
     }
     predictedCount += size;
     if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
   }, true);
-  post({ type: 'exact', numbers: surfaceNumbers(exact, car) });
+  const accuracy = surface.cfd ? surfaceAgreement(cells.areas, predicted.cp, surface.cfd) : null;
+  post({ type: 'exact', numbers: surfaceNumbers(exact, accuracy, car.cdPCfd) });
   if (showFull) send();
   return true;
 }
@@ -761,9 +791,108 @@ function answerFileCells({ id, analysis }) {
 }
 
 /**
+ * A reference field for the car analysed last: the cell array `array` of `file`, put on the car's
+ * polygons cell for cell when the two files have the same polygons, and otherwise from the polygon of
+ * `file` whose centre is nearest, among those not facing away (any, where all do). The car then
+ * holds it as its own CFD; of `file`, only that array is kept.
+ */
+async function attachReference({ id, analysis, file, array = CFD_ARRAY }) {
+  const progress = (fraction) => self.postMessage({ type: 'answerProgress', id, fraction });
+  try {
+    const car = completeCar(analysis);
+    const names = await cellArrayNames(file);
+    if (!names.includes(array)) {
+      throw new Error(names.length
+        ? `${file.name} has no cell array named ${array}. Its cell arrays of one number per polygon are ${names.join(', ')}.`
+        : `${file.name} has no cell array of one number per polygon, so it holds no pressure field to compare with.`);
+    }
+    const reference = await readSurface(file, (fraction) => progress(0.8 * fraction), array);
+    const same = samePolygons(car.surface, reference);
+    car.surface.cfd = same ? reference.cfd : await nearestCellValues(car.cells, reference, (fraction) => progress(0.8 + 0.2 * fraction));
+    car.reference = { file: file.name, array, mapping: same ? 'polygons' : 'nearest' };
+    answerReference(id, car);
+  } catch (error) {
+    self.postMessage({ type: 'answerFailed', id, message: error.message });
+  }
+}
+
+/** The car analysed last back to the CFD its own file or arrays carried, or none. */
+function detachReference({ id, analysis }) {
+  try {
+    const car = completeCar(analysis);
+    car.surface.cfd = car.ownCfd;
+    car.reference = ownReference(car.surface);
+    answerReference(id, car);
+  } catch (error) {
+    self.postMessage({ type: 'answerFailed', id, message: error.message });
+  }
+}
+
+/** The car held for `analysis` once every polygon is predicted, which a reference needs. */
+function completeCar(analysis) {
+  const car = heldCar(analysis);
+  if (!car?.complete) {
+    throw new Error('A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.');
+  }
+  return car;
+}
+
+function samePolygons(a, b) {
+  const equal = (x, y) => x.length === y.length && x.every((value, i) => value === y[i]);
+  return equal(a.offsets, b.offsets) && equal(a.connectivity, b.connectivity) && equal(a.points, b.points);
+}
+
+/** For each of the car's polygons, the reference value at the nearest reference polygon centre that does not face away. */
+async function nearestCellValues(cells, reference, progress) {
+  const { centers, normals } = measureCells(reference);
+  const grid = buildPointGrid(centers);
+  const count = cells.areas.length;
+  const values = new Float32Array(count);
+  let nx = 0, ny = 0, nz = 0;
+  const facing = (i) => normals[3 * i] * nx + normals[3 * i + 1] * ny + normals[3 * i + 2] * nz >= 0;
+  for (let c = 0; c < count; c++) {
+    nx = cells.normals[3 * c];
+    ny = cells.normals[3 * c + 1];
+    nz = cells.normals[3 * c + 2];
+    const x = cells.centers[3 * c], y = cells.centers[3 * c + 1], z = cells.centers[3 * c + 2];
+    let i = nearestPoint(grid, x, y, z, facing);
+    if (i < 0) i = nearestPoint(grid, x, y, z);
+    values[c] = reference.cfd[i];
+    // Explanations and picks asked meanwhile are answered between slices.
+    if (c % 262_144 === 262_143) {
+      progress(c / count);
+      await requestsTurn();
+    }
+  }
+  return values;
+}
+
+/**
+ * What a reference changes in the car's Result, as `attachReference` and `detachReference` resolve
+ * with it: the CFD drag and agreement over every polygon, computed as the analysis computes them, and
+ * the field on the working mesh and the full mesh, put on their vertices as the meshes put a file's own.
+ */
+function answerReference(id, car) {
+  const { surface, cells, predicted } = car;
+  let answer = { reference: null, cdPCfd: null, accuracy: null, cfd: null, fullCfd: null };
+  if (surface.cfd) {
+    const all = cellToPoint(surface, cells.areas).all(surface.cfd);
+    answer = {
+      reference: car.reference,
+      cdPCfd: cfdDrag(cells, surface.cfd, car.frontal),
+      accuracy: surfaceAgreement(cells.areas, predicted.cp, surface.cfd),
+      cfd: Float32Array.from(car.sourcePoint, (p) => all[p]),
+      fullCfd: car.showFull ? all : null,
+    };
+  }
+  self.postMessage({ type: 'answer', id, answer }, [answer.cfd, answer.fullCfd].filter(Boolean).map((array) => array.buffer));
+}
+
+/**
  * The analysed car with its prediction added as cell arrays: `CpPredicted`, the networks' mean, and
  * `CpSpread`, σ(Cp). A file gets them beside its own arrays (DrivAerML's CFD pressure coefficient is
- * `CpMeanTrim`); a surface that came as arrays is written as a new file, with its CFD as `CpMeanTrim`.
+ * `CpMeanTrim`), with an attached reference under its array's name; a surface that came as arrays is
+ * written as a new file, with its reference too.
  */
 async function exportVtp({ id, analysis }) {
   const car = heldCar(analysis);
@@ -771,11 +900,12 @@ async function exportVtp({ id, analysis }) {
     if (!car?.complete) {
       throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse it again.');
     }
-    const arrays = { CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
-    const name = `${car.surface.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
+    const { reference, surface } = car;
+    const written = reference && (!car.file || reference.mapping !== 'own') ? { [reference.array]: surface.cfd } : {};
+    const arrays = { ...written, CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
+    const name = `${surface.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
     if (!car.file) {
-      const cfd = car.surface.cfd ? { [CFD_ARRAY]: car.surface.cfd } : {};
-      self.postMessage({ type: 'exported', id, file: writeVtp({ ...car.surface, name }, { ...cfd, ...arrays }) });
+      self.postMessage({ type: 'exported', id, file: writeVtp({ ...surface, name }, arrays) });
       return;
     }
     let reported = 0;

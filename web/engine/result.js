@@ -24,14 +24,19 @@
  * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null,
  *              byFacing: { forward: number, rearward: number } }} forces
  *   Pressure drag coefficient: mean of the ensemble's networks, their standard deviation, each
- *   network's value, and the CFD value integrated over the file's polygons when it has CFD.
+ *   network's value, and the value of the reference field (`reference`) when there is one.
  *   `byFacing` splits the networks' mean between polygons facing forward (outward n_x < 0) and the
  *   rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
  * @property {{ r2: number } | null} accuracy
- *   Area-weighted agreement with CFD over the surface. Null when the file has no CFD.
- *   `forces` and `accuracy` are sums over the surface's polygons. In a full Result as `analyze`
- *   resolves with it they run over an evenly spaced area sample of them (drag within about 0.0005 of
- *   the full sum); `exact` brings them summed over every polygon. A quick Result sums every polygon.
+ *   Area-weighted agreement with the reference field over the surface. Null when there is none.
+ * @property {Totals} totals  The whole car's sums of the networks' mean Cp.
+ *   `forces`, `accuracy` and `totals` are sums over the surface's polygons. In a full Result as
+ *   `analyze` resolves with it they run over an evenly spaced area sample of them (drag within about
+ *   0.0005 of the full sum); `exact` brings them summed over every polygon. A quick Result sums every
+ *   polygon.
+ * @property {ReferenceSource | null} reference  Where the field the prediction is compared with came
+ *   from (shown as CFD, `mesh.cfd`): the surface's own `CpMeanTrim`, or a cell array of another file
+ *   attached afterwards (`attachReference`). Null when there is none.
  * @property {Coverage} coverage
  * @property {{ stage: Stage, seconds: number }[]} timings
  * @property {string} device  What ran the networks, as `Engine.device` names it.
@@ -39,6 +44,27 @@
  * @property {DisplayMesh} mesh  A full Result's working mesh, or a quick Result's surface itself.
  * @property {SurfaceLookups} lookups
  * @property {CellSet} [cells]  A quick Result's polygons with the values the networks gave each.
+ *
+ * @typedef {Object} Totals
+ * @property {number} area             m², the surface's
+ * @property {number} meanCp           area-weighted
+ * @property {number[]} coefficients   [Cx, Cy, Cz] = −Σ Cp n dA / `geometry.frontalArea`, pressure
+ *   only; Cx is `forces.cdP`
+ * @property {CpExtreme} cpMin
+ * @property {CpExtreme} cpMax
+ *
+ * @typedef {Object} CpExtreme  The polygon where the networks' mean Cp is lowest or highest.
+ * @property {number} value
+ * @property {number[]} center
+ * @property {number[]} normal  outward
+ *
+ * @typedef {Object} ReferenceSource
+ * @property {string} file    the name of the file it came from
+ * @property {string} array   the cell array read
+ * @property {'own' | 'polygons' | 'nearest'} mapping  'own': the analysed surface's own `CpMeanTrim`;
+ *   'polygons': another file with the same polygons, value for value; 'nearest': another file's
+ *   polygons, each of the analysed polygons taking the value of the one whose centre is nearest among
+ *   those not facing away from it
  *
  * @typedef {Object} CellSet  A surface's polygons with what the analysis knows of each, for the
  *   page's and the assistant's own sums and plots. `centers`, `normals` and `areas` are those the
@@ -51,7 +77,7 @@
  * @property {Float64Array} areas         (C)
  * @property {Float32Array} cp            (C) the networks' mean Cp
  * @property {Float32Array} sigma         (C) spread σ(Cp)
- * @property {Float32Array | null} cfd    (C) CFD Cp, when the surface carried it
+ * @property {Float32Array | null} cfd    (C) the reference field, when there is one
  *
  * @typedef {Omit<import('./features.js').SurfaceContext, 'layout'> & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
  *   The whole-car lookups the features read (`SurfaceContext` in `features.js`, a few MB), built from
@@ -62,15 +88,16 @@
  * @property {{ name: 'length' | 'width' | 'height', value: number, trainMin: number, trainMax: number }[]} dimensions
  *
  * @typedef {Object} DisplayMesh  A surface the browser draws. Fields are per vertex: the networks are
- *   asked at the file's polygons, as they were trained, and the CFD gives one value per polygon too; a
- *   vertex shows the area-weighted mean of the file polygons around the file point it sits on.
+ *   asked at the file's polygons, as they were trained, and the reference field gives one value per
+ *   polygon too; a vertex shows the area-weighted mean of the file polygons around the file point it
+ *   sits on.
  * @property {Float32Array} positions  (V, 3)
  * @property {Float32Array} normals    (V, 3) unit, pointing out of the car
  * @property {Uint32Array} indices     (T, 3) wound counter-clockwise seen from outside
  * @property {number[]} bounds         [xmin, xmax, ymin, ymax, zmin, zmax] of `positions`
  * @property {Float32Array} [cp]       (V) mean Cp of the networks; absent until predicted
  * @property {Float32Array} [sigma]    (V) spread σ(Cp): the networks' standard deviation × `ModelCard.spreadScale`
- * @property {Float32Array} [cfd]      (V) CFD Cp, only when the file carried it
+ * @property {Float32Array} [cfd]      (V) the reference field (`Result.reference`), only when there is one
  *
  * @typedef {'reading' | 'measuring' | 'meshing' | 'predicting'} Stage
  *
@@ -102,9 +129,9 @@
  *   from polygon centres, so a coarser mesh leaves some of their columns empty and the prediction
  *   degrades.
  * @property {(result: Result) => CellSet} workingCells  A result's working mesh as polygons, made on
- *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's
- *   Cp, σ and CFD the mean of its corners', so `area × cp` sums the field the viewer draws exactly.
- *   For a quick Result, its own `cells`. Works for every result, the bundled examples too.
+ *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's Cp,
+ *   σ and reference field the mean of its corners', so `area × cp` sums the field the viewer draws
+ *   exactly. For a quick Result, its own `cells`. Works for every result, the bundled examples too.
  * @property {(result: Result) => Promise<CellSet | null>} fileCells  The polygons of the car analysed
  *   last, the file's own, copied in the worker and handed over whole (about 650 MB for a DrivAerML
  *   car); null unless `canExportVtp(result)`.
@@ -131,13 +158,37 @@
  *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). For a
  *   file, every other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and
  *   the File is composed from slices of the original rather than a copy, so saving it streams from
- *   the user's disk. A surface given as arrays is written as a new file (`writeVtp`), with its CFD as
- *   `CpMeanTrim` when it carried it. Named `<name>_prediction.vtp`. `onProgress` reports 0 to 1.
- *   Rejects with an Error whose message says what to do when `canExportVtp` is false or the original
- *   can no longer be read.
+ *   the user's disk. A surface given as arrays is written as a new file (`writeVtp`). An attached
+ *   reference field, and a surface's own one given as arrays, is written as a cell array of the name
+ *   it was read under (`Result.reference.array`). Named `<name>_prediction.vtp`. `onProgress`
+ *   reports 0 to 1. Rejects with an Error whose message says what to do when `canExportVtp` is false
+ *   or the original can no longer be read.
+ * @property {(file: File) => Promise<string[]>} cellArrayNames  The cell arrays of a .vtp that hold one
+ *   floating-point number per polygon, in file order: the fields `attachReference` can read from it.
+ *   Reads only the file's XML up to the end of its cell data.
+ * @property {(result: Result, file: File, options?: { array?: string, onProgress?: (fraction: number) => void }) =>
+ *              Promise<ReferenceChange>} attachReference
+ *   Gives the car a reference field from a second file: its cell array `array` (default `CpMeanTrim`),
+ *   put on the car's polygons as `ReferenceSource.mapping` says. The car then answers as if its own
+ *   file had carried the field: `result.reference`, `result.forces.cdPCfd`, `result.accuracy` and
+ *   `result.mesh.cfd` are written into `result` itself, computed over every polygon exactly as the
+ *   analysis computes them, and `fileCells`, `explain` and `exportVtp` use the field. Of the second
+ *   file, only that array is kept. Runs while `canExportVtp(result)`; rejects otherwise, and with a
+ *   message naming the arrays the file has when it lacks `array` or saying it has none.
+ * @property {(result: Result) => Promise<ReferenceChange>} detachReference  Back to the field the
+ *   car's own file or arrays carried, or to none; written into `result` as `attachReference` does.
  * @property {Promise<string>} device  What runs the networks, short enough to show as is:
  *   "WebGPU (<adapter>)" when the browser names the adapter, "WebGPU", or "CPU (<n> threads)".
  * @property {Promise<ModelCard>} model  The model, for the model view.
+ *
+ * @typedef {Object} ReferenceChange  What a change of reference wrote into the Result, and the field
+ *   for the full mesh, which the page draws and must update itself.
+ * @property {ReferenceSource | null} reference
+ * @property {Result['forces']} forces
+ * @property {Result['accuracy']} accuracy
+ * @property {Float32Array | null} cfd       (V) the new `mesh.cfd`
+ * @property {Float32Array | null} fullCfd   (P) the field at every vertex of the full mesh, when
+ *   `fullMesh` fired for this car
  *
  * @typedef {Object} AnalyzeEvents  Everything is optional; each fires at most as described.
  * @property {(stage: Stage, fraction: number) => void} [stage]  Progress within the current stage, 0 to 1.
@@ -148,15 +199,15 @@
  *   pressure is predicted. May fire again with a better mesh.
  * @property {(mesh: DisplayMesh) => void} [fullMesh]
  *   The file's own surface, every triangle, for drawing at full resolution, with `cfd` when the
- *   file carried it. Its `cp` and `sigma` arrive through `fullFields`. Does not fire when the device
- *   cannot hold the full mesh.
+ *   surface carries a reference field. Its `cp` and `sigma` arrive through `fullFields`. Does not
+ *   fire when the device cannot hold the full mesh.
  * @property {(fields: { cp: Float32Array, sigma: Float32Array }, fraction: number) => void} [fullFields]
  *   `cp` and `sigma` for every vertex of the full mesh, complete and drawable on every call: a vertex
  *   averages those of its polygons predicted so far, and one with none yet holds the value of the
  *   nearest working-mesh vertex. `fraction` is the share of the file's polygons predicted. Fires after
  *   `analyze` has resolved, then repeatedly as more of the surface is predicted, ending at 1; on a
  *   device too slow to predict the whole surface in a minute it fires once, below 1.
- * @property {(numbers: Pick<Result, 'forces' | 'accuracy'>) => void} [exact]
+ * @property {(numbers: Pick<Result, 'forces' | 'accuracy' | 'totals'>) => void} [exact]
  *   Once every polygon of the file is predicted, just before the last `fullFields`: these parts of the
  *   Result summed over all of them, to replace the sampled ones. Does not fire on a device too slow
  *   to predict the whole surface in a minute.
@@ -170,8 +221,8 @@
  * @property {number[]} cpModels        each network's Cp
  * @property {number} cp                their mean
  * @property {number} sigma             spread σ(Cp): their standard deviation × `ModelCard.spreadScale`
- * @property {number | null} cfd        the CFD Cp there: the file's own value at the polygon, or
- *   `Result.mesh.cfd` at the vertex; null when the file carried no CFD
+ * @property {number | null} cfd        the reference field there: the polygon's own value, or
+ *   `Result.mesh.cfd` at the vertex; null when there is no reference
  * @property {Float32Array[][]} activations  per network, what it computed on the way to its Cp:
  *   [input, hidden 1, hidden 2, hidden 3]. `input` is `features` standardized and clipped by that
  *   network's own scaling (what its first layer reads); each hidden layer is its output after GELU.

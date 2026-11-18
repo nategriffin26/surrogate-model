@@ -3,6 +3,8 @@
  * and base64 and zlib are decoded straight into typed arrays. Arrays the engine does not use are
  * stepped over without decoding (read past when inline, never read when appended), and reading
  * stops once every needed array is in, so a DrivAerML file's trailing solver fields are never read.
+ * Besides the polygons it reads one cell array, the field the prediction is compared with:
+ * `CpMeanTrim`, or another the user picks from those `cellArrayNames` lists.
  *
  * Handles inline binary (base64), appended raw and appended base64 data, zlib compression, UInt32
  * and UInt64 headers, ASCII arrays, and polygons of any size. Anything else is rejected with an Error
@@ -12,7 +14,7 @@
  * original rather than a copy of it, and writes any surface given as arrays as a new file (`writeVtp`).
  */
 
-/** The CFD pressure coefficient; the only solver array the engine reads, and only for comparison. */
+/** The CFD pressure coefficient, the comparison field read unless another is asked for. */
 export const CFD_ARRAY = 'CpMeanTrim';
 
 const SLICE_BYTES = 8 << 20;
@@ -32,12 +34,13 @@ const RESAVE = 'Open it in ParaView and save it again as a .vtp file (File > Sav
 /**
  * @param {Blob & { name?: string }} file
  * @param {(fraction: number) => void} [onProgress]
+ * @param {string} [cellArray]  the cell array read as `cfd`, the field the prediction is compared with
  * @returns {Promise<import('./result.js').ParsedSurface>}
  */
-export async function readSurface(file, onProgress = () => {}) {
+export async function readSurface(file, onProgress = () => {}, cellArray = CFD_ARRAY) {
   if (file.size === 0) throw new Error('The file is empty. Choose the surface file again; it may not have finished copying.');
   const source = new SliceReader(file);
-  const document = await readDocument(source, onProgress);
+  const document = await readDocument(source, onProgress, cellArray);
   const { piece, arrays, values } = document;
 
   for (const role of ['points', 'connectivity', 'offsets']) {
@@ -49,7 +52,7 @@ export async function readSurface(file, onProgress = () => {}) {
     }
   }
   onProgress(1);
-  return assembleSurface(file.name ?? '', piece, {
+  return assembleSurface(file.name ?? '', piece, cellArray, {
     points: toFloat32(values.points, arrays.points),
     connectivity: toIndices(values.connectivity, arrays.connectivity),
     ends: toIndices(values.offsets, arrays.offsets),
@@ -58,7 +61,7 @@ export async function readSurface(file, onProgress = () => {}) {
 }
 
 /** Check the arrays against each other and against the piece's counts, and build the contract's shape. */
-function assembleSurface(name, piece, { points, connectivity, ends, cfd }) {
+function assembleSurface(name, piece, cellArray, { points, connectivity, ends, cfd }) {
   const count = (n) => n.toLocaleString('en-US');
   if (points.length !== 3 * piece.points) {
     throw new Error(`The file declares ${count(piece.points)} points but holds ${count(Math.floor(points.length / 3))}: it is damaged. ${RESAVE}`);
@@ -86,7 +89,7 @@ function assembleSurface(name, piece, { points, connectivity, ends, cfd }) {
     throw new Error(`The file's polygons refer to points it does not contain: it is damaged. ${RESAVE}`);
   }
   if (cfd && cfd.length !== piece.polys) {
-    throw new Error(`The file's ${CFD_ARRAY} array has ${count(cfd.length)} values for ${count(piece.polys)} polygons: it is damaged. ${RESAVE}`);
+    throw new Error(`The file's ${cellArray} array has ${count(cfd.length)} values for ${count(piece.polys)} polygons: it is damaged. ${RESAVE}`);
   }
   return { name, points, connectivity: corners, offsets, cfd };
 }
@@ -94,12 +97,8 @@ function assembleSurface(name, piece, { points, connectivity, ends, cfd }) {
 // ---------------------------------------------------------------------------------------------
 // The XML structure
 
-/**
- * Walk the XML from the top. Needed inline arrays are decoded on the way; appended ones are recorded
- * for reading afterwards. Stops at the appended data block, or as soon as every needed inline array
- * is in.
- */
-async function readDocument(source, onProgress) {
+/** Refuse a file that is not VTK XML, saying what it is when that is known. */
+async function checkKind(source) {
   const head = latin1.decode(await source.bytes(0, 64)).trimStart();
   if (head.startsWith('# vtk DataFile')) {
     throw new Error(`This is a legacy VTK file; the tool reads VTK XML PolyData. ${RESAVE}`);
@@ -107,6 +106,62 @@ async function readDocument(source, onProgress) {
   if (!head.startsWith('<')) {
     throw new Error('This is not a VTK XML file. The tool reads surfaces saved as VTK XML PolyData (.vtp), such as DrivAerML\'s boundary files.');
   }
+}
+
+/**
+ * The cell arrays of a .vtp that hold one floating-point number per polygon, the ones that can be a
+ * pressure field, in file order. Only the XML up to the end of the cell data is read; inline arrays
+ * are stepped over without decoding them.
+ * @param {Blob} file
+ * @returns {Promise<string[]>}
+ */
+export async function cellArrayNames(file) {
+  if (file.size === 0) throw new Error('The file is empty. Choose the surface file again; it may not have finished copying.');
+  const source = new SliceReader(file);
+  await checkKind(source);
+  const document = { headerBytes: 4, compressed: false };
+  const names = [];
+  let inCellData = false;
+  let position = 0;
+  for (;;) {
+    const open = await source.indexOf(0x3c, position);
+    if (open < 0) throw truncated(source);
+    const close = await source.indexOf(0x3e, open);
+    if (close < 0) throw truncated(source);
+    const text = latin1.decode(await source.bytes(open + 1, close));
+    position = close + 1;
+    const attributes = parseAttributes(text);
+    switch (/^\/?\w+/.exec(text)?.[0]) {
+      case 'VTKFile':
+        readFileAttributes(document, attributes);
+        break;
+      case 'CellData':
+        if (text.endsWith('/')) return names;
+        inCellData = true;
+        break;
+      case '/CellData':
+      case '/Piece':
+        return names;
+      case 'DataArray': {
+        const scalar = Number(attributes.NumberOfComponents ?? 1) === 1 && attributes.type?.startsWith('Float');
+        if (inCellData && scalar) names.push(attributes.Name ?? '');
+        const format = attributes.format ?? 'ascii';
+        if (!text.endsWith('/') && format !== 'appended') position = await skipInline(source, document, { format }, position);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+/**
+ * Walk the XML from the top. Needed inline arrays are decoded on the way; appended ones are recorded
+ * for reading afterwards. Stops at the appended data block, or as soon as every needed inline array
+ * is in.
+ */
+async function readDocument(source, onProgress, cellArray) {
+  await checkKind(source);
 
   const document = {
     headerBytes: 4,
@@ -166,7 +221,7 @@ async function readDocument(source, onProgress) {
         section = null;
         break;
       case 'DataArray': {
-        const array = readArrayAttributes(section, attributes);
+        const array = readArrayAttributes(section, attributes, cellArray);
         if (array.role && !document.piece) throw new Error(`The file's arrays come before its Piece. ${RESAVE}`);
         if (array.role) document.arrays[array.role] = array;
         if (array.format === 'appended' || text.endsWith('/')) break;
@@ -236,7 +291,7 @@ function readPiece(attributes) {
   return piece;
 }
 
-function readArrayAttributes(section, attributes) {
+function readArrayAttributes(section, attributes, cellArray) {
   const format = attributes.format ?? 'ascii';
   if (format !== 'binary' && format !== 'appended' && format !== 'ascii') {
     throw new Error(`The file stores an array in the format "${format}", which the tool does not read. ${RESAVE}`);
@@ -244,7 +299,7 @@ function readArrayAttributes(section, attributes) {
   const type = attributes.type;
   if (!(type in SCALAR_BYTES)) throw new Error(`The file stores an array as ${type}, which the tool does not read. ${RESAVE}`);
   const array = {
-    role: arrayRole(section, attributes),
+    role: arrayRole(section, attributes, cellArray),
     type,
     components: Number(attributes.NumberOfComponents ?? 1),
     format,
@@ -262,7 +317,7 @@ function readArrayAttributes(section, attributes) {
       if (!integer) throw new Error(`The file stores polygon ${array.role} as ${type} instead of integers. ${RESAVE}`);
       break;
     case 'cfd':
-      if (integer || array.components !== 1) throw new Error(`The file's ${CFD_ARRAY} array is not one number per polygon. ${RESAVE}`);
+      if (integer || array.components !== 1) throw new Error(`The file's ${cellArray} array is not one number per polygon. ${RESAVE}`);
       break;
     case null:
       break;
@@ -275,14 +330,14 @@ function readArrayAttributes(section, attributes) {
   return array;
 }
 
-function arrayRole(section, attributes) {
+function arrayRole(section, attributes, cellArray) {
   switch (section) {
     case 'points': return 'points';
     case 'polys':
       if (attributes.Name === 'connectivity') return 'connectivity';
       if (attributes.Name === 'offsets') return 'offsets';
       return null;
-    case 'cells': return attributes.Name === CFD_ARRAY ? 'cfd' : null;
+    case 'cells': return attributes.Name === cellArray ? 'cfd' : null;
     case null: return null;
     default: throw new Error(`Unknown section ${section}`);
   }

@@ -11,6 +11,7 @@
 //   bun tests/web_engine_outputs.mjs stretch  <surface.vtp> <out dir> <factor>
 //   bun tests/web_engine_outputs.mjs quick    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs write    <surface.vtp> <out dir>
+//   bun tests/web_engine_outputs.mjs reference <surface.vtp> <out dir> <cfd.vtp>,<remeshed cfd.vtp>,<bare.vtp>
 //   bun tests/web_engine_outputs.mjs example  <example base>  <out dir>
 //
 // `parse` writes the parsed surface and its frontal area; `engine` adds the polygon geometry, the
@@ -28,8 +29,10 @@
 // lengthwise by `factor` and analyses it from arrays (`analyzeSurface`), writing what `analysis` does
 // and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
 // `quick` writes `predictQuick`'s result for the file's surface. `write` writes the file's surface
-// anew with `writeVtp`, with cell and point arrays of several types and widths. `example` asks a
-// fresh engine, which has analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
+// anew with `writeVtp`, with cell and point arrays of several types and widths. `reference` analyses
+// `cfd.vtp` alone, then the surface, attaches a reference to it from each of the three other files in
+// turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
+// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -229,10 +232,57 @@ if (mode === 'quick') {
     geometry: result.geometry,
     forces: result.forces,
     accuracy: result.accuracy,
+    totals: result.totals,
+    reference: result.reference,
     triangles: result.mesh.indices.length / 3,
     vertices: result.mesh.positions.length / 3,
     exportable: engine.canExportVtp(result),
     sameCells: engine.workingCells(result) === result.cells,
+  }));
+  process.exit(0);
+}
+
+if (mode === 'reference') {
+  const [withCfd, remeshed, bare] = modelSource.split(',').map((source) => new File([readFileSync(source)], basename(source)));
+  const engine = createEngine();
+  const analyse = async (file) => {
+    let exact;
+    const everyPolygon = new Promise((resolve) => { exact = resolve; });
+    const result = await engine.analyze(file, { exact });
+    return Object.assign(result, await everyPolygon);
+  };
+  const numbers = ({ reference, forces, accuracy, mesh }) => ({ reference, cdPCfd: forces.cdPCfd, accuracy, meshHasCfd: 'cfd' in mesh });
+  const refusal = (promise) => promise.then(() => null, (error) => error.message);
+
+  const alone = await analyse(withCfd);
+  write('alone_mesh_cfd.f32', alone.mesh.cfd);
+  const result = await analyse(new File([readFileSync(path)], basename(path)));
+  const before = numbers(result);
+  const names = { withCfd: await engine.cellArrayNames(withCfd), bare: await engine.cellArrayNames(bare) };
+  const refusals = {
+    bare: await refusal(engine.attachReference(result, bare)),
+    missing: await refusal(engine.attachReference(result, withCfd, { array: 'CpMissing' })),
+  };
+
+  const fractions = [];
+  const attached = await engine.attachReference(result, withCfd, { onProgress: (fraction) => fractions.push(fraction) });
+  const same = numbers(result);
+  write('same_mesh_cfd.f32', result.mesh.cfd);
+  write('same_returned_cfd.f32', attached.cfd);
+  write('same_file_cfd.f32', (await engine.fileCells(result)).cfd);
+  const exported = await engine.exportVtp(result);
+  writeFileSync(join(outDir, 'exported.vtp'), new Uint8Array(await exported.arrayBuffer()));
+
+  await engine.attachReference(result, remeshed);
+  const nearest = numbers(result);
+  write('nearest_file_cfd.f32', (await engine.fileCells(result)).cfd);
+
+  await engine.detachReference(result);
+  const detached = numbers(result);
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
+    geometry: result.geometry, alone: numbers(alone), before, names, refusals, same, nearest, detached,
+    progressed: fractions.length > 0 && fractions.every((fraction, i) => fraction >= (fractions[i - 1] ?? 0) && fraction <= 1),
+    fileCellsAfterDetach: (await engine.fileCells(result)).cfd,
   }));
   process.exit(0);
 }

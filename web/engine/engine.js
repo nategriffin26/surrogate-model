@@ -15,8 +15,8 @@ export function createEngine() {
    */
   /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, complete: boolean, release: () => void }>} */
   const analyses = new Map();
-  /** `explain`, `polygonAt` and `fileCells` requests awaiting the worker's answer, by id. */
-  /** @type {Map<number, { resolve: Function, reject: Function }>} */
+  /** `explain`, `polygonAt`, `fileCells` and reference requests awaiting the worker's answer, by id. */
+  /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
   const questions = new Map();
   /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
   const exports = new Map();
@@ -51,6 +51,9 @@ export function createEngine() {
         else request.reject(new Error(data.message));
         return;
       }
+      case 'answerProgress':
+        questions.get(data.id).onProgress(data.fraction);
+        return;
       case 'exportProgress':
         exports.get(data.id).onProgress(data.fraction);
         return;
@@ -181,10 +184,10 @@ export function createEngine() {
     return ask({ type: 'polygonAt', analysis, point, normal });
   }
 
-  function ask(message) {
+  function ask(message, onProgress = () => {}) {
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      questions.set(id, { resolve, reject });
+      questions.set(id, { resolve, reject, onProgress });
       worker.postMessage({ ...message, id });
     });
   }
@@ -214,9 +217,34 @@ export function createEngine() {
     });
   }
 
+  function cellArrayNames(file) {
+    return ask({ type: 'cellArrayNames', file });
+  }
+
+  function attachReference(result, file, { array, onProgress } = {}) {
+    return changeReference(result, { type: 'attachReference', file, array }, onProgress);
+  }
+
+  function detachReference(result) {
+    return changeReference(result, { type: 'detachReference' });
+  }
+
+  /** Ask the worker to change a car's reference, then write what that changes into `result` itself. */
+  async function changeReference(result, message, onProgress) {
+    const current = completeAnalysis(result);
+    if (!current) throw new Error('A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.');
+    const { reference, cdPCfd, accuracy, cfd, fullCfd } = await ask({ ...message, analysis: current.id }, onProgress);
+    result.reference = reference;
+    result.forces.cdPCfd = cdPCfd;
+    result.accuracy = accuracy;
+    if (cfd) result.mesh.cfd = cfd;
+    else delete result.mesh.cfd;
+    return { reference, forces: result.forces, accuracy, cfd, fullCfd };
+  }
+
   return {
     analyze, analyzeSurface, predictQuick, workingCells, fileCells, explain, polygonAt, canExportVtp, exportVtp,
-    device: device.promise, model: model.promise,
+    cellArrayNames, attachReference, detachReference, device: device.promise, model: model.promise,
   };
 }
 
