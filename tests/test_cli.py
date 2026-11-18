@@ -51,7 +51,8 @@ def test_predict_writes_the_prediction_on_the_files_own_cells(tmp_path: Path, ch
     shuffled.save(tmp_path / "shuffled.vtp")
 
     for name in ("car", "shuffled"):
-        cli.main(["predict", str(tmp_path / f"{name}.vtp"), "--output", str(tmp_path / f"{name}_prediction.vtp"), "--device", "cpu"])
+        prediction = tmp_path / f"{name}_prediction.vtp"
+        cli.main(["predict", str(tmp_path / f"{name}.vtp"), "--output", str(prediction), "--device", "cpu"])
     written = _cell_arrays(tmp_path / "car_prediction.vtp")
     reshuffled = _cell_arrays(tmp_path / "shuffled_prediction.vtp")
 
@@ -75,7 +76,8 @@ def test_predict_compares_with_cfd_only_when_the_file_carries_it(
 
     cli.main(["predict", str(tmp_path / "with_cfd.vtp"), "--json", str(tmp_path / "with_cfd.json"), "--device", "cpu"])
     with_cfd = capsys.readouterr().out
-    cli.main(["predict", str(tmp_path / "geometry_only.vtp"), "--json", str(tmp_path / "geometry_only.json"), "--device", "cpu"])
+    geometry_only_json = tmp_path / "geometry_only.json"
+    cli.main(["predict", str(tmp_path / "geometry_only.vtp"), "--json", str(geometry_only_json), "--device", "cpu"])
     geometry_only = capsys.readouterr().out
 
     assert "CFD agreement" in with_cfd and "no CpMeanTrim" not in with_cfd
@@ -87,7 +89,9 @@ def test_predict_compares_with_cfd_only_when_the_file_carries_it(
     assert json.loads((tmp_path / "geometry_only.json").read_text())["ground_truth_metrics"] is None
 
 
-def test_predict_refuses_an_output_that_is_not_a_vtp(tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_predict_refuses_an_output_that_is_not_a_vtp(
+    tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Catches `--output car.vtk` written silently in another format than the browser's export."""
     _synthetic_car().save(tmp_path / "car.vtp")
     with pytest.raises(SystemExit) as stopped:
@@ -109,7 +113,7 @@ class StandIn:
         stand_in = self
 
         class Handler(BaseHTTPRequestHandler):
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - the base class names it
+            def log_message(self, format: str, *args: object) -> None:
                 pass
 
             def do_HEAD(self) -> None:
@@ -166,7 +170,9 @@ def test_fetch_writes_each_file_whole_and_skips_files_already_here(tmp_path: Pat
     assert stand_in.gets == []
 
 
-def test_fetch_continues_an_interrupted_download(tmp_path: Path, stand_in: StandIn, capsys: pytest.CaptureFixture[str]) -> None:
+def test_fetch_continues_an_interrupted_download(
+    tmp_path: Path, stand_in: StandIn, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Catches a dropped connection reported as success or as a traceback, a part thrown away instead of
     continued, and a continuation that appends at the wrong offset."""
     stand_in.drop_after = 1_000_000

@@ -10,12 +10,22 @@ import pytest
 import pyvista as pv
 
 from surrogate import features
-from surrogate.features import FEATURE_COLUMNS, SLICE_DX, SurfaceContext, extract_query_features, surface_samples
+from surrogate.features import (
+    FEATURE_COLUMNS,
+    SLICE_DX,
+    SLICE_READS,
+    SURFACE_WIDTH,
+    SurfaceContext,
+    extract_query_features,
+    surface_samples,
+)
 from surrogate.model import SurrogateEnsemble
 from surrogate.surface import SurfaceMesh, compute_pressure_forces, read_vtp_surface, sample_cells_by_area
 
 REPO = Path(__file__).resolve().parents[1]
 RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"
+# A car-sized box.
+BOX = (-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)
 
 
 def _make_closed_box_vtp(
@@ -26,7 +36,7 @@ def _make_closed_box_vtp(
     poison_solver_fields: bool = False,
 ) -> Path:
     """Create a synthetic car-sized closed box surface mesh saved as `.vtp`."""
-    box = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(3)
+    box = pv.Box(bounds=BOX).triangulate().subdivide(3)
     if inward_normals:
         box = box.flip_faces()
 
@@ -103,20 +113,21 @@ def test_geometry_only_vtp_without_cp_and_poisoned_solver_arrays_produce_identic
 def test_the_surface_around_a_cell_does_not_depend_on_the_mesh_density(tmp_path: Path) -> None:
     """Catches surroundings averaged over cells rather than area: the same box meshed with cells of
     14 cm and of 3.6 cm must read the same mean normal and amount, and about 1 on a flat face."""
-    box = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate()
+    box = pv.Box(bounds=BOX).triangulate()
     box.subdivide(5).save(tmp_path / "coarse.vtp")
     box.subdivide(7).save(tmp_path / "fine.vtp")
     coarse, fine = read_vtp_surface(tmp_path / "coarse.vtp"), read_vtp_surface(tmp_path / "fine.vtp")
     # Points on the roof at least 60 cm from its edges
-    roof = coarse.centers[(coarse.centers[:, 2] > 1.09) & (np.abs(coarse.centers[:, 1]) < 0.3) & (coarse.centers[:, 0] > 0.0) & (coarse.centers[:, 0] < 3.0)]
+    on_roof = (coarse.centers[:, 2] > 1.09) & (np.abs(coarse.centers[:, 1]) < 0.3)
+    roof = coarse.centers[on_roof & (coarse.centers[:, 0] > 0.0) & (coarse.centers[:, 0] < 3.0)]
     up = np.tile(np.array([0.0, 0.0, 1.0], dtype=np.float32), (len(roof), 1))
     f_coarse = extract_query_features(SurfaceContext.from_surface(coarse), roof, up)
     f_fine = extract_query_features(SurfaceContext.from_surface(fine), roof, up)
-    per_scale = sum(width for _, width in features.SURFACE_READS)
     for k, scale in enumerate(features.SURFACE_SCALES):
         if scale < 0.25:  # the coarse cells (14 cm) cannot resolve the smaller scales
             continue
-        cols = slice(FEATURE_COLUMNS.surface.start + per_scale * k, FEATURE_COLUMNS.surface.start + per_scale * k + 4)
+        start = FEATURE_COLUMNS.surface.start + SURFACE_WIDTH * k
+        cols = slice(start, start + 4)
         np.testing.assert_allclose(f_coarse[:, cols], f_fine[:, cols], atol=0.03)
         if scale < 0.6:  # the roof is flat for 60 cm around every point
             np.testing.assert_allclose(f_fine[:, cols][:, :3], np.tile([0.0, 0.0, 1.0], (len(roof), 1)), atol=0.03)
@@ -131,15 +142,15 @@ def _cell_near(surface: SurfaceMesh, point: tuple[float, float, float], facing: 
 
 
 def _slice_read(read: str, dx: float) -> int:
-    """The column of one of a slice's four reads, for the slice `dx` from the cell's station."""
-    return FEATURE_COLUMNS.slices.start + 4 * (1 + SLICE_DX.index(dx)) + ("area", "outboard", "above", "below").index(read)
+    """The column of one of a slice's reads, for the slice `dx` from the cell's station."""
+    return FEATURE_COLUMNS.slices.start + len(SLICE_READS) * (1 + SLICE_DX.index(dx)) + SLICE_READS.index(read)
 
 
 def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path: Path) -> None:
     """Catches lookups that blend the two halves of the car: a part sticking out of the +y side must
     show beyond the cells behind it on that side, and not behind the same cells on the -y side. A part
     as wide on the -y side, 1.4 m further back, keeps the centre plane at y = 0."""
-    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(6)
+    body = pv.Box(bounds=BOX).triangulate().subdivide(6)
     part = pv.Box(bounds=(1.2, 1.4, 0.9, 1.15, 0.8, 0.95)).triangulate().subdivide(4)
     other_part = pv.Box(bounds=(2.6, 2.8, -1.15, -0.9, 0.8, 0.95)).triangulate().subdivide(4)
     body.merge(part).merge(other_part).save(tmp_path / "one_sided.vtp")
@@ -159,7 +170,7 @@ def test_a_roof_block_on_one_side_shows_in_the_slices_through_it(tmp_path: Path)
     or the centre plane) or from the body's underside, and its area summed along the wrong axis or
     unscaled: a 20 cm block on the roof's +y half must stand 20 cm above the roof cells 20 cm behind
     it on that half and not on the -y half, and add its 0.3 x 0.2 m to the area of its slice."""
-    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(6)
+    body = pv.Box(bounds=BOX).triangulate().subdivide(6)
     block = pv.Box(bounds=(1.2, 1.4, 0.3, 0.6, 1.1, 1.3)).triangulate().subdivide(5)
     body.merge(block).save(tmp_path / "roof_block.vtp")
     surface = read_vtp_surface(tmp_path / "roof_block.vtp")
@@ -182,7 +193,7 @@ def test_a_coarse_mesh_fills_the_slices_as_a_fine_one_does(tmp_path: Path) -> No
     finely, the box must fill the rasters alike, and its samples must carry its whole area. The side
     view holds the reach within 1 cm of each height, so where the box's edge lies just at a window's
     edge the two meshes' samples, a few millimetres apart, can fall either side of it."""
-    box = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate()
+    box = pv.Box(bounds=BOX).triangulate()
     box.subdivide(3).save(tmp_path / "coarse.vtp")
     box.subdivide(7).save(tmp_path / "fine.vtp")
     coarse, fine = read_vtp_surface(tmp_path / "coarse.vtp"), read_vtp_surface(tmp_path / "fine.vtp")
@@ -230,16 +241,16 @@ def test_lifting_the_body_against_the_lookups_grids_hardly_moves_its_inputs(tmp_
 
     before, after = car(0.0), car(0.007)
     assert before.bounds[0] == after.bounds[0] and before.bounds[4] == after.bounds[4]
-    top = np.flatnonzero((before.normals[:, 2] > 0.95) & (np.abs(before.centers[:, 1]) < 0.6) & (before.centers[:, 0] > 0.2) & (before.centers[:, 0] < 1.5))
+    on_top = (before.normals[:, 2] > 0.95) & (np.abs(before.centers[:, 1]) < 0.6)
+    top = np.flatnonzero(on_top & (before.centers[:, 0] > 0.2) & (before.centers[:, 0] < 1.5))
     f_before = extract_query_features(SurfaceContext.from_surface(before), before.centers[top], before.normals[top])
     f_after = extract_query_features(SurfaceContext.from_surface(after), after.centers[top], after.normals[top])
     change = np.abs(f_after - f_before)
 
-    per_scale = sum(width for _, width in features.SURFACE_READS)
     amount = FEATURE_COLUMNS.surface.start + 3
     assert change[:, amount].max() < 0.08  # 3 cm
-    assert change[:, amount + per_scale].max() < 0.02  # 10 cm
-    own_slice = change[:, FEATURE_COLUMNS.slices.start : FEATURE_COLUMNS.slices.start + 4].max(axis=0)
+    assert change[:, amount + SURFACE_WIDTH].max() < 0.02  # 10 cm
+    own_slice = change[:, FEATURE_COLUMNS.slices.start : FEATURE_COLUMNS.slices.start + len(SLICE_READS)].max(axis=0)
     assert own_slice[0] < 0.01  # area, m^2
     assert own_slice[1:].max() < 0.003  # outboard, above and below, m
 
@@ -266,7 +277,8 @@ def test_a_variant_moved_against_the_lookups_changes_the_prediction_by_less_than
         # The bounds are kept, and with them the nose, ground and grids of the unmoved car
         moved = dataclasses.replace(surface, points=surface.points + offset, centers=surface.centers + offset)
         moved_inputs = inputs.copy()
-        moved_inputs[:, looked_up] = extract_query_features(SurfaceContext.from_surface(moved), centers + offset, normals)[:, looked_up]
+        moved_context = SurfaceContext.from_surface(moved)
+        moved_inputs[:, looked_up] = extract_query_features(moved_context, centers + offset, normals)[:, looked_up]
         change = np.abs(ensemble.predict_features(moved_inputs).cp_mean - before)
         assert np.percentile(change, 99) < bound, f"axis {'xyz'[axis]}"
 
