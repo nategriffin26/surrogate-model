@@ -1,4 +1,4 @@
-# Reproducing the model, tests and layout
+# Development
 
 ## Reproducing the model
 
@@ -11,14 +11,29 @@ uv run surrogate reproduce   # each step below whose output is not current, then
 
 | Step | Writes | Time on an Apple M5 Pro |
 | :--- | :--- | :--- |
-| `uv run surrogate preprocess` | `data/processed/`: 120,000 cells of each car, drawn by area, and their inputs | 8 min |
+| `uv run surrogate preprocess` | `data/processed/`: 120,000 cells of each car, drawn by area, and their inputs | 9 min |
 | `uv run surrogate train` | `artifacts/`: the five networks and their spread factor (`ensemble.pt`, 3.2 MB), and `metrics.json`, which holds the numbers in the results table, the ablations and the learning curve | 16 min on the GPU, 87 min on the CPU |
 | `uv run surrogate export` | `web/model/`: the networks for the browser, and the training cars the Model page draws | seconds |
 | `uv run surrogate examples` | `web/examples/`: runs 1 and 500, analysed by the browser engine in headless Chrome | 40 s |
 
 `reproduce` skips a step whose output was made from the current output of the step before, and stops before it starts when a surface file or Chrome is missing. After a change to the inputs' code, run `preprocess` first.
 
-`train` runs on the GPU when there is one. `--device cpu` trains without it: one network takes 58 s there against 9 s on the GPU, and cross-validation $R^2$ is `0.9458` on the GPU and `0.9454` on the CPU. `--skip-ablations` trains only the shipped networks (2.5 min on the GPU, 18 min on the CPU).
+`train` runs on the GPU when there is one. `--device cpu` trains without it: one network takes 58 s there against 9 s on the GPU, and cross-validation $R^2$ is `0.9458` on the GPU and `0.9454` on the CPU. `train` ends by printing the run's scores beside those of the model that was in `artifacts/` before it, and whether the five networks came out the same, weight for weight. On an Apple M5 Pro's GPU, training again on the same `data/processed/` writes the same `ensemble.pt` byte for byte; in `metrics.json`, `train_seconds` changes, and LightGBM's per-car values can differ in the fifth decimal from run to run. `--check` trains only the shipped networks and their spread (5 min on the GPU, 18 min on the CPU), prints the same comparison and writes nothing.
+
+Every long step shows one status line: the share done, the time since it started, the time left and what it is on. On a terminal the line is rewritten in place; piped or captured, it is printed when a step starts and every 30 s. The share done is weighted by each step's seconds measured on an Apple M5 Pro: `training_steps` in `train.py`, `PREPROCESS_STEPS`, `INFERENCE_STEPS` and `EXAMPLES_STEPS`. Measure them again after a change that moves a step's time.
+
+## Predicting from Python
+
+`uv run surrogate predict` runs these two calls:
+
+```python
+from surrogate import SurrogateEnsemble, run_vtp_inference
+
+ensemble = SurrogateEnsemble.load("artifacts/ensemble.pt")
+result = run_vtp_inference("data/raw/holdout/run_1/boundary_1.vtp", ensemble)
+```
+
+`result` holds $C_p$ and its spread per cell; pressure drag and lift for the mean field and for each network; the car's size, frontal area and coverage by the training cars; cumulative drag from nose to tail; and, when the file carries CFD, the CFD forces and the agreement with them. `predict --json` writes all of it but the per-cell arrays, and `predict --output` writes the file back with the cell arrays `CpPredicted` and `CpSpread`, as the tool's export does.
 
 ## Tests
 
@@ -27,7 +42,7 @@ uv run surrogate reproduce   # each step below whose output is not current, then
 - The browser-engine tests need Bun or Deno and skip without one.
 - The Worker's tests and the assistant's Markdown test need Deno.
 - The tests that read a full car skip without its file in `data/raw/`.
-- The engine's mesh, file-format and sampling tests run under Deno: `deno test --allow-read tests/meshes.test.js tests/result.test.js tests/nearest.test.js`.
+- The engine's mesh and file-format tests run under Deno: `deno test --allow-read tests/meshes.test.js tests/result.test.js`.
 - The lint is `uv run ruff check` and `uv run ruff format --check`; the JavaScript formatting check is `bunx prettier --check web tests deploy`.
 
 ## Repository layout
@@ -35,6 +50,7 @@ uv run surrogate reproduce   # each step below whose output is not current, then
 ```
 src/surrogate/       the model in Python; the reference for the browser engine
   cli.py               the surrogate command: one subcommand per step, and the status of this copy
+  progress.py          the status line every long step prints
   dataset.py           the DrivAerML runs, where their files go under data/raw/, and fetching them
   surface.py           reads a .vtp: polygons only, outward normals, areas, force integrals
   features.py          the 107 inputs

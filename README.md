@@ -1,61 +1,82 @@
 # Surface pressure surrogate for DrivAerML
 
-A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and Surrogate Model, a browser tool for working with the prediction on a dropped `.vtp` file. The model is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On two test cars kept out of training (runs 1 and 500) it explains 96% of the variance of the CFD pressure (area-weighted $R^2$ `0.9558`).
+A model that predicts the mean pressure coefficient $C_p$ on every cell of a DrivAerML car from its geometry alone, and Surrogate Model, a browser tool for working with what it predicts. I trained it on the ten assigned cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445 and 474). On the two cars I kept out of training entirely, runs 1 and 500, it scores an area-weighted $R^2$ of 0.956 against the CFD.
 
 ![Surrogate Model showing the predicted pressure on DrivAerML run 1](docs/images/surrogate-model.png)
 
-## Run it
+## Quick start
 
-Needs [uv](https://docs.astral.sh/uv/), which installs Python (3.11 to 3.13) and the dependencies on first use. The repository as cloned holds the trained model and two analysed examples, so the tool won't need to download them:
+The one prerequisite is [uv](https://docs.astral.sh/uv/getting-started/installation/). The first command you run installs the dependencies, about 300 MB of packages that are mostly PyTorch and VTK (20 s on my machine), plus Python itself if you don't have 3.11 to 3.13.
+
+```bash
+git clone https://github.com/nategriffin26/surrogate-model.git
+cd surrogate-model
+uv run surrogate
+```
+
+That last command lists the commands and what your copy has. The clone already holds the trained model and the two held-out cars analysed, so the web app works straight away. The DrivAerML files themselves are about 0.6 GB a car and download only when a command needs them.
+
+| To | Run | Time on my Apple M5 Pro | Download |
+| :--- | :--- | :--- | :--- |
+| Use the web app | `uv run surrogate app` | starts at once | none |
+| Check it on a car it never saw | `uv run surrogate predict 1` | about 75 s | 0.66 GB |
+| Train it yourself | `fetch`, `preprocess`, `train` | about 25 min plus the download | 7.8 GB |
+
+## Run the web app
 
 ```bash
 uv run surrogate app
 ```
 
-Open `http://127.0.0.1:8740/` in a browser with WebGPU (current Chrome, Edge or Safari), then drop a `boundary_i.vtp` file on the page or open one of the two bundled examples (runs 1 and 500). `--port` picks another port.
+Open http://127.0.0.1:8740/ in Chrome, Edge or Safari. The first screen has runs 1 and 500 ready to open; click one to see the predicted pressure on the car with the CFD forces beside it. From there you can switch the field to drag, the spread between the networks, the CFD pressure or the error; cut a section and plot $C_p$ along it against the CFD; or stretch, raise or lower the car and see what changes. You can also drop any `boundary_<run>.vtp` on the page, like the one `predict` downloads below, and the model runs on it in the browser in a few seconds.
 
-To run the model on a DrivAerML file from the command line, fetch the two holdout cars and predict one:
+If port 8740 is taken, add `--port 8741`. The Assistant panel needs an OpenRouter key; [docs/assistant.md](docs/assistant.md) covers it, and the rest of the tool works without one.
 
-```bash
-uv run surrogate fetch holdout     # runs 1 and 500, 1.3 GB -> data/raw/holdout/
-uv run surrogate predict data/raw/holdout/run_1/boundary_1.vtp --output run_1_prediction.vtp
-```
-
-`predict` takes any `.vtp` surface, with or without `CpMeanTrim`, and asks the model at every cell (95 s for run 1's 8.8M cells on an Apple M5 Pro). It prints the car's size against the training cars', its coverage, the pressure drag and lift with each network's drag, and the spread, and when the file carries CFD pressure, also the CFD drag and lift and the area-weighted $R^2$ against them. `--output` writes the file back with the cell arrays `CpPredicted` and `CpSpread`, as the tool's export does, and `--json` writes the summary for scripts. The same from Python:
-
-```python
-from surrogate import SurrogateEnsemble, run_vtp_inference
-
-ensemble = SurrogateEnsemble.load("artifacts/ensemble.pt")
-result = run_vtp_inference("data/raw/holdout/run_1/boundary_1.vtp", ensemble)
-```
-
-`result` holds $C_p$ and its spread per cell; pressure drag and lift for the mean field and for each network; the car's size, frontal area and coverage by the training cars; cumulative drag from nose to tail; and, when the file carries CFD, the CFD forces and the agreement with them.
-
-## Assistant
-
-The Assistant panel holds an agent that works the tool with the engineer's own controls and a Python kernel in the browser. To enable it, set `OPENROUTER_API_KEY` in the environment or in `local/secrets/assistant.env`; without a key the panel says the assistant is not available and the rest of the tool works.
-
-## Retrain and test
-
-`uv run surrogate` lists its commands and what this copy holds, with the command that fills each gap. Retraining needs the twelve DrivAerML surface files (7.8 GB) and, for the bundled examples, Google Chrome:
+## Check it on a car it never saw
 
 ```bash
-uv run surrogate fetch       # the ten training and two holdout cars -> data/raw/
-uv run surrogate reproduce   # each step whose output is not current, then the tool
-uv run pytest                # about 10 minutes on an Apple M5 Pro
+uv run surrogate predict 1
 ```
 
-Of the steps `reproduce` runs, preprocessing takes 8 min and training 16 min on the GPU of an Apple M5 Pro.
+This downloads run 1 into `data/raw/holdout/` the first time, predicts all 8.8 million cells, and since the file carries the CFD answer, finishes with the two side by side:
 
-## Read more
+```
+                   Predicted      CFD    Error
+Drag Cd,p             0.2592   0.2736  -0.0144
+Lift Cl,p             0.0659   0.0652  +0.0007
+Cp, area-weighted  R² 0.9503, MAE 0.0337 against CFD over all 8,828,095 cells
+```
 
-- [docs/model.md](docs/model.md): the approach, the inputs, training, the results table and findings, and the limitations.
+Above that it prints the car's size against the training cars' and how much the five networks disagree. Runs 1 and 500 are the two cars I held out from training, feature scaling and every design decision. Any other run from 1 to 500 that isn't one of the ten training cars is just as unseen, so `uv run surrogate predict 250` works too; that car is wider than any of the training cars, and the output says so. `--output run_1.vtp` writes the prediction back into the file as `CpPredicted` and `CpSpread` for ParaView, and `--json run_1.json` saves the summary.
+
+## Train it yourself
+
+```bash
+uv run surrogate fetch        # the ten training cars and the two holdout cars, 7.8 GB
+uv run surrogate preprocess   # about 9 min
+uv run surrogate train        # about 16 min
+```
+
+`preprocess` samples 120,000 cells per car and computes their inputs; `train` fits the five networks and their spread, then the ablations and the learning curve behind the results in [docs/model.md](docs/model.md). Each command shows what it's working on, how far along it is and the time left, and ends with the command to run next. `train` finishes by putting your run's scores beside the model that was in `artifacts/` before it, which in a fresh clone is mine, and checks whether the networks came out the same:
+
+```
+                    CV R²  CV Cd,p MAE  Holdout R²  Holdout Cd,p MAE
+artifacts/ before  0.9458       0.0196      0.9558            0.0128
+This run           0.9458       0.0196      0.9558            0.0128
+```
+
+On my M5 Pro every score and every network weight came out identical to mine, starting from a fresh `preprocess`. For a quicker check, `uv run surrogate train --check` (about 5 min) trains only the five shipped networks and their spread, prints the same comparison and writes nothing.
+
+Without a GPU it trains on the CPU, several times slower: `train --check` took 18 min there, and cross-validation $R^2$ came out 0.9454 instead of 0.9458.
+
+## More
+
+- [docs/model.md](docs/model.md): the approach, the inputs, the results table and the limitations.
 - [docs/web-app.md](docs/web-app.md): what the tool does and how it runs in the browser.
-- [docs/assistant.md](docs/assistant.md): what the assistant asks before doing, its Python kernel and its route to its model.
-- [docs/demo-outline.md](docs/demo-outline.md): the outline of a customer demo.
-- [docs/development.md](docs/development.md): reproducing the model step by step, the tests and lint, and the repository layout.
+- [docs/assistant.md](docs/assistant.md): the assistant, its Python kernel and its key.
+- [docs/development.md](docs/development.md): every pipeline step, predicting from Python, the tests and lint, and the repository layout.
+- [docs/demo-outline.md](docs/demo-outline.md): how I'd demo it to a customer.
 
 ## Data and license
 
-DrivAerML (Ashton et al., 2024) is licensed CC BY-SA 4.0; see [data/README.md](data/README.md) and `data/metadata/LICENSE.txt`. Only surface files are used, and only the ten assigned runs train the model.
+DrivAerML (Ashton et al., 2024) is licensed CC BY-SA 4.0; see [data/README.md](data/README.md) and `data/metadata/LICENSE.txt`. Only the surface files are used, and only the ten assigned runs train the model.

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML cars and Surrogate Model, a browser tool for working with its predictions. The repository is a take-home submission: its reviewers read the code, the tests and the documents, and the author has to be able to explain every part. `README.md` holds setup and the commands to run, retrain and test. `docs/model.md` holds the approach, the input table, the measured results and the limitations; `docs/development.md` holds the reproduce steps, the tests and the per-file repository layout; `docs/web-app.md`, `docs/assistant.md` and `docs/demo-outline.md` describe the tool, its assistant and the customer demo.
+A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML cars and Surrogate Model, a browser tool for working with its predictions. The repository is a take-home submission: its reviewers read the code, the tests and the documents, and the author has to be able to explain every part. `README.md` is for a reviewer who has never seen the repository and wants to try it: setup, the web app, a prediction on a car the model never saw, and retraining, each with its commands, time and download, and links for everything else. `docs/model.md` holds the approach, the input table, the measured results and the limitations; `docs/development.md` holds the reproduce steps, the tests and the per-file repository layout; `docs/web-app.md`, `docs/assistant.md` and `docs/demo-outline.md` describe the tool, its assistant and the customer demo.
 
 ## Rules
 
@@ -26,7 +26,7 @@ A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML car
 
 After a change to the inputs or a retraining, in this order: `uv run surrogate preprocess` (inputs changed), `uv run surrogate train`, the same change in `web/engine/features.js`, and in `web/engine/lookups.js` when the change is to the grids the inputs read (inputs changed), `uv run surrogate export`, `uv run surrogate examples`, `uv run pytest`, then the input table, results and limitations in `docs/model.md` from `artifacts/metrics.json`. `uv run surrogate` shows which of these outputs are not current. The tests fail while a bundled example was computed with other weights. The Model page (`web/app/model/`) names each group of inputs by the kind of its first input (`groups.js`); a new group stops the page with an error naming it until `groups.js` has words for it.
 
-Choose between designs on cross-validation over the ten training cars. Seeds 42, 43 and 44 of the shipped networks span `0.0003` in CV $R^2$ and `0.0051` in CV $C_{d,p}$ MAE (`docs/model.md`); a difference of that size between two single runs is not a finding, so compare on three seeds before concluding anything.
+Choose between designs on cross-validation over the ten training cars. Seeds 42, 43 and 44 of the shipped networks span `0.0003` in CV $R^2$ and `0.0051` in CV $C_{d,p}$ MAE (`docs/model.md`); a difference of that size between two single runs is not a finding, so compare on three seeds before concluding anything. `uv run surrogate train --check --seed 43` trains the shipped networks on another seed and prints their scores beside those in `artifacts/` without writing anything.
 
 ## Checks
 
