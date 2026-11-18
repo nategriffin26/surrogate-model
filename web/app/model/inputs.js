@@ -1,13 +1,13 @@
-// What a cell is told. First the invented body (`primer.js`), its groups of inputs as modes; then the reference car,
-// with its cell as a handle the reader drags or moves with a click, the shown group's inputs drawn on the car where
+// What a cell is told. First the invented body (`primer.js`), its kinds of input as modes; then the reference car,
+// with its cell as a handle the reader drags or moves with a click, the shown kind's inputs drawn on the car where
 // they are read, the networks' answer there, and the car's own numbers in the body's grid.
 
 import { h } from '../dom.js';
 import { signed } from '../format.js';
 import { Viewer } from '../../viewer/viewer.js';
-import { COLOR } from './body-views.js';
 import { section } from './charts.js';
 import { copied } from './copy.js';
+import { COLORS } from './groups.js';
 import { locator } from './overview.js';
 import { createPrimer } from './primer.js';
 import { Stencil } from './stencil.js';
@@ -44,20 +44,18 @@ export function createInputs({ card, groups, engine, ask }) {
 	const stencil = new Stencil(viewer);
 	const answer = h('div', { class: 'point-answer' });
 	const caption = h('p', { class: 'car-caption' });
-	const carGrid = h('div', { class: 'primer-vector' });
 	// `close`: whether the camera is in nearby surface's close view of the cell.
 	const state = { car: null, point: null, close: false };
 	const primer = createPrimer({ card, groups, engine, onShow: () => { drawMarks(); frame(); } });
-	primer.carGrid(carGrid);
 
 	const el = section('inputs', {},
 		primer.el,
 		h('div', { class: 'inputs-car' },
 			h('div', { class: 'inputs-car-view' }, carHost),
-			h('div', { class: 'inputs-car-numbers' }, caption, answer, carGrid)));
+			h('div', { class: 'inputs-car-numbers' }, caption, answer, primer.carGrid)));
 	el.prepend(locator('inputs'));
 
-	/** The shown group's marks on the car, at its shown size or station; only the handle while all are shown. */
+	/** The shown kind's marks on the car, at its shown size or station; only the handle while all are shown. */
 	function drawMarks() {
 		const point = state.point;
 		if (!point?.explanation) {
@@ -65,13 +63,13 @@ export function createInputs({ card, groups, engine, ask }) {
 			return;
 		}
 		const shown = primer.shown;
-		const group = groups.find((g) => g.words === shown.group);
+		const group = groups.find((g) => g.id === shown.group);
 		if (!group) {
-			stencil.draw(point.explanation, [], COLOR.network, null);
+			stencil.draw(point.explanation, [], COLORS.network, null);
 			return;
 		}
 		const at = group.repeat ? { scale: shown.size, station: shown.station }[group.repeat] : null;
-		stencil.draw(point.explanation, point.marks.filter((m) => group.kinds.includes(m.layer)), group.color, at);
+		stencil.draw(point.explanation, point.marks.filter((m) => m.layer === group.id), group.color, at);
 	}
 
 	function showAnswer() {

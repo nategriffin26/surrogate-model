@@ -1,7 +1,8 @@
 // The model's page: one diagram of how the model works, read top to bottom. At the top the whole model in one line;
-// below it a section for each step, drawn on one reference car with a point the reader moves. Everything comes from
+// below it a section for each step, drawn on one reference car with a point the reader moves. Every number comes from
 // the model card (`engine.model`), the training cars' file, the reference car's result and `engine.explain` at the
-// point, so a retrained model changes the page without a change here.
+// point, so a retrained model changes the numbers without a change here. The figures are drawn for the model's three
+// kinds of input (`groups.js`); a model with another kind stops the page with an error naming it.
 //
 // The page is a reference, not a view of the workbench: it loads its car, a bundled example, itself, whatever is open
 // there, and keeps it for the session. It has its own viewer for that car and takes its pictures of the car from it.
@@ -14,7 +15,6 @@ import { Surface } from '../../viewer/surface.js';
 import { createAccuracy } from './accuracy.js';
 import { countWord } from './charts.js';
 import { copied, loadCopy, shareValues } from './copy.js';
-import { arrowDefinition } from './drawings.js';
 import { inputGroups } from './groups.js';
 import { CAMERA, createInputs, requestAt } from './inputs.js';
 import { measure } from './measures.js';
@@ -77,7 +77,6 @@ export function mountModelPage(host, { engine }) {
 	const notice = h('div', { class: 'page-notice', role: 'status' });
 	const title = h('h1');
 	const page = h('div', { class: 'model-page', 'data-state': 'loading' },
-		arrowDefinition(),
 		h('header', { class: 'model-top' }, title),
 		notice);
 	host.append(page);

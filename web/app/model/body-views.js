@@ -6,9 +6,9 @@ import { signed } from '../format.js';
 import { LENGTH, outline, profile, sideOutline } from './body.js';
 import { shade, sizeShades } from './charts.js';
 import { markup } from './copy.js';
+import { COLORS } from './groups.js';
 
 const NS = 'http://www.w3.org/2000/svg';
-export const COLOR = { position: '#2f739c', surface: '#a35b1a', slices: '#197b80', network: '#0b6fbf' };
 
 export const num = (v, digits = 2) => signed(v, digits);
 const metres = (v) => `${num(v)} m`;
@@ -154,7 +154,7 @@ function sidePosition({ X, Y, range }, { position: p }) {
 
 /** The surface reach of each size round the cell, the shown one strong. */
 function sideRings({ X, Y, k }, { position: { x, z }, surface }, size) {
-	const shades = sizeShades(COLOR.surface, surface.length);
+	const shades = sizeShades(COLORS.surface, surface.length);
 	return surface.map((s, si) => `<circle class="ring${si === size ? ' on' : ''}" style="--shade: ${shades[si]}" cx="${f1(X(x))}" cy="${f1(Y(z))}" r="${f1(Math.max(1.5, s.reach * k))}"/>`).join('');
 }
 
@@ -413,19 +413,30 @@ export function networkMarkup(width, { cps, cp }, layers) {
 }
 
 // ---- the inputs as one grid ----
+/** Space between squares of the grid, and between its blocks, in pixels. */
+const GAP = 2;
+const BLOCK_GAP = 10;
+
+/** The side of a square for a grid `width` pixels wide: the columns and the gaps between them fill it, to at most 20. */
+export function vectorCell(width, blocks) {
+	const columns = blocks.reduce((sum, block) => sum + block.cols, 0);
+	return Math.min(20, (width - (blocks.length - 1) * BLOCK_GAP - (columns - 1) * GAP) / columns);
+}
+
 /**
  * The numbers as one grid of `cell`-pixel squares, a block per group: position (two columns: distances, facing),
  * nearby surface (a row per size, a column per read), slices (a row per read, a column per station, ahead on the
  * left). `places` gives each column's block, column and row; `blocks` each block's group and width in columns.
  */
-export function vectorLayout(places, blocks, cell, gap = 2, blockGap = 10) {
+export function vectorLayout(places, blocks, cell) {
 	const top = 16;
-	const step = cell + gap;
+	const step = cell + GAP;
+	const rows = 1 + Math.max(...places.map((place) => place.row));
 	let x = 0;
 	const origin = {};
-	for (const block of blocks) { origin[block.group] = x; x += block.cols * step - gap + blockGap; }
+	for (const block of blocks) { origin[block.group] = x; x += block.cols * step - GAP + BLOCK_GAP; }
 	return {
-		width: x - blockGap, height: top + 4 * step - gap, origin, blocks,
+		width: x - BLOCK_GAP, height: top + rows * step - GAP, origin, blocks,
 		squares: places.map((c) => ({ x: origin[c.group] + c.col * step, y: top + c.row * step, size: cell, group: c.group })),
 	};
 }
@@ -433,7 +444,7 @@ export function vectorLayout(places, blocks, cell, gap = 2, blockGap = 10) {
 /** The squares of `layout`, each shaded by the number as the first network reads it (`standard`), the shown ones outlined. */
 export function vectorSquares(layout, standard, shown) {
 	let out = '';
-	for (const block of layout.blocks) out += `<text class="block-name" style="fill: ${COLOR[block.group]}" x="${f1(layout.origin[block.group])}" y="11">${block.count}</text>`;
+	for (const block of layout.blocks) out += `<text class="block-name" style="fill: ${COLORS[block.group]}" x="${f1(layout.origin[block.group])}" y="11">${block.count}</text>`;
 	layout.squares.forEach((sq, i) => {
 		out += `<rect class="square${shown.has(i) ? ' selected' : ''}" data-col="${i}" data-group="${sq.group}" x="${f1(sq.x)}" y="${f1(sq.y)}" width="${f1(sq.size)}" height="${f1(sq.size)}" rx="1.5" style="fill: ${shade(standard[i], 1.5)}"/>`;
 	});

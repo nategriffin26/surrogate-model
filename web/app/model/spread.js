@@ -2,7 +2,7 @@
 // error on one colour scale, and the error against the spread over cells grouped by spread.
 
 import { h, s } from '../dom.js';
-import { countWord, colorBar, pictureFrame, section } from './charts.js';
+import { colorBar, pictureFrame, section } from './charts.js';
 import { copied, text } from './copy.js';
 import { locator } from './overview.js';
 
@@ -30,19 +30,17 @@ function calibrationFigure(calibration) {
 		copied(s('text', { x: 8, y: CHART / 2, transform: `rotate(-90 8 ${CHART / 2})`, 'text-anchor': 'middle', class: 'axis-name' }), 'spread.calibration.y'));
 }
 
-/** @param {{ card: import('../../engine/result.js').ModelCard }} options */
-export function createSpread({ card }) {
+export function createSpread() {
 	const frames = Object.fromEntries(['sigmaSide', 'missSide', 'sigmaBelow', 'missBelow'].map((id) => [id, pictureFrame(id)]));
 	const scale = h('div', { class: 'picture-scales' });
 	const chart = h('div');
-	const networks = { networks: card.networks.length, networksWord: countWord(card.networks.length) };
 	const grid = h('div', { class: 'picture-grid two' },
 		h('div', { class: 'picture-heads copy-block' },
-			copied(h('span', { class: 'picture-head' }), 'spread.pictures.spread', networks),
+			copied(h('span', { class: 'picture-head' }), 'spread.pictures.spread'),
 			copied(h('span', { class: 'picture-head' }), 'spread.pictures.error')),
 		frames.sigmaSide.el, frames.missSide.el, frames.sigmaBelow.el, frames.missBelow.el);
 
-	const el = section('spread', networks,
+	const el = section('spread', {},
 		h('div', { class: 'spread-layout' },
 			h('figure', { class: 'figure' }, grid, scale),
 			h('figure', { class: 'figure' }, copied(h('figcaption'), 'spread.calibration.caption'), chart)));

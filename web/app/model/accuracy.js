@@ -2,7 +2,7 @@
 // and from below, every cell's prediction against its CFD, the error by region, and the accuracy measured in training.
 
 import { h, s } from '../dom.js';
-import { count, signed } from '../format.js';
+import { signed } from '../format.js';
 import { colorBar, pictureFrame, runOf, section } from './charts.js';
 import { copied } from './copy.js';
 import { locator } from './overview.js';
@@ -64,7 +64,7 @@ export function createAccuracy({ card }) {
 	const el = section('accuracy', {},
 		h('div', { class: 'headlines' },
 			h('div', { class: 'headline' }, h('span', { class: 'big-number num' }, card.crossValidation.meanR2.toFixed(3)),
-				copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.crossValidation', { trainingCars: count(card.trainRuns.length) })),
+				copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.crossValidation')),
 			outsideNumber,
 			carNumber),
 		h('figure', { class: 'figure' },
@@ -96,7 +96,7 @@ export function createAccuracy({ card }) {
 			for (const [id, frame] of Object.entries(frames)) frame.show(pictures[id]);
 			scales.replaceChildren(colorBar(maps.cp, 'accuracy.scales.cp'), colorBar(maps.error, 'accuracy.scales.error'));
 			charts.replaceChildren(
-				h('figure', { class: 'figure' }, copied(h('figcaption'), 'accuracy.scatter.caption'), scatterFigure(stats.scatter)),
+				h('figure', { class: 'figure' }, scatterFigure(stats.scatter)),
 				h('figure', { class: 'figure' }, copied(h('figcaption'), 'accuracy.regions.caption'), regionFigure(stats.regions)));
 		},
 		setPoint() {},

@@ -3,7 +3,7 @@
 
 import { h } from '../dom.js';
 import { count } from '../format.js';
-import { countWord, section } from './charts.js';
+import { section } from './charts.js';
 import { copied } from './copy.js';
 import { locator } from './overview.js';
 import { trainingCarDots, trainingCarImage } from './training.js';
@@ -17,7 +17,7 @@ export function createPointwise({ card, training }) {
 	const wholeCars = h('div', { class: 'example-grid' });
 	const cells = h('div', { class: 'example-cells' });
 
-	const el = section('point', { cars: count(cars), carsWord: countWord(cars), examples: count(examples) },
+	const el = section('point', { cars: count(cars) },
 		h('div', { class: 'figure-pair' },
 			h('figure', { class: 'figure' },
 				copied(h('figcaption'), 'point.cars.caption'),

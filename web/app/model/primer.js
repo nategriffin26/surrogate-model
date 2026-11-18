@@ -7,14 +7,15 @@
 import { h } from '../dom.js';
 import { aroundLookup, bodySurface, sideLookup } from './body.js';
 import {
-	COLOR, cm, endFrame, ladderHeight, networkMarkup, num, paintEnd, paintPatch, paintSide, patchFrame, sideFrame, vectorLayout,
+	cm, endFrame, ladderHeight, networkMarkup, num, paintEnd, paintPatch, paintSide, patchFrame, sideFrame, vectorCell, vectorLayout,
 	vectorSquares, view,
 } from './body-views.js';
 import { shade } from './charts.js';
 import { copied } from './copy.js';
+import { COLORS } from './groups.js';
 
-/** The modes, in the figure's order: a group of inputs each, by its words in copy.json, then all of them. */
-const MODES = ['position', 'surface', 'slices', 'all'];
+/** The modes, in the figure's order: a kind of input each, then all of them. */
+const MODES = ['position', 'surface', 'slice', 'all'];
 /** The words of position's seven numbers, in column order. */
 const POSITION_WORDS = ['fromNose', 'toTail', 'fromCentre', 'height', 'facingRearward', 'facingSideways', 'facingUp'];
 /** The words of one part of nearby surface's four numbers, in column order. */
@@ -29,26 +30,28 @@ const SIDE = { range: [-1.5, 4.5], below: 0.3 };
 const detailHeight = (width) => (width < 420 ? 230 : 260);
 
 /**
- * The model's columns arranged as the figure reads them: each column's group (by its words), column and row in the
- * grid; the sizes of nearby surface and the stations of the slices, ascending; and the columns of each.
+ * The model's columns arranged as the figure reads them: each column's group (its kind), column and row in the grid;
+ * the sizes of nearby surface and the stations of the slices, ascending; and the columns of each.
  * @param {import('../../engine/result.js').ModelColumn[]} columns
  * @param {import('./groups.js').InputGroup[]} groups
  */
 function arrange(columns, groups) {
-	const of = (words) => groups.find((g) => g.words === words).columns;
+	const of = (kind) => groups.find((g) => g.id === kind).columns;
 	const scales = [...new Set(of('surface').map((i) => columns[i].scale))].sort((a, b) => a - b);
-	const stations = [...new Set(of('slices').map((i) => columns[i].station))].sort((a, b) => a - b);
+	const stations = [...new Set(of('slice').map((i) => columns[i].station))].sort((a, b) => a - b);
 	const surface = scales.map((scale) => PARTS.map((part) => of('surface').filter((i) => columns[i].scale === scale && columns[i].part === part)));
-	const slices = stations.map((station) => READS.map((read) => of('slices').find((i) => columns[i].station === station && columns[i].read === read)));
+	const slices = stations.map((station) => READS.map((read) => of('slice').find((i) => columns[i].station === station && columns[i].read === read)));
 	if (surface.flat().some((part) => part.length !== SURFACE_WORDS.length)) throw new Error('The model reads nearby surface in a way the page cannot draw.');
-	const places = columns.map((_, i) => ({ group: groups.find((g) => g.columns.includes(i)).words }));
-	of('position').forEach((i, k) => Object.assign(places[i], { col: k < 4 ? 0 : 1, row: k % 4 }));
+	const places = columns.map((column) => ({ group: column.kind }));
+	// Position: its distances (measured along a direction) in one column, its facing in the next.
+	of('position').filter((i) => columns[i].along).forEach((i, row) => Object.assign(places[i], { col: 0, row }));
+	of('position').filter((i) => !columns[i].along).forEach((i, row) => Object.assign(places[i], { col: 1, row }));
 	surface.forEach((parts, row) => parts.forEach((part, p) => part.forEach((i, r) => Object.assign(places[i], { col: SURFACE_WORDS.length * p + r, row }))));
 	slices.forEach((reads, col) => reads.forEach((i, row) => Object.assign(places[i], { col, row })));
 	const blocks = [
 		{ group: 'position', cols: 2, count: of('position').length },
 		{ group: 'surface', cols: SURFACE_WORDS.length * PARTS.length, count: of('surface').length },
-		{ group: 'slices', cols: stations.length, count: of('slices').length },
+		{ group: 'slice', cols: stations.length, count: of('slice').length },
 	];
 	return { position: of('position'), scales, stations, surface, slices, places, blocks, sigma: (k) => columns[surface[k][0][0]].sigma };
 }
@@ -89,10 +92,8 @@ export function createPrimer({ card, groups, engine, onShow }) {
 	// The figure was designed to start on the second size and the fourth station ahead of the cell's own.
 	const ui = { mode: 0, size: 1, part: 0, station: stations.indexOf(0) - 4 };
 	const body = { result: null, side: null, vertex: -1, state: null, asking: false, next: -1 };
-	const grids = [];
-
 	const modeButtons = MODES.map((mode, i) => h('button', {
-		type: 'button', role: 'tab', style: `--group: ${mode === 'all' ? COLOR.network : COLOR[mode]}`, onclick: () => { ui.mode = i; repaint(); },
+		type: 'button', role: 'tab', style: `--group: ${mode === 'all' ? COLORS.network : COLORS[mode]}`, onclick: () => { ui.mode = i; repaint(); },
 	},
 	mode === 'all' ? null : h('i', { class: 'swatch' }),
 	copied(h('span'), `inputs.modes.${mode}`),
@@ -110,17 +111,19 @@ export function createPrimer({ card, groups, engine, onShow }) {
 	}, by < 0 ? '◂' : '▸');
 	const ahead = step(-1, 'Station further ahead');
 	const behind = step(1, 'Station further behind');
-	const note = (mode) => copied(h('p', { class: 'primer-note' }), `inputs.notes.${mode}`);
+	const note = (mode, values) => copied(h('p', { class: 'primer-note' }), `inputs.notes.${mode}`, values);
 	const controls = {
 		position: h('div', { class: 'primer-control' }, note('position')),
-		surface: h('div', { class: 'primer-control' }, sizes.el, parts.el, note('surface')),
-		slices: h('div', { class: 'primer-control' }, h('div', { class: 'stepper' }, ahead, stationName, behind), note('slices')),
+		surface: h('div', { class: 'primer-control' }, sizes.el, parts.el, note('surface', { sizes: scales.length })),
+		slice: h('div', { class: 'primer-control' }, h('div', { class: 'stepper' }, ahead, stationName, behind),
+			note('slice', { ahead: stations.filter((dx) => dx < 0).length, behind: stations.filter((dx) => dx > 0).length })),
 		all: h('div', { class: 'primer-control' }, note('all')),
 	};
 
 	const sideHost = h('div', { class: 'primer-figure' });
 	const detailHost = h('div', { class: 'primer-figure primer-detail' });
 	const vectorHost = h('div', { class: 'primer-vector' });
+	const carHost = h('div', { class: 'primer-vector' });
 	const readout = h('dl', { class: 'primer-readout' });
 	const failure = h('p', { class: 'point-failure', role: 'alert', hidden: true });
 	const el = h('div', { class: 'inputs-primer' },
@@ -141,8 +144,8 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			return paintSide(f, s, {
 				position: mode === 'position' || mode === 'all',
 				size: mode === 'surface' || mode === 'all' ? ui.size : null,
-				station: mode === 'slices' || mode === 'all' ? ui.station : null,
-				ladder: mode === 'slices',
+				station: mode === 'slice' || mode === 'all' ? ui.station : null,
+				ladder: mode === 'slice',
 			});
 		},
 		pick: (x, z) => { if (body.side) pickSide(x, z); },
@@ -158,23 +161,23 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			const mode = MODES[ui.mode];
 			if (mode === 'position') return paintEnd(f, s, { position: true });
 			if (mode === 'surface') return paintPatch(f.patch, s, ui.size, ui.part);
-			if (mode === 'slices') return paintEnd(f, s, { station: ui.station });
+			if (mode === 'slice') return paintEnd(f, s, { station: ui.station });
 			const net = networkMarkup(f.width, s, card.networks[0].layers);
 			return `<g transform="translate(0 ${((f.height - net.height) / 2).toFixed(1)})">${net.markup}</g>`;
 		},
 		pick: (y, z) => {
-			if (MODES[ui.mode] === 'position' || MODES[ui.mode] === 'slices') move(aroundLookup(body.result.mesh.positions, body.vertex, y, z));
+			if (MODES[ui.mode] === 'position' || MODES[ui.mode] === 'slice') move(aroundLookup(body.result.mesh.positions, body.vertex, y, z));
 		},
 	});
 	const bodyGrid = numbersGrid(vectorHost, 'The invented body\'s numbers');
+	const carGrid = numbersGrid(carHost, 'The reference car\'s numbers');
 
 	/** A grid of the numbers in `node`, the shown group lit; a tap on a square shows its group. */
 	function numbersGrid(node, label) {
 		const grid = view(node, {
 			label,
 			frame: (w) => {
-				const cell = Math.min(20, (w - 2 * 10 - 26 * 2) / 27);
-				const layout = vectorLayout(arrangement.places, arrangement.blocks, cell);
+				const layout = vectorLayout(arrangement.places, arrangement.blocks, vectorCell(w, arrangement.blocks));
 				return { width: w, height: layout.height + 2, layout };
 			},
 			paint: (f, s) => `<g transform="translate(${((f.width - f.layout.width) / 2).toFixed(1)} 0)" data-mode="${MODES[ui.mode]}">${vectorSquares(f.layout, s.standard, new Set(listed().map(([i]) => i)))}</g>`,
@@ -183,7 +186,6 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			const square = e.target.closest('[data-col]');
 			if (square) show(Number(square.dataset.col));
 		});
-		grids.push(grid);
 		return grid;
 	}
 
@@ -192,7 +194,7 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		const mode = MODES[ui.mode];
 		if (mode === 'position') return arrangement.position.map((i, k) => [i, POSITION_WORDS[k]]);
 		if (mode === 'surface') return arrangement.surface[ui.size][ui.part].map((i, r) => [i, SURFACE_WORDS[r]]);
-		if (mode === 'slices') return arrangement.slices[ui.station].map((i, r) => [i, READS[r]]);
+		if (mode === 'slice') return arrangement.slices[ui.station].map((i, r) => [i, READS[r]]);
 		return [];
 	}
 
@@ -202,7 +204,7 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		if (!rows.length) {
 			readout.replaceChildren(
 				...arrangement.blocks.map((block, i) => h('div', {},
-					h('dt', {}, h('i', { class: 'swatch', style: `--group: ${COLOR[block.group]}` }), copied(h('span'), `inputs.modes.${MODES[i]}`)),
+					h('dt', {}, h('i', { class: 'swatch', style: `--group: ${COLORS[block.group]}` }), copied(h('span'), `inputs.modes.${MODES[i]}`)),
 					h('dd', { class: 'num' }, block.count))),
 				h('div', {}, copied(h('dt'), 'inputs.readout.cp'), h('dd', { class: 'num' }, body.state ? num(body.state.cp) : '')));
 			return;
@@ -229,7 +231,8 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		copied(stationName, dx === 0 ? 'inputs.station.own' : dx < 0 ? 'inputs.station.ahead' : 'inputs.station.behind', { distance: cm(dx) });
 		side.redraw();
 		detail.redraw();
-		for (const grid of grids) grid.redraw();
+		bodyGrid.redraw();
+		carGrid.redraw();
 		paintReadout();
 		if (told) onShow();
 	}
@@ -239,7 +242,7 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		const place = arrangement.places[i];
 		ui.mode = MODES.indexOf(place.group);
 		if (place.group === 'surface') { ui.size = place.row; ui.part = Math.floor(place.col / SURFACE_WORDS.length); }
-		if (place.group === 'slices') ui.station = place.col;
+		if (place.group === 'slice') ui.station = place.col;
 		repaint();
 	}
 
@@ -284,18 +287,17 @@ export function createPrimer({ card, groups, engine, onShow }) {
 
 	return {
 		el,
-		/** The shown group's words (null for all of them), and its shown size and station, in metres. */
+		/** The shown kind of input (null for all of them), and its shown size and station, in metres. */
 		get shown() {
 			const mode = MODES[ui.mode];
 			return { group: mode === 'all' ? null : mode, size: scales[ui.size], station: stations[ui.station] };
 		},
-		/** A grid of the reference car's numbers in `node`, laid out as the body's; `setCar` fills it. */
-		carGrid: (node) => numbersGrid(node, 'The reference car\'s numbers'),
+		/** The grid of the reference car's numbers, laid out as the body's; `setCar` fills it. */
+		carGrid: carHost,
 		/** The reference car's numbers at its cell, for the car's grid. */
 		setCar(explanation) {
 			if (!explanation) return;
-			const car = cellState(arrangement, 0, explanation);
-			grids.slice(1).forEach((grid) => grid.update(car));
+			carGrid.update(cellState(arrangement, 0, explanation));
 		},
 	};
 }

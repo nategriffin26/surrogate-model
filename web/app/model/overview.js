@@ -7,7 +7,6 @@ import { h, s } from '../dom.js';
 import { count } from '../format.js';
 import { pictureFrame } from './charts.js';
 import { copied } from './copy.js';
-import { closeUp } from './drawings.js';
 import { trainingCarImage } from './training.js';
 
 /**
@@ -32,6 +31,47 @@ export function locator(sectionId) {
 	return s('svg', { class: 'locator', viewBox: `0 0 ${width} 12`, width, height: 12, 'aria-hidden': 'true' },
 		s('line', { x1: 6, y1: 6, x2: width - 6, y2: 6 }),
 		opened.map((step, i) => s('circle', { cx: 6 + i * gap, cy: 6, r: step.section === sectionId ? 5 : 3.5, class: step.section === sectionId ? 'here' : '' })));
+}
+
+/** How far round the cell the close-up reaches, and the length of its facing arrow, in metres. */
+const CLOSE_REACH = 0.3;
+const CLOSE_ARROW = 0.32;
+/** Margin around the close-up's content, in pixels. */
+const CLOSE_PAD = 10;
+/** Close-ups drawn so far, for ids unique on the page. */
+let closeUps = 0;
+
+/**
+ * The surface around the cell close up, as the round inset of the overview: the car's surface cut through the cell's
+ * y, seen from the side at one scale on both axes, with the cell and its facing as an arrow.
+ */
+function closeUp({ width, explanation, cutter }) {
+	const { position, normal } = explanation;
+	const [x0, x1] = [position[0] - CLOSE_REACH, position[0] + CLOSE_REACH];
+	const [z0, z1] = [position[2] - CLOSE_REACH, position[2] + CLOSE_REACH];
+	const scale = (width - 2 * CLOSE_PAD) / (x1 - x0);
+	const height = Math.round((z1 - z0) * scale + 2 * CLOSE_PAD);
+	const at = (x, z) => [CLOSE_PAD + (x - x0) * scale, height - CLOSE_PAD - (z - z0) * scale];
+	const id = ++closeUps;
+	const { positions } = cutter.cut(1, position[1]);
+	let cut = '';
+	for (let i = 0; i < positions.length; i += 6) {
+		const [ax, ay] = at(positions[i], positions[i + 2]);
+		const [bx, by] = at(positions[i + 3], positions[i + 5]);
+		cut += `M${ax.toFixed(1)} ${ay.toFixed(1)}L${bx.toFixed(1)} ${by.toFixed(1)}`;
+	}
+	const [px, py] = at(position[0], position[2]);
+	const [tx, ty] = at(position[0] + normal[0] * CLOSE_ARROW, position[2] + normal[2] * CLOSE_ARROW);
+	const middle = width / 2;
+	return s('svg', { class: 'drawing', viewBox: `0 0 ${width} ${height}`, width, height, role: 'img', 'aria-label': 'The surface around the cell' },
+		s('defs', {},
+			s('clipPath', { id: `model-clip-${id}` }, s('circle', { cx: middle, cy: height / 2, r: middle - 1 })),
+			s('marker', { id: `model-arrow-${id}`, class: 'arrowhead', viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' },
+				s('path', { d: 'M0 1 L9 5 L0 9 z' }))),
+		s('g', { 'clip-path': `url(#model-clip-${id})` }, s('path', { class: 'cut', d: cut })),
+		s('g', { class: 'point-mark' },
+			s('line', { x1: px, y1: py, x2: tx, y2: ty, class: 'facing', 'marker-end': `url(#model-arrow-${id})` }),
+			s('circle', { cx: px, cy: py, r: 4.5, class: 'point-dot' })));
 }
 
 /** The networks' Cp at the point as ticks, their mean as a dot, on a short scale around them. */
@@ -95,7 +135,7 @@ export function createOverview({ card, groups, training }) {
 	parts.inputs.append(
 		h('div', { class: 'input-bar' }, groups.map((group) => h('span', { class: 'input-part', style: `--group: ${group.color}; flex: ${group.columns.length}` }))),
 		h('div', { class: 'input-legend copy-block' }, groups.map((group) => h('span', { class: 'copy-block', style: `--group: ${group.color}` },
-			h('i'), copied(h('span'), `overview.legend.${group.words}`, { count: h('span', { class: 'num' }, group.columns.length) })))));
+			h('i'), copied(h('span'), `overview.legend.${group.id}`, { count: h('span', { class: 'num' }, group.columns.length) })))));
 	parts.networks.append(networksGlyph(card.networks));
 	const carFrame = pictureFrame('overview-car');
 	const fieldFrame = pictureFrame('overview-field');

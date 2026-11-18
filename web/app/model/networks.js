@@ -3,7 +3,7 @@
 
 import { h } from '../dom.js';
 import { count, signed } from '../format.js';
-import { countWord, section, shade } from './charts.js';
+import { section, shade } from './charts.js';
 import { copied, text } from './copy.js';
 import { groupOf } from './groups.js';
 import { locator } from './overview.js';
