@@ -1,4 +1,4 @@
-"""Model, ensemble save/load, coverage diagnostic, and cold geometry-only inference tests."""
+"""The ensemble's checkpoint, inference on a surface file without CFD and with it, and the coverage check."""
 
 from __future__ import annotations
 
@@ -18,13 +18,12 @@ def test_ensemble_checkpoint_roundtrip_preserves_mean_and_spread(
     tmp_path: Path, dummy_ensemble: SurrogateEnsemble
 ) -> None:
     """Catches state_dict or scaler drift when saving/loading `ensemble.pt`."""
-    ens = dummy_ensemble
     rng = np.random.default_rng(123)
     x = rng.normal(size=(512, FEATURE_COLUMNS.total_dim)).astype(np.float32)
 
-    before = ens.predict_features(x, batch_size=128)
+    before = dummy_ensemble.predict_features(x, batch_size=128)
     ckpt = tmp_path / "ensemble.pt"
-    ens.save(ckpt)
+    dummy_ensemble.save(ckpt)
 
     reloaded = SurrogateEnsemble.load(ckpt, device=torch.device("cpu"))
     after = reloaded.predict_features(x, batch_size=128)
@@ -34,18 +33,16 @@ def test_ensemble_checkpoint_roundtrip_preserves_mean_and_spread(
     assert float(after.cp_std.mean()) > 0.0
 
 
-def test_cold_vtp_inference_succeeds_without_cp_and_flags_out_of_domain_geometry(
+def test_inference_without_cfd_reports_a_car_longer_than_the_training_cars_by_its_length(
     tmp_path: Path, dummy_ensemble: SurrogateEnsemble
 ) -> None:
-    """Catches crashes on files without Cp, and an oversized body not being reported as outside the training cars."""
-    ens = dummy_ensemble
-
-    # Create an oversized 7.0 m long geometry-only VTP with NO solver arrays at all
+    """Catches crashes on a file without Cp or any solver array, and a 7 m car not reported outside the
+    training cars, or reported with a reason that does not name the dimension that is out of range."""
     long_box = pv.Box(bounds=(-1.0, 6.0, -1.0, 1.0, -0.318, 1.10)).triangulate().subdivide(3)
-    vtp_path = tmp_path / "unseen_oversized.vtp"
+    vtp_path = tmp_path / "long.vtp"
     long_box.save(vtp_path)
 
-    res = run_vtp_inference(vtp_path, ens)
+    res = run_vtp_inference(vtp_path, dummy_ensemble)
 
     assert res.has_ground_truth is False
     assert res.ground_truth_forces is None
@@ -53,29 +50,26 @@ def test_cold_vtp_inference_succeeds_without_cp_and_flags_out_of_domain_geometry
     assert res.cp_mean.shape == (res.n_cells,)
     assert res.cp_std.shape == (res.n_cells,)
     assert np.isfinite(res.cp_mean).all()
-    assert res.coverage["status"] in ("near", "outside")
-    oob_features = {d["feature"] for d in res.coverage["out_of_range_dimensions"]}
-    assert "length" in oob_features
+    assert res.coverage["status"] == "outside"
+    assert "length outside the training cars' range" in res.coverage["reasons"]
+    assert [d["dimension"] for d in res.coverage["out_of_range_dimensions"]] == ["length"]
 
 
-def test_cold_vtp_inference_populates_ground_truth_when_cp_present(
+def test_moving_a_car_off_the_training_cars_ground_height_leaves_its_coverage_unchanged(
     tmp_path: Path, dummy_ensemble: SurrogateEnsemble
 ) -> None:
-    """Verifies the CFD comparison activates when CpMeanTrim exists."""
-    ens = dummy_ensemble
-    in_domain_box = pv.Box(bounds=(-0.8, 3.85, -0.98, 0.98, -0.318, 1.10)).triangulate().subdivide(3)
-    centers = np.asarray(in_domain_box.cell_centers().points, dtype=np.float32)
-    in_domain_box.cell_data["CpMeanTrim"] = (-0.25 + 0.1 * centers[:, 0]).astype(np.float32)
-    vtp_path = tmp_path / "with_gt.vtp"
-    in_domain_box.save(vtp_path)
+    """Catches the coverage check judging where a car sits rather than its shape: the inputs are taken in
+    the car's own frame, so a car of the training cars' size raised 0.5 m must get the same coverage, with
+    no dimension out of range."""
+    coverage = []
+    for z_ground in (-0.318, 0.182):
+        box = pv.Box(bounds=(-0.8, 3.8, -0.98, 0.98, z_ground, z_ground + 1.4)).triangulate().subdivide(3)
+        box.save(tmp_path / f"car_{z_ground}.vtp")
+        coverage.append(run_vtp_inference(tmp_path / f"car_{z_ground}.vtp", dummy_ensemble).coverage)
 
-    res = run_vtp_inference(vtp_path, ens)
-
-    assert res.has_ground_truth is True
-    assert res.ground_truth_forces is not None
-    assert res.ground_truth_metrics is not None
-    assert "r2" in res.ground_truth_metrics
-    assert len(res.forces["cd_p_per_fold"]) == len(ens.folds)
+    unmoved, moved = coverage
+    assert moved["out_of_range_dimensions"] == []
+    assert (moved["status"], moved["reasons"]) == (unmoved["status"], unmoved["reasons"])
 
 
 def test_uniform_pressure_on_a_closed_body_gives_zero_drag(

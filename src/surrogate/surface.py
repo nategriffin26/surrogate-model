@@ -1,4 +1,5 @@
-"""Geometry-only VTP surface reader and aerodynamic force integrals."""
+"""Reading a `.vtp` surface from its polygons alone (outward normals, areas, frontal area), and the
+pressure drag and lift integrated over it."""
 
 from __future__ import annotations
 
@@ -10,18 +11,21 @@ import pyvista as pv
 from scipy.ndimage import binary_fill_holes
 
 TARGET_FIELD = "CpMeanTrim"
+# The frontal area's silhouette grid step in metres, and the number of points it is drawn from.
+FRONTAL_AREA_PIXEL = 0.005
+FRONTAL_AREA_SAMPLES = 1_500_000
 
 
 @dataclass(frozen=True)
 class SurfaceMesh:
-    """Native cell-centered surface representation derived strictly from mesh geometry.
+    """A surface file's polygons and the per-cell geometry the model and the force integrals read.
 
-    `cp` holds ground-truth `CpMeanTrim` when present in the `.vtp` file and `None`
-    on unseen geometry-only meshes. All other fields depend only on vertices and faces.
+    `cp` holds the file's CFD `CpMeanTrim` when it carries it and `None` otherwise. Every other field
+    depends only on the points and polygons.
     """
 
     points: np.ndarray        # (N_pts, 3) float32
-    polygon_offsets: np.ndarray  # (N_cells + 1,) int64: polygon i's corners are polygon_corners[offsets[i]:offsets[i + 1]]
+    polygon_offsets: np.ndarray  # (N_cells + 1,) int64: polygon i's corners are corners[offsets[i]:offsets[i + 1]]
     polygon_corners: np.ndarray  # (N_corners,) int32 point numbers, in each polygon's order
     centers: np.ndarray       # (N_cells, 3) float32
     normals: np.ndarray       # (N_cells, 3) float32, guaranteed outward-pointing
@@ -46,13 +50,10 @@ class SurfaceMesh:
         return (xmax - xmin, ymax - ymin, zmax - zmin)
 
 
-def estimate_frontal_area(mesh: pv.PolyData, pixel_size: float = 0.005) -> float:
-    """Estimate projected frontal area A_ref (YZ silhouette) from surface faces alone.
-
-    Samples points uniformly across YZ-projected triangle interiors onto a 5 mm grid
-    and fills interior silhouette holes. Works identically on coarse meshes (e.g. a
-    12-triangle box) and 8.2M-cell DrivAerML meshes (~0.7% from published `geo_ref`).
-    """
+def estimate_frontal_area(mesh: pv.PolyData) -> float:
+    """The car's frontal area A_ref: its silhouette seen along x, drawn on a FRONTAL_AREA_PIXEL grid from
+    FRONTAL_AREA_SAMPLES points spread over the triangles by their projected area, with enclosed gaps filled."""
+    pixel_size = FRONTAL_AREA_PIXEL
     tri = mesh if mesh.is_all_triangles else mesh.triangulate()
     faces = tri.regular_faces
     pts = np.asarray(tri.points, dtype=np.float32)
@@ -65,7 +66,7 @@ def estimate_frontal_area(mesh: pv.PolyData, pixel_size: float = 0.005) -> float
         return 0.0
 
     rng = np.random.default_rng(0)
-    n_draws = 1_500_000
+    n_draws = FRONTAL_AREA_SAMPLES
     idx = rng.choice(len(proj_yz), size=n_draws, replace=True, p=proj_yz / tot_proj)
     r1 = np.sqrt(rng.random(n_draws, dtype=np.float32))
     r2 = rng.random(n_draws, dtype=np.float32)
@@ -83,6 +84,7 @@ def estimate_frontal_area(mesh: pv.PolyData, pixel_size: float = 0.005) -> float
     grid[iy, iz] = True
     filled = binary_fill_holes(grid)
     return float(filled.sum() * (pixel_size * pixel_size))
+
 
 def read_vtp_surface(path: str | Path, *, include_target: bool = True) -> SurfaceMesh:
     """Read a DrivAerML `boundary_i.vtp` surface file with a strict geometry boundary.

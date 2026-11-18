@@ -1,4 +1,5 @@
-"""Per-cell neural network, 5-fold ensemble, and geometric coverage diagnostics."""
+"""The per-cell network, the five-network ensemble with its spread, and the check of a car against the
+training cars."""
 
 from __future__ import annotations
 
@@ -11,13 +12,33 @@ import numpy as np
 import torch
 from torch import nn
 
-from surrogate.features import FEATURE_COLUMNS, SurfaceContext, extract_query_features
+from surrogate.features import SurfaceContext, extract_query_features
 from surrogate.surface import compute_pressure_forces
 
+# Each input is standardised by the training cells' mean and standard deviation, then clipped to this many
+# standard deviations.
 Z_CLIP = 6.0
+# The shipped network: three hidden layers of 256.
+HIDDEN_DIM = 256
+DEPTH = 3
 # Threads computing features for a whole file. For 8.8M cells: 36 s on one, 13 s on four,
 # and no faster on eight, where the networks on the GPU set the pace.
 FEATURE_THREADS = 4
+# The coverage check. A car is outside the training cars when one of its dimensions lies beyond their range
+# by more than OUTSIDE_EXCURSION of that range, or all three lie beyond it; when more than OUTSIDE_SLICE_SHARE
+# of its slice-area curve S(x) lies outside their band; or when its spread is more than OUTSIDE_SPREAD_RATIO
+# times the ensemble's mean spread on the training cars. It is near them when any dimension lies beyond the
+# range, or S(x) or the spread passes the NEAR_ limits.
+DIMENSIONS = ("length", "width", "height")
+OUTSIDE_EXCURSION = 0.25
+OUTSIDE_SLICE_SHARE = 0.25
+OUTSIDE_SPREAD_RATIO = 1.6
+NEAR_SLICE_SHARE = 0.08
+NEAR_SPREAD_RATIO = 1.25
+# S(x) is compared at the stations where the car or a training car has more than SLICE_COMPARED_AREA (m^2),
+# and counts as outside the band when it is more than SLICE_BAND_MARGIN (m^2) beyond it.
+SLICE_COMPARED_AREA = 0.05
+SLICE_BAND_MARGIN = 0.03
 
 
 def select_device() -> torch.device:
@@ -30,9 +51,9 @@ def select_device() -> torch.device:
 
 
 class PerCellMLP(nn.Module):
-    """Shared per-cell multilayer perceptron mapping deterministic surface features to Cp."""
+    """The network asked at each cell: the cell's inputs in, its Cp out, GELU between linear layers."""
 
-    def __init__(self, in_dim: int = FEATURE_COLUMNS.total_dim, hidden_dim: int = 256, depth: int = 3) -> None:
+    def __init__(self, in_dim: int, hidden_dim: int = HIDDEN_DIM, depth: int = DEPTH) -> None:
         super().__init__()
         layers: list[nn.Module] = []
         dim = in_dim
@@ -47,12 +68,8 @@ class PerCellMLP(nn.Module):
 
 
 class PointNetGlobalMLP(nn.Module):
-    """Ablation model: appends a pooled whole-car PointNet vector `g` to local cell features.
-
-    Included strictly for the controlled N=10 ablation demonstrating that learned
-    whole-car latent vectors act as car-ID lookup keys when only 8 training vehicles
-    exist per fold. Not shipped in the inference ensemble.
-    """
+    """The PointNet ablation: a whole-car vector learned from the car's cells, pooled by mean and maximum,
+    given to each cell beside its position and facing. Not part of the shipped model."""
 
     def __init__(self, in_dim: int, global_dim: int = 64, hidden_dim: int = 256) -> None:
         super().__init__()
@@ -79,7 +96,7 @@ class PointNetGlobalMLP(nn.Module):
 
 @dataclass(frozen=True)
 class FoldModel:
-    """One cross-validation fold checkpoint with training-only feature/target scalers."""
+    """One of the five networks, with the input and output scaling of the cars it was trained on."""
 
     fold_index: int
     train_runs: tuple[int, ...]
@@ -93,19 +110,19 @@ class FoldModel:
 
 @dataclass(frozen=True)
 class EnsemblePrediction:
-    """Mean prediction, expected error, and per-fold outputs."""
+    """The ensemble's mean Cp, its spread σ(Cp), and each network's Cp."""
 
     cp_mean: np.ndarray      # (M,) float32
-    cp_std: np.ndarray       # (M,) float32, fold standard deviation x the ensemble's spread_scale
+    cp_std: np.ndarray       # (M,) float32, the networks' standard deviation times the ensemble's spread_scale
     cp_per_fold: np.ndarray  # (K, M) float32
 
 
 class SurrogateEnsemble:
-    """5-fold Per-Cell MLP ensemble with training-domain geometric coverage checks.
+    """The five networks, their mean and spread, and the training cars' envelope the coverage check reads.
 
-    The fold models train on overlapping cars and share blind spots, so their raw standard
+    The networks train on overlapping cars and share blind spots, so their raw standard
     deviation ranks where the error is large but understates its size. `spread_scale` is the
-    factor, measured in training on cars no model saw, that makes one `cp_std` cover the
+    factor, measured in training on cars no network saw, that makes one `cp_std` cover the
     error about two times in three; 1.0 leaves the raw standard deviation.
     """
 
@@ -224,86 +241,71 @@ class SurrogateEnsemble:
         cp_std: np.ndarray,
         weights: np.ndarray | None = None,
     ) -> dict[str, Any]:
-        """Evaluate geometric coverage and ensemble spread against the 10-car domain.
+        """The car against the training cars: its length, width and height against their range, its
+        slice-area curve S(x) against their band, and its spread against the ensemble's mean spread on them
+        (see the limits above). `weights` are the cells' areas when `cp_std` covers every cell; omit them
+        for an area-weighted sample."""
+        dimensions = context.shape_descriptor()
+        bounds = self.training_envelope["descriptor_bounds"]
+        out_of_range: list[dict[str, Any]] = []
+        excursion = 0.0
+        for name in DIMENSIONS:
+            value, low, high = dimensions[name], float(bounds[name]["min"]), float(bounds[name]["max"])
+            if low <= value <= high:
+                continue
+            excursion = max(excursion, (low - value if value < low else value - high) / (high - low))
+            side = "below" if value < low else "above"
+            out_of_range.append({"dimension": name, "value": round(value, 4), "min": low, "max": high, "side": side})
 
-        Separates input-space extrapolation (vehicle dimensions & slice-area envelope S(x))
-        from epistemic disagreement across the 5 cross-validation fold models. `weights` are
-        the cells' areas when `cp_std` covers every cell; omit them for an area-weighted sample.
-        """
-        desc = context.shape_descriptor()
-        bounds_env = self.training_envelope["descriptor_bounds"]
-        out_of_range_dims: list[dict[str, Any]] = []
-        max_norm_excursion = 0.0
-
-        for key, stats in bounds_env.items():
-            val = desc[key]
-            lo, hi = float(stats["min"]), float(stats["max"])
-            span = max(hi - lo, 1e-6)
-            if val < lo:
-                exc = (lo - val) / span
-                max_norm_excursion = max(max_norm_excursion, exc)
-                out_of_range_dims.append({"feature": key, "value": round(val, 4), "min": lo, "max": hi, "side": "below"})
-            elif val > hi:
-                exc = (val - hi) / span
-                max_norm_excursion = max(max_norm_excursion, exc)
-                out_of_range_dims.append({"feature": key, "value": round(val, 4), "min": lo, "max": hi, "side": "above"})
-
-        # Compare the streamwise slice-area curve S(x) against the 10-car min/max band
         s_curve = context.slice_area
         s_min = np.asarray(self.training_envelope["slice_area_min"], dtype=np.float32)
         s_max = np.asarray(self.training_envelope["slice_area_max"], dtype=np.float32)
-        active = (s_curve > 0.05) | (s_max > 0.05)
-        if int(active.sum()) > 0:
-            outside_band = (s_curve[active] < s_min[active] - 0.03) | (s_curve[active] > s_max[active] + 0.03)
-            silhouette_out_frac = float(np.mean(outside_band))
-        else:
-            silhouette_out_frac = 1.0
+        compared = (s_curve > SLICE_COMPARED_AREA) | (s_max > SLICE_COMPARED_AREA)
+        s_curve, s_min, s_max = s_curve[compared], s_min[compared], s_max[compared]
+        slice_outside = float(np.mean((s_curve < s_min - SLICE_BAND_MARGIN) | (s_curve > s_max + SLICE_BAND_MARGIN)))
 
         w = np.ones(len(cp_std)) if weights is None else np.asarray(weights, dtype=np.float64)
         mean_cp_std = float(np.average(cp_std, weights=w))
         order = np.argsort(cp_std)
         cumulative = np.cumsum(w[order])
         p95_cp_std = float(cp_std[order][np.searchsorted(cumulative, 0.95 * cumulative[-1])])
-        ref_mean_std = float(self.training_envelope.get("cv_mean_cp_std", 0.035))
-        spread_ratio = mean_cp_std / max(ref_mean_std, 1e-6)
+        spread_ratio = mean_cp_std / float(self.training_envelope["cv_mean_cp_std"])
 
         reasons: list[str] = []
-        if max_norm_excursion > 0.25 or len(out_of_range_dims) >= 3:
-            reasons.append(f"{len(out_of_range_dims)} of length, width and height outside the training cars' range")
-        if silhouette_out_frac > 0.25:
-            reasons.append(f"{silhouette_out_frac * 100:.0f}% of the slice-area curve outside the training cars' band")
-        if spread_ratio > 1.6:
-            reasons.append(f"spread {spread_ratio:.2f} times the cross-validation mean")
+        if out_of_range:
+            names = [d["dimension"] for d in out_of_range]
+            listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            reasons.append(f"{listed} outside the training cars' range")
+        if slice_outside > NEAR_SLICE_SHARE:
+            reasons.append(f"{slice_outside * 100:.0f}% of the slice-area curve outside the training cars' band")
+        if spread_ratio > NEAR_SPREAD_RATIO:
+            reasons.append(f"spread {spread_ratio:.2f} times its mean on the training cars")
 
-        if reasons:
-            status = "outside"
-            summary = "outside the training cars"
-        elif out_of_range_dims or silhouette_out_frac > 0.08 or spread_ratio > 1.25:
-            status = "near"
-            if out_of_range_dims:
-                names = ", ".join(d["feature"] for d in out_of_range_dims)
-                reasons.append(f"outside the training cars' range in {names}")
-            if silhouette_out_frac > 0.08:
-                reasons.append(f"{silhouette_out_frac * 100:.0f}% of the slice-area curve outside the training cars' band")
-            if spread_ratio > 1.25:
-                reasons.append(f"spread {spread_ratio:.2f} times the cross-validation mean")
-            summary = "at the edge of the training cars"
+        if (
+            excursion > OUTSIDE_EXCURSION
+            or len(out_of_range) == len(DIMENSIONS)
+            or slice_outside > OUTSIDE_SLICE_SHARE
+            or spread_ratio > OUTSIDE_SPREAD_RATIO
+        ):
+            status, summary = "outside", "outside the training cars"
+        elif reasons:
+            status, summary = "near", "at the edge of the training cars"
         else:
-            status = "inside"
-            summary = "size, slice-area curve and spread within the training cars'"
+            status, summary = "inside", "size, slice-area curve and spread within the training cars'"
 
         return {
             "status": status,
             "summary": summary,
             "reasons": reasons,
-            "out_of_range_dimensions": out_of_range_dims,
-            "silhouette_outside_fraction": round(silhouette_out_frac, 4),
+            "out_of_range_dimensions": out_of_range,
+            "slice_area_outside_fraction": round(slice_outside, 4),
             "mean_cp_std": round(mean_cp_std, 4),
             "p95_cp_std": round(p95_cp_std, 4),
-            "spread_vs_cv_ratio": round(spread_ratio, 3),
+            "spread_vs_training_ratio": round(spread_ratio, 3),
         }
 
     def save(self, path: str | Path) -> None:
+        """Write the networks, their scaling, the spread factor and the training envelope to `path`."""
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -330,6 +332,7 @@ class SurrogateEnsemble:
 
     @classmethod
     def load(cls, path: str | Path, *, device: torch.device | None = None) -> SurrogateEnsemble:
+        """Read an ensemble written by `save`, onto `device` (the best one here when omitted)."""
         ckpt_path = Path(path)
         if not ckpt_path.is_file():
             raise FileNotFoundError(f"Ensemble checkpoint not found: {ckpt_path}")

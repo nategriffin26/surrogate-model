@@ -1,18 +1,15 @@
-"""Surface-only aerodynamics pressure surrogate on DrivAerML."""
+"""Predict the surface pressure coefficient of a DrivAerML-style car from its geometry.
 
-from surrogate.features import FeatureColumns, SurfaceContext, extract_query_features
-from surrogate.inference import InferenceResult, run_vtp_inference
+`SurrogateEnsemble.load` reads the trained networks; `run_vtp_inference` predicts every cell of a `.vtp`
+surface file; `write_prediction_vtp` writes the file back with the prediction.
+"""
+
+from surrogate.inference import InferenceResult, run_vtp_inference, write_prediction_vtp
 from surrogate.model import SurrogateEnsemble
-from surrogate.surface import SurfaceMesh, compute_pressure_forces, read_vtp_surface
 
 __all__ = [
-    "FeatureColumns",
     "InferenceResult",
-    "SurfaceContext",
-    "SurfaceMesh",
     "SurrogateEnsemble",
-    "compute_pressure_forces",
-    "extract_query_features",
-    "read_vtp_surface",
     "run_vtp_inference",
+    "write_prediction_vtp",
 ]

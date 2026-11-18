@@ -1,9 +1,9 @@
-"""The preprocessing pipeline for the ten DrivAerML training cars and the two holdout cars.
+"""Preprocessing of the ten DrivAerML training cars and the two holdout cars: `uv run surrogate preprocess`.
 
-Reads each `boundary_i.vtp` once, verifies outward normal orientation and pressure
-force integrals, draws an area-weighted cell sample (`n_samples` per vehicle),
-extracts the deterministic surface feature matrix, and saves compact
-`.npz` archives + `manifest.json` under `data/processed/`. Run by `uv run surrogate preprocess`.
+Reads each `boundary_<run>.vtp` once, draws `samples` cells by area, computes their inputs, and saves them
+with their CFD Cp to `data/processed/run_<run>.npz`. `manifest.json` records each car's areas, bounds and
+dimensions, whether its normals were flipped, and its pressure drag summed over every cell and estimated
+from the sample.
 """
 
 from __future__ import annotations
@@ -12,9 +12,10 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+
 import numpy as np
 
-from surrogate.dataset import ALLOWED_TRAIN_RUNS, DEFAULT_HOLDOUT_RUNS, surface_path
+from surrogate.dataset import ALLOWED_TRAIN_RUNS, HOLDOUT_RUNS, surface_path
 from surrogate.features import FEATURE_COLUMNS, SurfaceContext, extract_query_features
 from surrogate.surface import compute_pressure_forces, read_vtp_surface, sample_cells_by_area
 
@@ -25,11 +26,11 @@ def preprocess_case(
     *,
     run_id: int,
     split: str,
-    n_samples: int = 120_000,
+    n_samples: int,
 ) -> dict[str, Any]:
-    """Preprocess one `boundary_<run>.vtp` into `out_dir/run_<run>.npz` and return summary."""
+    """Preprocess one `boundary_<run>.vtp` into `out_dir/run_<run>.npz` and return its manifest entry."""
     t0 = time.perf_counter()
-    surface = read_vtp_surface(vtp_path, include_target=True)
+    surface = read_vtp_surface(vtp_path)
     if surface.cp is None:
         raise ValueError(f"Expected {vtp_path} to contain CpMeanTrim for {split} split")
     t_read = time.perf_counter() - t0
@@ -90,11 +91,11 @@ def preprocess_case(
     }
 
 
-def preprocess_cases(raw_dir: Path, out_dir: Path, *, samples: int = 120_000) -> dict[str, Any]:
+def preprocess_cases(raw_dir: Path, out_dir: Path, *, samples: int) -> dict[str, Any]:
     """Preprocess the ten training cars and the two holdout cars under `raw_dir` into `out_dir`, write
     its `manifest.json` and return the manifest. The holdout cars are only reported, never trained on."""
     cases: list[tuple[str, int, Path]] = []
-    for split, runs in (("train", ALLOWED_TRAIN_RUNS), ("holdout", DEFAULT_HOLDOUT_RUNS)):
+    for split, runs in (("train", ALLOWED_TRAIN_RUNS), ("holdout", HOLDOUT_RUNS)):
         for run_id in runs:
             vtp = surface_path(raw_dir, run_id)
             if not vtp.is_file():

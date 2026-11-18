@@ -1,5 +1,5 @@
-"""Cold end-to-end VTP surface inference: Cp at every cell of the file, aero diagnostics, and the file
-written back with the prediction."""
+"""Prediction on a surface file: Cp at every cell, the pressure drag and lift, the coverage check, the
+comparison with the file's CFD when it carries it, and the file written back with the prediction."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pyvista as pv
 
-from surrogate.features import DOMAIN_X_FROM_NOSE, RASTER_STEP, SurfaceContext
+from surrogate.features import SurfaceContext
 from surrogate.metrics import regional_r2_breakdown, surface_field_metrics
 from surrogate.model import SurrogateEnsemble
 from surrogate.surface import compute_pressure_forces, read_vtp_surface
@@ -25,7 +25,6 @@ class InferenceResult:
     over all of them with their areas: nothing is estimated from a sample of cells.
     """
 
-    source_name: str
     has_ground_truth: bool
     n_cells: int
     total_area: float
@@ -33,72 +32,13 @@ class InferenceResult:
     bounds: tuple[float, float, float, float, float, float]
     dimensions: tuple[float, float, float]
     cp_mean: np.ndarray             # (N,) float32, in the file's cell order
-    cp_std: np.ndarray              # (N,) float32, expected error (see SurrogateEnsemble)
+    cp_std: np.ndarray              # (N,) float32, the spread σ(Cp) (see SurrogateEnsemble)
     forces: dict[str, Any]
     ground_truth_forces: dict[str, float] | None
     ground_truth_metrics: dict[str, Any] | None
     coverage: dict[str, Any]
-    sections: dict[str, Any]
     drag_buildup: list[dict[str, float]]
-    slice_area_profile: list[dict[str, float]]
     timings_sec: dict[str, float]
-
-
-def _extract_spanwise_sections(
-    centers: np.ndarray,
-    normals: np.ndarray,
-    areas: np.ndarray,
-    cp_mean: np.ndarray,
-    cp_std: np.ndarray,
-    cp_true: np.ndarray | None,
-    bounds: tuple[float, float, float, float, float, float],
-) -> dict[str, Any]:
-    """Build upper/lower Cp(x) ± σ curves at selectable spanwise stations y."""
-    xmin, xmax, ymin, ymax, _, _ = bounds
-    half_w = 0.5 * (ymax - ymin)
-    y_abs = np.abs(centers[:, 1] - 0.5 * (ymin + ymax))
-    x_edges = np.linspace(xmin, xmax, 73)
-    x_mid = 0.5 * (x_edges[:-1] + x_edges[1:])
-
-    stations = [
-        ("centerline", "Centerline (y = 0.00 m)", 0.02, 0.045),
-        ("midbody", f"Cabin / A-Pillar (y = {0.42 * half_w:.2f} m)", 0.42 * half_w, 0.045),
-        ("outboard", f"Outboard / Wheel (y = {0.78 * half_w:.2f} m)", 0.78 * half_w, 0.045),
-    ]
-    out_stations: list[dict[str, Any]] = []
-    for st_id, label, y0, tol in stations:
-        slab = np.flatnonzero(np.abs(y_abs - y0) <= tol)
-        x, z, w = centers[slab, 0], centers[slab, 2], areas[slab]
-        faces_up = normals[slab, 2] >= -0.15
-        fields = {"cp_mean": cp_mean[slab], "cp_std": cp_std[slab]}
-        if cp_true is not None:
-            fields["cp_true"] = cp_true[slab]
-
-        def skin_point(cells: np.ndarray, x_station: float, z_percentile: float) -> dict[str, float]:
-            """Area-weighted values on the outer skin: the cells within 8 cm of the top (or bottom) height."""
-            z_skin = np.percentile(z[cells], z_percentile)
-            near = cells[np.abs(z[cells] - z_skin) <= 0.08]
-            if len(near) == 0:  # the percentile fell in a gap between two surfaces
-                near = cells
-            point = {"x": round(float(x_station), 3), "z": round(float(np.average(z[near], weights=w[near])), 3)}
-            for name, values in fields.items():
-                point[name] = round(float(np.average(values[near], weights=w[near])), 4)
-            return point
-
-        upper_pts: list[dict[str, float]] = []
-        lower_pts: list[dict[str, float]] = []
-        for i in range(len(x_mid)):
-            in_bin = (x >= x_edges[i]) & (x < x_edges[i + 1])
-            if int(in_bin.sum()) < 2:
-                continue
-            upper, lower = np.flatnonzero(in_bin & faces_up), np.flatnonzero(in_bin & ~faces_up)
-            if len(upper):
-                upper_pts.append(skin_point(upper, x_mid[i], 85))
-            if len(lower):
-                lower_pts.append(skin_point(lower, x_mid[i], 15))
-        out_stations.append({"id": st_id, "label": label, "y": round(float(y0), 3), "upper": upper_pts, "lower": lower_pts})
-
-    return {"stations": out_stations}
 
 
 def _compute_drag_buildup(
@@ -136,7 +76,7 @@ def _compute_drag_buildup(
 
 
 def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> InferenceResult:
-    """Run full geometry-only inference + diagnostics on any `.vtp` surface file."""
+    """Predict every cell of the `.vtp` surface file at `vtp_path`, with the numbers `InferenceResult` holds."""
     t_start = time.perf_counter()
     path = Path(vtp_path)
 
@@ -168,9 +108,6 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
             "regions": regional_r2_breakdown(surf.cp, pred.cp_mean, surf.centers, surf.normals, surf.areas),
         }
 
-    sections = _extract_spanwise_sections(
-        surf.centers, surf.normals, surf.areas, pred.cp_mean, pred.cp_std, surf.cp, surf.bounds
-    )
     drag_buildup = _compute_drag_buildup(
         surf.centers,
         surf.normals,
@@ -181,23 +118,7 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
         bounds=surf.bounds,
     )
 
-    # The area of the car's slice across x, S(x), along the car against the 10-car training band
-    xs_grid = surf.bounds[0] + DOMAIN_X_FROM_NOSE[0] + RASTER_STEP * np.arange(context.nx, dtype=np.float32)
-    in_body = (xs_grid >= surf.bounds[0] - 0.05) & (xs_grid <= surf.bounds[1] + 0.05)
-    s_min_env = np.asarray(ensemble.training_envelope["slice_area_min"], dtype=np.float32)
-    s_max_env = np.asarray(ensemble.training_envelope["slice_area_max"], dtype=np.float32)
-    slice_area_profile = [
-        {
-            "x": round(float(xs_grid[i]), 3),
-            "area": round(float(context.slice_area[i]), 4),
-            "train_min": round(float(s_min_env[i]), 4),
-            "train_max": round(float(s_max_env[i]), 4),
-        }
-        for i in np.where(in_body)[0][::2]
-    ]
-
     return InferenceResult(
-        source_name=path.name,
         has_ground_truth=surf.cp is not None,
         n_cells=surf.n_cells,
         total_area=round(surf.total_area, 4),
@@ -210,9 +131,7 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
         ground_truth_forces={k: round(v, 5) for k, v in gt_forces.items()} if gt_forces else None,
         ground_truth_metrics=gt_metrics,
         coverage=coverage,
-        sections=sections,
         drag_buildup=drag_buildup,
-        slice_area_profile=slice_area_profile,
         timings_sec={
             "read": round(t_read, 2),
             "context": round(t_context, 2),

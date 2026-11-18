@@ -37,9 +37,9 @@ def case_evaluation_summary(
     *,
     total_area: float,
     frontal_area: float,
-    exact_cd_p: float | None = None,
 ) -> dict[str, float]:
-    """Evaluate surface field metrics and integrated pressure drag/lift on one vehicle."""
+    """The field metrics of one car's area-weighted cell sample, and its pressure drag and lift from the
+    CFD and from the prediction."""
     field = surface_field_metrics(cp_true, cp_pred)
     sample_true_forces = compute_pressure_forces(
         cp_true, normals, None, total_area=total_area, ref_area=frontal_area
@@ -47,12 +47,10 @@ def case_evaluation_summary(
     pred_forces = compute_pressure_forces(
         cp_pred, normals, None, total_area=total_area, ref_area=frontal_area
     )
-    ref_cd_p = sample_true_forces["cd_p"] if exact_cd_p is None else exact_cd_p
     cd_err = pred_forces["cd_p"] - sample_true_forces["cd_p"]
     return {
         **field,
         "cd_p_true_sample": sample_true_forces["cd_p"],
-        "cd_p_true_exact": ref_cd_p,
         "cd_p_pred": pred_forces["cd_p"],
         "cd_p_err": cd_err,
         "cd_p_abs_err": abs(cd_err),

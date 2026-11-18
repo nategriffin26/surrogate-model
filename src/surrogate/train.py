@@ -1,8 +1,9 @@
-"""Five-fold training on the ten DrivAerML cases, and the ablations and learning curve recorded beside it.
+"""Training on the ten DrivAerML cars: the shipped five-network ensemble and its spread, evaluated in
+cross-validation and on the two holdout cars, and the ablations and learning curve recorded beside it.
 
-The ablations are a staircase that adds one block of inputs at a time (`features.BLOCKS`, starting
-from a constant), closed by the shipped ensemble on every block, and two other learners: a learned
-whole-car vector, and boosted trees on every input.
+The ablations are a staircase that adds one block of inputs at a time (`features.BLOCKS`, starting from a
+constant), closed by the shipped ensemble on every block, and two other learners: a learned whole-car
+vector, and boosted trees on every input. Run by `uv run surrogate train`.
 """
 
 from __future__ import annotations
@@ -12,27 +13,32 @@ import time
 from pathlib import Path
 from typing import Any
 
-from surrogate.baselines import run_lightgbm_baseline_isolated
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from surrogate.dataset import ALLOWED_TRAIN_RUNS, DEFAULT_HOLDOUT_RUNS
+from surrogate.baselines import BOOST_ROUNDS, lightgbm_predictions
+from surrogate.dataset import ALLOWED_TRAIN_RUNS, HOLDOUT_RUNS
 from surrogate.features import BLOCKS, FEATURE_COLUMNS
 from surrogate.metrics import (
     case_evaluation_summary,
     regional_r2_breakdown,
     spread_coverage,
+    surface_field_metrics,
     uncertainty_calibration_bins,
 )
 from surrogate.model import (
+    DEPTH,
+    HIDDEN_DIM,
     Z_CLIP,
     FoldModel,
     PerCellMLP,
     PointNetGlobalMLP,
     SurrogateEnsemble,
 )
+from surrogate.surface import compute_pressure_forces
 
+# Five folds of two validation cars each; no fold splits a car's cells.
 CAR_FOLDS: tuple[tuple[int, int], ...] = (
     (80, 98),
     (102, 208),
@@ -40,6 +46,13 @@ CAR_FOLDS: tuple[tuple[int, int], ...] = (
     (397, 425),
     (445, 474),
 )
+BATCH_SIZE = 8192
+LEARNING_RATE = 5e-3
+# The PointNet ablation: the width of its whole-car vector and its number of gradient steps.
+POINTNET_DIM = 64
+POINTNET_STEPS = 600
+# Each block of inputs as the README's results table names it.
+BLOCK_NAMES = {"local": "position and facing", "surface": "nearby surface", "slices": "slices across the car"}
 
 
 def _load_processed_dataset(
@@ -47,9 +60,7 @@ def _load_processed_dataset(
 ) -> tuple[dict[int, dict[str, np.ndarray]], dict[int, dict[str, Any]]]:
     manifest_path = processed_dir / "manifest.json"
     if not manifest_path.is_file():
-        raise FileNotFoundError(
-            f"Missing {manifest_path}. Run `uv run surrogate preprocess` first."
-        )
+        raise FileNotFoundError(f"Missing {manifest_path}. Run `uv run surrogate preprocess` first.")
     manifest = json.loads(manifest_path.read_text())
     meta_by_run: dict[int, dict[str, Any]] = {int(c["run"]): c for c in manifest["cases"]}
     arrays_by_run: dict[int, dict[str, np.ndarray]] = {}
@@ -60,8 +71,18 @@ def _load_processed_dataset(
     return arrays_by_run, meta_by_run
 
 
+def _others(held_out: tuple[int, ...]) -> tuple[int, ...]:
+    """The training cars other than `held_out`."""
+    return tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_out)
+
+
 def _select_columns(features: np.ndarray, blocks: tuple[str, ...]) -> np.ndarray:
     return np.concatenate([features[:, getattr(FEATURE_COLUMNS, b)] for b in blocks], axis=1)
+
+
+def _width(blocks: tuple[str, ...]) -> int:
+    """The number of input columns in `blocks`."""
+    return sum(getattr(FEATURE_COLUMNS, b).stop - getattr(FEATURE_COLUMNS, b).start for b in blocks)
 
 
 def _fit_mlp_fold(
@@ -71,12 +92,8 @@ def _fit_mlp_fold(
     fold_index: int,
     train_runs: tuple[int, ...],
     val_runs: tuple[int, ...],
-    hidden_dim: int = 256,
-    depth: int = 3,
-    epochs: int = 30,
-    batch_size: int = 8192,
-    lr: float = 5e-3,
-    seed: int = 42,
+    epochs: int,
+    seed: int,
     device: torch.device,
 ) -> FoldModel:
     torch.manual_seed(seed + fold_index)
@@ -91,18 +108,16 @@ def _fit_mlp_fold(
     xt = torch.as_tensor(x_norm, dtype=torch.float32, device=device)
     yt = torch.as_tensor(y_norm, dtype=torch.float32, device=device)
 
-    model = PerCellMLP(in_dim=x_train.shape[1], hidden_dim=hidden_dim, depth=depth).to(device)
-    n_batches = max(1, len(xt) // batch_size)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=lr, total_steps=epochs * n_batches
-    )
+    model = PerCellMLP(in_dim=x_train.shape[1]).to(device)
+    n_batches = max(1, len(xt) // BATCH_SIZE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=LEARNING_RATE, total_steps=epochs * n_batches)
 
     model.train()
     for _ in range(epochs):
         perm = torch.randperm(len(xt), device=device)
         for step in range(n_batches):
-            batch_idx = perm[step * batch_size : (step + 1) * batch_size]
+            batch_idx = perm[step * BATCH_SIZE : (step + 1) * BATCH_SIZE]
             pred = model(xt[batch_idx])
             loss = F.mse_loss(pred, yt[batch_idx])
             optimizer.zero_grad()
@@ -137,6 +152,50 @@ def _predict_single_fold(fold: FoldModel, x_eval: np.ndarray, device: torch.devi
     return out
 
 
+def _train_folds(
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    blocks: tuple[str, ...],
+    *,
+    epochs: int,
+    seed: int,
+    device: torch.device,
+) -> tuple[list[FoldModel], dict[int, np.ndarray]]:
+    """One network per fold of CAR_FOLDS on the inputs of `blocks`, and each training car's prediction by
+    the network that did not see it."""
+    folds: list[FoldModel] = []
+    out_of_fold: dict[int, np.ndarray] = {}
+    for fold_index, val_pair in enumerate(CAR_FOLDS):
+        train_runs = _others(val_pair)
+        fold = _fit_mlp_fold(
+            np.concatenate([_select_columns(arrays_by_run[r]["features"], blocks) for r in train_runs], axis=0),
+            np.concatenate([arrays_by_run[r]["cp"] for r in train_runs], axis=0),
+            fold_index=fold_index,
+            train_runs=train_runs,
+            val_runs=val_pair,
+            epochs=epochs,
+            seed=seed,
+            device=device,
+        )
+        folds.append(fold)
+        for r in val_pair:
+            out_of_fold[r] = _predict_single_fold(fold, _select_columns(arrays_by_run[r]["features"], blocks), device)
+    return folds, out_of_fold
+
+
+def _ensemble(
+    folds: list[FoldModel], envelope: dict[str, Any], device: torch.device, spread_scale: float = 1.0
+) -> SurrogateEnsemble:
+    return SurrogateEnsemble(
+        folds,
+        in_dim=folds[0].x_mean.shape[0],
+        hidden_dim=HIDDEN_DIM,
+        depth=DEPTH,
+        training_envelope=envelope,
+        spread_scale=spread_scale,
+        device=device,
+    )
+
+
 def _summarize_predictions(
     runs: tuple[int, ...],
     preds_by_run: dict[int, np.ndarray],
@@ -153,7 +212,6 @@ def _summarize_predictions(
             arr["normals"],
             total_area=float(meta["total_area"]),
             frontal_area=float(meta["frontal_area"]),
-            exact_cd_p=float(meta["exact_cd_p"]),
         )
         per_car[str(r)] = {k: round(v, 5) for k, v in summary.items()}
 
@@ -178,16 +236,19 @@ def _summarize_predictions(
     }
 
 
+def _print_scores(label: str, cv: dict[str, Any]) -> None:
+    print(f"{label}: CV R² {cv['mean_r2']:.4f} (worst car {cv['worst_car_r2']:.4f}), Cd,p MAE {cv['cd_p_mae']:.4f}")
+
+
 def _run_pointnet_global_ablation(
     arrays_by_run: dict[int, dict[str, np.ndarray]],
     meta_by_run: dict[int, dict[str, Any]],
-    holdout_runs: tuple[int, ...],
     *,
+    seed: int,
     device: torch.device,
-    steps: int = 600,
-    seed: int = 42,
 ) -> dict[str, Any]:
-    """Evaluate PointNet global-vector conditioning (`g_dim=64`) on identical car folds."""
+    """The PointNet ablation on the same car folds, and trained on all ten cars for the holdout cars: each
+    cell's position and facing, with a whole-car vector of POINTNET_DIM learned from the car's cells."""
 
     def _fit_and_eval(tr_runs: tuple[int, ...], te_runs: tuple[int, ...]) -> dict[int, np.ndarray]:
         torch.manual_seed(seed)
@@ -210,12 +271,12 @@ def _run_pointnet_global_ablation(
             for r in tr_runs
         }
 
-        net = PointNetGlobalMLP(in_dim=x_cat.shape[1], global_dim=64).to(device)
+        net = PointNetGlobalMLP(in_dim=x_cat.shape[1], global_dim=POINTNET_DIM).to(device)
         opt = torch.optim.AdamW(net.parameters(), lr=2e-3, weight_decay=1e-4)
-        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=2e-3, total_steps=steps)
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=2e-3, total_steps=POINTNET_STEPS)
 
         net.train()
-        for _ in range(steps):
+        for _ in range(POINTNET_STEPS):
             xp_batch, xq_batch, yq_batch = [], [], []
             for r in tr_runs:
                 n_cells = len(car_x[r])
@@ -242,17 +303,12 @@ def _run_pointnet_global_ablation(
 
     cv_preds: dict[int, np.ndarray] = {}
     for val_pair in CAR_FOLDS:
-        tr = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in val_pair)
-        cv_preds.update(_fit_and_eval(tr, val_pair))
-
-    out: dict[str, Any] = {
-        "cv": _summarize_predictions(ALLOWED_TRAIN_RUNS, cv_preds, arrays_by_run, meta_by_run)
+        cv_preds.update(_fit_and_eval(_others(val_pair), val_pair))
+    holdout_preds = _fit_and_eval(ALLOWED_TRAIN_RUNS, HOLDOUT_RUNS)
+    return {
+        "cv": _summarize_predictions(ALLOWED_TRAIN_RUNS, cv_preds, arrays_by_run, meta_by_run),
+        "holdout": _summarize_predictions(HOLDOUT_RUNS, holdout_preds, arrays_by_run, meta_by_run),
     }
-    if holdout_runs:
-        ho_preds = _fit_and_eval(ALLOWED_TRAIN_RUNS, holdout_runs)
-        out["holdout"] = _summarize_predictions(holdout_runs, ho_preds, arrays_by_run, meta_by_run)
-    return out
-
 
 
 def _build_training_envelope(
@@ -301,7 +357,7 @@ def _fit_spread_scale(
     for outer_idx, held_pair in enumerate(CAR_FOLDS):
         models: list[FoldModel] = []
         for inner_idx, inner_pair in enumerate(p for p in CAR_FOLDS if p != held_pair):
-            tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_pair + inner_pair)
+            tr_runs = _others(held_pair + inner_pair)
             models.append(
                 _fit_mlp_fold(
                     np.concatenate([arrays_by_run[r]["features"] for r in tr_runs], axis=0),
@@ -321,6 +377,161 @@ def _fit_spread_scale(
     return float(np.quantile(np.concatenate(ratios), 0.68))
 
 
+def _training_mean_spread(ensemble: SurrogateEnsemble, arrays_by_run: dict[int, dict[str, np.ndarray]]) -> float:
+    """The ensemble's mean spread on its own training cars, which `assess_coverage` compares a new car's
+    spread with. Four of the five networks saw each car, so it is scaled by √(5/4)."""
+    spreads = [
+        float(ensemble.predict_features(arrays_by_run[r]["features"]).cp_std.mean() * np.sqrt(5.0 / 4.0))
+        for r in ALLOWED_TRAIN_RUNS
+    ]
+    return round(float(np.mean(spreads)), 4)
+
+
+def _evaluate_holdout(
+    ensemble: SurrogateEnsemble,
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    meta_by_run: dict[int, dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, float]], dict[str, float]]:
+    """The shipped ensemble on the holdout cars: its scores with each car's drag and lift by network, its
+    spread against the realised error by spread quintile, and the share of cells within one and two spreads."""
+    preds: dict[int, np.ndarray] = {}
+    stds: dict[int, np.ndarray] = {}
+    forces: dict[str, dict[str, Any]] = {}
+    for r in HOLDOUT_RUNS:
+        prediction = ensemble.predict_features(arrays_by_run[r]["features"])
+        preds[r], stds[r] = prediction.cp_mean, prediction.cp_std
+        car_forces = ensemble.integrated_forces(
+            prediction,
+            arrays_by_run[r]["normals"],
+            None,
+            total_area=float(meta_by_run[r]["total_area"]),
+            frontal_area=float(meta_by_run[r]["frontal_area"]),
+        )
+        forces[str(r)] = {
+            k: [round(x, 5) for x in v] if isinstance(v, list) else round(v, 5) for k, v in car_forces.items()
+        }
+
+    summary = _summarize_predictions(HOLDOUT_RUNS, preds, arrays_by_run, meta_by_run)
+    summary["ensemble_forces"] = forces
+    true = np.concatenate([arrays_by_run[r]["cp"] for r in HOLDOUT_RUNS])
+    pred = np.concatenate([preds[r] for r in HOLDOUT_RUNS])
+    std = np.concatenate([stds[r] for r in HOLDOUT_RUNS])
+    return summary, uncertainty_calibration_bins(true, pred, std), spread_coverage(true, pred, std)
+
+
+def _constant_baseline(
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    meta_by_run: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    """Every car predicted at the mean Cp of the cars it was held out from, its drag and lift at their mean
+    drag and lift; for the holdout cars, the means of all ten."""
+    sampled = {
+        r: compute_pressure_forces(
+            arrays_by_run[r]["cp"],
+            arrays_by_run[r]["normals"],
+            None,
+            total_area=float(meta_by_run[r]["total_area"]),
+            ref_area=float(meta_by_run[r]["frontal_area"]),
+        )
+        for r in ALLOWED_TRAIN_RUNS + HOLDOUT_RUNS
+    }
+
+    def scores(train_runs: tuple[int, ...], runs: tuple[int, ...]) -> list[tuple[float, float, float, float]]:
+        """(R², MAE, drag error, lift error) of each car in `runs`."""
+        mean_cp = float(np.mean([arrays_by_run[r]["cp"].mean() for r in train_runs]))
+        mean_cd = float(np.mean([sampled[r]["cd_p"] for r in train_runs]))
+        mean_cl = float(np.mean([sampled[r]["cl_p"] for r in train_runs]))
+        rows = []
+        for r in runs:
+            cp = arrays_by_run[r]["cp"]
+            field = surface_field_metrics(cp, np.full_like(cp, mean_cp))
+            rows.append((field["r2"], field["mae"], mean_cd - sampled[r]["cd_p"], mean_cl - sampled[r]["cl_p"]))
+        return rows
+
+    def summary(rows: list[tuple[float, float, float, float]]) -> dict[str, float]:
+        r2, mae, cd_err, cl_err = (np.array(column) for column in zip(*rows, strict=True))
+        return {
+            "mean_r2": round(float(r2.mean()), 4),
+            "worst_car_r2": round(float(r2.min()), 4),
+            "mean_mae": round(float(mae.mean()), 4),
+            "cd_p_mae": round(float(np.abs(cd_err).mean()), 4),
+            "cd_p_bias": round(float(cd_err.mean()), 4),
+            "cl_p_mae": round(float(np.abs(cl_err).mean()), 4),
+            "cl_p_bias": round(float(cl_err.mean()), 4),
+        }
+
+    cv_rows = [row for val_pair in CAR_FOLDS for row in scores(_others(val_pair), val_pair)]
+    return {
+        "label": "Constant (fold mean Cp and Cd,p)",
+        "blocks": [],
+        "learner": "constant",
+        "cv": summary(cv_rows),
+        "holdout": summary(scores(ALLOWED_TRAIN_RUNS, HOLDOUT_RUNS)),
+    }
+
+
+def _input_staircase(
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    meta_by_run: dict[int, dict[str, Any]],
+    envelope: dict[str, Any],
+    *,
+    epochs: int,
+    seed: int,
+    device: torch.device,
+) -> dict[str, dict[str, Any]]:
+    """Five networks on the first block of inputs, then on the first two; the shipped ensemble on all three
+    closes the staircase."""
+    ablations: dict[str, dict[str, Any]] = {}
+    for n_blocks in range(1, len(BLOCKS)):
+        blocks = BLOCKS[:n_blocks]
+        folds, out_of_fold = _train_folds(arrays_by_run, blocks, epochs=epochs, seed=seed, device=device)
+        cv = _summarize_predictions(ALLOWED_TRAIN_RUNS, out_of_fold, arrays_by_run, meta_by_run)
+        ensemble = _ensemble(folds, envelope, device)
+        holdout_preds = {
+            r: ensemble.predict_features(_select_columns(arrays_by_run[r]["features"], blocks)).cp_mean
+            for r in HOLDOUT_RUNS
+        }
+        name = BLOCK_NAMES[blocks[-1]]
+        label = f"{name.capitalize()} only" if n_blocks == 1 else f"+ {name}"
+        label = f"{label} ({_width(blocks)})"
+        ablations[f"{'_'.join(blocks)}_mlp"] = {
+            "label": label,
+            "blocks": list(blocks),
+            "learner": "mlp",
+            "cv": cv,
+            "holdout": _summarize_predictions(HOLDOUT_RUNS, holdout_preds, arrays_by_run, meta_by_run),
+        }
+        _print_scores(label, cv)
+    return ablations
+
+
+def _other_learners(
+    processed_dir: Path,
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    meta_by_run: dict[int, dict[str, Any]],
+    *,
+    seed: int,
+    device: torch.device,
+) -> dict[str, dict[str, Any]]:
+    """A learned whole-car vector beside position and facing, and boosted trees on every input."""
+    pointnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, seed=seed, device=device)
+    pointnet_label = f"PointNet whole-car vector ({POINTNET_DIM}) + {BLOCK_NAMES['local']}"
+    _print_scores(pointnet_label, pointnet["cv"])
+
+    cv_preds, holdout_preds = lightgbm_predictions(processed_dir, ALLOWED_TRAIN_RUNS, CAR_FOLDS, HOLDOUT_RUNS)
+    lightgbm = {
+        "cv": _summarize_predictions(ALLOWED_TRAIN_RUNS, cv_preds, arrays_by_run, meta_by_run),
+        "holdout": _summarize_predictions(HOLDOUT_RUNS, holdout_preds, arrays_by_run, meta_by_run),
+    }
+    lightgbm_label = f"LightGBM, {BOOST_ROUNDS} trees, all inputs ({FEATURE_COLUMNS.total_dim})"
+    _print_scores(lightgbm_label, lightgbm["cv"])
+
+    return {
+        "pointnet_global_64d": {"label": pointnet_label, "blocks": ["local"], "learner": "pointnet", **pointnet},
+        "lightgbm_full": {"label": lightgbm_label, "blocks": list(BLOCKS), "learner": "trees", **lightgbm},
+    }
+
+
 def _learning_curve(
     arrays_by_run: dict[int, dict[str, np.ndarray]],
     meta_by_run: dict[int, dict[str, Any]],
@@ -335,7 +546,7 @@ def _learning_curve(
     the held-out pair only."""
     scores: dict[int, list[dict[str, float]]] = {2: [], 4: [], 6: [], 8: []}
     for fold_idx, held_pair in enumerate(CAR_FOLDS):
-        others = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_pair)
+        others = _others(held_pair)
         pairs = [others[i : i + 2] for i in range(0, 8, 2)]
         subsets = {
             2: pairs,
@@ -351,7 +562,7 @@ def _learning_curve(
                     fold_index=0,
                     train_runs=cars,
                     val_runs=held_pair,
-                    epochs=int(round(epochs * 8 / n_cars)),
+                    epochs=round(epochs * 8 / n_cars),
                     seed=seed + 10 * fold_idx + group_idx,
                     device=device,
                 )
@@ -370,282 +581,65 @@ def _learning_curve(
 
 
 def train_and_evaluate(
-    processed_dir: Path = Path("data/processed"),
-    artifacts_dir: Path = Path("artifacts"),
+    processed_dir: Path,
+    artifacts_dir: Path,
     *,
-    epochs: int = 30,
-    seed: int = 42,
-    run_ablations: bool = True,
+    epochs: int,
+    seed: int,
+    run_ablations: bool,
     device: torch.device,
 ) -> dict[str, Any]:
+    """Train the shipped ensemble on `processed_dir`, fit its spread, evaluate it in cross-validation and on
+    the holdout cars, run the ablations and the learning curve when `run_ablations`, and write
+    `ensemble.pt` and `metrics.json` to `artifacts_dir`."""
     arrays_by_run, meta_by_run = _load_processed_dataset(processed_dir)
-    holdout_runs = tuple(r for r in DEFAULT_HOLDOUT_RUNS if r in arrays_by_run)
 
-    print(f"Device: {device} | Train runs: {len(ALLOWED_TRAIN_RUNS)} | Holdout runs: {holdout_runs}")
-
-    # 1. Train the shipped 5-fold Per-Cell MLP Ensemble on every feature column
-    t0 = time.perf_counter()
-    shipped_folds: list[FoldModel] = []
-    oof_preds: dict[int, np.ndarray] = {}
-
-    for fold_idx, val_pair in enumerate(CAR_FOLDS):
-        tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in val_pair)
-        x_tr = np.concatenate([arrays_by_run[r]["features"] for r in tr_runs], axis=0)
-        y_tr = np.concatenate([arrays_by_run[r]["cp"] for r in tr_runs], axis=0)
-
-        fold_model = _fit_mlp_fold(
-            x_tr,
-            y_tr,
-            fold_index=fold_idx,
-            train_runs=tr_runs,
-            val_runs=val_pair,
-            epochs=epochs,
-            seed=seed,
-            device=device,
-        )
-        shipped_folds.append(fold_model)
-        for val_run in val_pair:
-            oof_preds[val_run] = _predict_single_fold(
-                fold_model, arrays_by_run[val_run]["features"], device
-            )
-
-    train_sec = time.perf_counter() - t0
-    cv_summary = _summarize_predictions(ALLOWED_TRAIN_RUNS, oof_preds, arrays_by_run, meta_by_run)
-
-    # Regional breakdown across all 10 out-of-fold vehicles
-    oof_true_cat = np.concatenate([arrays_by_run[r]["cp"] for r in ALLOWED_TRAIN_RUNS])
-    oof_pred_cat = np.concatenate([oof_preds[r] for r in ALLOWED_TRAIN_RUNS])
-    oof_centers_cat = np.concatenate([arrays_by_run[r]["centers"] for r in ALLOWED_TRAIN_RUNS])
-    oof_normals_cat = np.concatenate([arrays_by_run[r]["normals"] for r in ALLOWED_TRAIN_RUNS])
-    regions = regional_r2_breakdown(oof_true_cat, oof_pred_cat, oof_centers_cat, oof_normals_cat)
+    start = time.perf_counter()
+    folds, out_of_fold = _train_folds(arrays_by_run, BLOCKS, epochs=epochs, seed=seed, device=device)
+    train_sec = time.perf_counter() - start
+    cv_summary = _summarize_predictions(ALLOWED_TRAIN_RUNS, out_of_fold, arrays_by_run, meta_by_run)
+    regions = regional_r2_breakdown(
+        np.concatenate([arrays_by_run[r]["cp"] for r in ALLOWED_TRAIN_RUNS]),
+        np.concatenate([out_of_fold[r] for r in ALLOWED_TRAIN_RUNS]),
+        np.concatenate([arrays_by_run[r]["centers"] for r in ALLOWED_TRAIN_RUNS]),
+        np.concatenate([arrays_by_run[r]["normals"] for r in ALLOWED_TRAIN_RUNS]),
+    )
 
     spread_scale = _fit_spread_scale(arrays_by_run, epochs=epochs, seed=seed, device=device)
-
-    # Calibrate reference ensemble spread strictly on the 10 training cars (inflated by sqrt(5/4)
-    # because 4 of 5 folds saw each training car).
     envelope = _build_training_envelope(arrays_by_run, meta_by_run)
-    ensemble = SurrogateEnsemble(
-        shipped_folds,
-        in_dim=FEATURE_COLUMNS.total_dim,
-        hidden_dim=256,
-        depth=3,
-        training_envelope=envelope,
-        spread_scale=spread_scale,
-        device=device,
-    )
-    in_domain_stds = [
-        float(ensemble.predict_features(arrays_by_run[r]["features"]).cp_std.mean() * np.sqrt(5.0 / 4.0))
-        for r in ALLOWED_TRAIN_RUNS
-    ]
-    envelope["cv_mean_cp_std"] = round(float(np.mean(in_domain_stds)), 4)
-
+    ensemble = _ensemble(folds, envelope, device, spread_scale)
+    envelope["cv_mean_cp_std"] = _training_mean_spread(ensemble, arrays_by_run)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = artifacts_dir / "ensemble.pt"
-    ensemble.save(ckpt_path)
-    print(
-        f"[Shipped 5-Fold MLP] CV R²={cv_summary['mean_r2']:.4f} "
-        f"(worst {cv_summary['worst_car_r2']:.4f}) | "
-        f"Cd,p MAE={cv_summary['cd_p_mae']:.4f} | spread scale {spread_scale:.2f} | "
-        f"saved {ckpt_path} ({train_sec:.1f}s)"
-    )
+    checkpoint = artifacts_dir / "ensemble.pt"
+    ensemble.save(checkpoint)
+    shipped_label = f"Shipped: five networks, all inputs ({FEATURE_COLUMNS.total_dim})"
+    _print_scores(shipped_label, cv_summary)
+    print(f"Spread factor {spread_scale:.2f}; wrote {checkpoint} ({train_sec:.0f} s for the five networks)")
 
-    # Evaluate the saved 5-fold ensemble directly on untouched holdout runs (run_1, run_500)
-    holdout_summary: dict[str, Any] = {}
-    calibration_bins: list[dict[str, float]] = []
-    coverage: dict[str, float] = {}
-    if holdout_runs:
-        ho_preds: dict[int, np.ndarray] = {}
-        ho_stds: dict[int, np.ndarray] = {}
-        ho_forces: dict[str, dict[str, Any]] = {}
-        for r in holdout_runs:
-            ens_pred = ensemble.predict_features(arrays_by_run[r]["features"])
-            ho_preds[r] = ens_pred.cp_mean
-            ho_stds[r] = ens_pred.cp_std
-            forces = ensemble.integrated_forces(
-                ens_pred,
-                arrays_by_run[r]["normals"],
-                None,
-                total_area=float(meta_by_run[r]["total_area"]),
-                frontal_area=float(meta_by_run[r]["frontal_area"]),
-            )
-            ho_forces[str(r)] = {
-                k: [round(x, 5) for x in v] if isinstance(v, list) else round(v, 5) for k, v in forces.items()
-            }
+    holdout_summary, calibration_bins, coverage = _evaluate_holdout(ensemble, arrays_by_run, meta_by_run)
+    print(f"Holdout: R² {holdout_summary['mean_r2']:.4f}, Cd,p MAE {holdout_summary['cd_p_mae']:.4f}")
 
-        holdout_summary = _summarize_predictions(holdout_runs, ho_preds, arrays_by_run, meta_by_run)
-        holdout_summary["ensemble_forces"] = ho_forces
-        ho_true = np.concatenate([arrays_by_run[r]["cp"] for r in holdout_runs])
-        ho_pred = np.concatenate([ho_preds[r] for r in holdout_runs])
-        ho_std = np.concatenate([ho_stds[r] for r in holdout_runs])
-        calibration_bins = uncertainty_calibration_bins(ho_true, ho_pred, ho_std)
-        coverage = spread_coverage(ho_true, ho_pred, ho_std)
-        print(
-            f"[5-Fold Ensemble Holdout] R²={holdout_summary['mean_r2']:.4f} | "
-            f"Cd,p MAE={holdout_summary['cd_p_mae']:.4f} (bias {holdout_summary['cd_p_bias']:+.4f})"
-        )
-
-    # 2. Ablations
-    ablations: dict[str, Any] = {}
-    if run_ablations:
-        # 2a. Constant fold-mean baseline (zero learning)
-        const_cv_preds: dict[int, np.ndarray] = {}
-        const_cd_cv_errs: list[float] = []
-        const_cl_cv_errs: list[float] = []
-        true_forces = {
-            r: case_evaluation_summary(
-                arrays_by_run[r]["cp"],
-                arrays_by_run[r]["cp"],
-                arrays_by_run[r]["normals"],
-                total_area=float(meta_by_run[r]["total_area"]),
-                frontal_area=float(meta_by_run[r]["frontal_area"]),
-            )
-            for r in ALLOWED_TRAIN_RUNS + holdout_runs
-        }
-        true_cd_sample = {r: forces["cd_p_true_sample"] for r, forces in true_forces.items()}
-        true_cl_sample = {r: forces["cl_p_true_sample"] for r, forces in true_forces.items()}
-        for val_pair in CAR_FOLDS:
-            tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in val_pair)
-            mean_cp = float(np.mean([arrays_by_run[r]["cp"].mean() for r in tr_runs]))
-            mean_cd = float(np.mean([true_cd_sample[r] for r in tr_runs]))
-            mean_cl = float(np.mean([true_cl_sample[r] for r in tr_runs]))
-            for r in val_pair:
-                const_cv_preds[r] = np.full_like(arrays_by_run[r]["cp"], mean_cp)
-                const_cd_cv_errs.append(mean_cd - true_cd_sample[r])
-                const_cl_cv_errs.append(mean_cl - true_cl_sample[r])
-
-        const_entry: dict[str, Any] = {
-            "label": "Constant fold-mean baseline (no model)",
-            "blocks": [],
-            "learner": "constant",
-            "cv": {
-                "mean_r2": 0.0,
-                "worst_car_r2": 0.0,
-                "mean_mae": round(
-                    float(
-                        np.mean(
-                            [np.abs(const_cv_preds[r] - arrays_by_run[r]["cp"]).mean() for r in ALLOWED_TRAIN_RUNS]
-                        )
-                    ),
-                    4,
-                ),
-                "cd_p_mae": round(float(np.mean(np.abs(const_cd_cv_errs))), 4),
-                "cd_p_bias": round(float(np.mean(const_cd_cv_errs)), 4),
-                "cl_p_mae": round(float(np.mean(np.abs(const_cl_cv_errs))), 4),
-                "cl_p_bias": round(float(np.mean(const_cl_cv_errs)), 4),
-            },
-        }
-        if holdout_runs:
-            all_mean_cp = float(np.mean([arrays_by_run[r]["cp"].mean() for r in ALLOWED_TRAIN_RUNS]))
-            all_mean_cd = float(np.mean([true_cd_sample[r] for r in ALLOWED_TRAIN_RUNS]))
-            all_mean_cl = float(np.mean([true_cl_sample[r] for r in ALLOWED_TRAIN_RUNS]))
-            ho_cd_errs = [all_mean_cd - true_cd_sample[r] for r in holdout_runs]
-            ho_cl_errs = [all_mean_cl - true_cl_sample[r] for r in holdout_runs]
-            const_entry["holdout"] = {
-                "mean_r2": 0.0,
-                "mean_mae": round(
-                    float(np.mean([np.abs(all_mean_cp - arrays_by_run[r]["cp"]).mean() for r in holdout_runs])),
-                    4,
-                ),
-                "cd_p_mae": round(float(np.mean(np.abs(ho_cd_errs))), 4),
-                "cd_p_bias": round(float(np.mean(ho_cd_errs)), 4),
-                "cl_p_mae": round(float(np.mean(np.abs(ho_cl_errs))), 4),
-                "cl_p_bias": round(float(np.mean(ho_cl_errs)), 4),
-            }
-        ablations["constant_baseline"] = const_entry
-
-        # 2b. The staircase: one network per fold on the first one, two and three blocks of inputs; the
-        # shipped ensemble on all of them closes it
-        for n_blocks in range(1, len(BLOCKS)):
-            blocks = BLOCKS[:n_blocks]
-            key = f"{'_'.join(blocks)}_mlp"
-            label = f"Five networks on {' + '.join(blocks)}"
-            sub_folds: list[FoldModel] = []
-            sub_oof: dict[int, np.ndarray] = {}
-            for fold_idx, val_pair in enumerate(CAR_FOLDS):
-                tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in val_pair)
-                x_tr = np.concatenate(
-                    [_select_columns(arrays_by_run[r]["features"], blocks) for r in tr_runs], axis=0
-                )
-                y_tr = np.concatenate([arrays_by_run[r]["cp"] for r in tr_runs], axis=0)
-                fm = _fit_mlp_fold(
-                    x_tr,
-                    y_tr,
-                    fold_index=fold_idx,
-                    train_runs=tr_runs,
-                    val_runs=val_pair,
-                    epochs=epochs,
-                    seed=seed,
-                    device=device,
-                )
-                sub_folds.append(fm)
-                for val_run in val_pair:
-                    x_val = _select_columns(arrays_by_run[val_run]["features"], blocks)
-                    sub_oof[val_run] = _predict_single_fold(fm, x_val, device)
-
-            sub_cv = _summarize_predictions(ALLOWED_TRAIN_RUNS, sub_oof, arrays_by_run, meta_by_run)
-            entry: dict[str, Any] = {"label": label, "blocks": list(blocks), "learner": "mlp", "cv": sub_cv}
-            if holdout_runs:
-                sub_ens = SurrogateEnsemble(
-                    sub_folds,
-                    in_dim=sub_folds[0].x_mean.shape[0],
-                    hidden_dim=256,
-                    depth=3,
-                    training_envelope=envelope,
-                    device=device,
-                )
-                sub_ho_preds = {
-                    r: sub_ens.predict_features(_select_columns(arrays_by_run[r]["features"], blocks)).cp_mean
-                    for r in holdout_runs
-                }
-                entry["holdout"] = _summarize_predictions(holdout_runs, sub_ho_preds, arrays_by_run, meta_by_run)
-            ablations[key] = entry
-            print(f"[Ablation: {label}] CV R²={sub_cv['mean_r2']:.4f} | Cd,p MAE={sub_cv['cd_p_mae']:.4f}")
-
-    ablations["shipped_mlp_ensemble"] = {
-        "label": f"Shipped: five networks on all {FEATURE_COLUMNS.total_dim} inputs",
+    shipped = {
+        "label": shipped_label,
         "blocks": list(BLOCKS),
         "learner": "ensemble",
         "cv": cv_summary,
         "holdout": holdout_summary,
     }
-
+    ablations: dict[str, dict[str, Any]] = {"shipped_mlp_ensemble": shipped}
     if run_ablations:
-        # 2c. Two other learners: a learned whole-car vector beside position and facing, and boosted
-        # trees on every input
-        pnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, holdout_runs, device=device, seed=seed)
-        ablations["pointnet_global_64d"] = {
-            "label": "PointNet learned global vector g (64D)",
-            "blocks": ["local"],
-            "learner": "pointnet",
-            **pnet,
+        ablations = {
+            "constant_baseline": _constant_baseline(arrays_by_run, meta_by_run),
+            **_input_staircase(arrays_by_run, meta_by_run, envelope, epochs=epochs, seed=seed, device=device),
+            "shipped_mlp_ensemble": shipped,
+            **_other_learners(processed_dir, arrays_by_run, meta_by_run, seed=seed, device=device),
         }
-        print(f"[Ablation: PointNet 64D g] CV R²={pnet['cv']['mean_r2']:.4f} | Cd,p MAE={pnet['cv']['cd_p_mae']:.4f}")
 
-        lgb_res = run_lightgbm_baseline_isolated(
-            processed_dir,
-            ALLOWED_TRAIN_RUNS,
-            CAR_FOLDS,
-            holdout_runs,
-            arrays_by_run,
-            meta_by_run,
-        )
-        ablations["lightgbm_full"] = {
-            "label": f"LightGBM boosted trees (all {FEATURE_COLUMNS.total_dim} inputs)",
-            "blocks": list(BLOCKS),
-            "learner": "trees",
-            **lgb_res,
-        }
-        print(f"[Baseline: LightGBM] CV R²={lgb_res['cv']['mean_r2']:.4f} | Cd,p MAE={lgb_res['cv']['cd_p_mae']:.4f}")
-
-        # 2d. The learning curve
-        learning_curve = _learning_curve(arrays_by_run, meta_by_run, epochs=epochs, seed=seed, device=device)
-        print("[Learning curve] unseen-car R² by cars trained on: " + ", ".join(f"{n} {c['r2']:.4f}" for n, c in learning_curve.items()))
-
-    report = {
+    report: dict[str, Any] = {
         "device": str(device),
         "allowed_train_runs": list(ALLOWED_TRAIN_RUNS),
         "samples_per_car": int(meta_by_run[ALLOWED_TRAIN_RUNS[0]]["n_samples"]),
-        "holdout_runs": list(holdout_runs),
+        "holdout_runs": list(HOLDOUT_RUNS),
         "epochs": epochs,
         "feature_dim": FEATURE_COLUMNS.total_dim,
         "train_seconds": round(train_sec, 2),
@@ -658,7 +652,9 @@ def train_and_evaluate(
         "ablations": ablations,
     }
     if run_ablations:
-        report["learning_curve"] = learning_curve
+        report["learning_curve"] = _learning_curve(arrays_by_run, meta_by_run, epochs=epochs, seed=seed, device=device)
+        curve = ", ".join(f"{n} cars {c['r2']:.4f}" for n, c in report["learning_curve"].items())
+        print(f"Learning curve, R² on cars not trained on: {curve}")
     metrics_path = artifacts_dir / "metrics.json"
     metrics_path.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Wrote {metrics_path}")

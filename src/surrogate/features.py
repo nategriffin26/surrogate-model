@@ -50,6 +50,8 @@ HEIGHT_WINDOW = RASTER_STEP / 2
 # Slices ahead of and behind the cell at distances doubling from 5 cm to a third of the car: shape
 # close by matters in detail, shape far away only in bulk.
 SLICE_DX = (-1.6, -0.8, -0.4, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+# What each slice gives, in column order: its area, and the body's reach outboard of, above and below the cell.
+SLICE_READS = ("area", "outboard", "above", "below")
 
 # The surface around a cell at four scales R, about three times apart: the surface blurred by a
 # Gaussian of standard deviation 0.4 R, cut at three standard deviations, on a grid of step R / 3.
@@ -58,7 +60,16 @@ SURFACE_STEPS = (0.01, 0.10 / 3.0, 0.25 / 3.0, 0.25)
 SURFACE_SIGMA = 0.4
 GAUSSIAN_TRUNCATE = 3.0
 # What each scale gives, in column order, with each read's number of columns.
-SURFACE_READS = (("meanNormal", 3), ("amount", 1), ("aheadNormal", 3), ("aheadAmount", 1), ("behindNormal", 3), ("behindAmount", 1))
+SURFACE_READS = (
+    ("meanNormal", 3),
+    ("amount", 1),
+    ("aheadNormal", 3),
+    ("aheadAmount", 1),
+    ("behindNormal", 3),
+    ("behindAmount", 1),
+)
+LOCAL_WIDTH = 7
+SURFACE_WIDTH = sum(width for _, width in SURFACE_READS)  # columns per scale
 
 
 @dataclass(frozen=True)
@@ -74,11 +85,11 @@ class FeatureColumns:
         return self.slices.stop
 
 
-_SURFACE_END = 7 + sum(width for _, width in SURFACE_READS) * len(SURFACE_SCALES)
+_SURFACE_END = LOCAL_WIDTH + SURFACE_WIDTH * len(SURFACE_SCALES)
 FEATURE_COLUMNS = FeatureColumns(
-    local=slice(0, 7),
-    surface=slice(7, _SURFACE_END),
-    slices=slice(_SURFACE_END, _SURFACE_END + 4 * (1 + len(SLICE_DX))),
+    local=slice(0, LOCAL_WIDTH),
+    surface=slice(LOCAL_WIDTH, _SURFACE_END),
+    slices=slice(_SURFACE_END, _SURFACE_END + len(SLICE_READS) * (1 + len(SLICE_DX))),
 )
 BLOCKS = ("local", "surface", "slices")
 
@@ -142,7 +153,8 @@ def surface_samples(surface: SurfaceMesh) -> SurfaceSamples:
     pk = points[corners[first + j + 1]]
     e1 = pj - p0
     e2 = pk - p0
-    cuts = np.ceil(np.sqrt(np.maximum(np.maximum(_squared_length(e1), _squared_length(e2)), _squared_length(pk - pj))) / half).astype(np.int64)
+    longest = np.maximum(np.maximum(_squared_length(e1), _squared_length(e2)), _squared_length(pk - pj))
+    cuts = np.ceil(np.sqrt(longest) / half).astype(np.int64)
     cross = np.column_stack([
         e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1],
         e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2],
@@ -279,8 +291,9 @@ class SurfaceContext:
     bounds: tuple[float, float, float, float, float, float]
     y_center: float
     nx: int                    # raster bins along x
-    y_out: np.ndarray          # (2, nx, nh) how far the body reaches from the centre plane at (x, height), within HEIGHT_WINDOW of the height: [0] toward -y, [1] toward +y
-    z_top: np.ndarray          # (nx, ny) the highest sample over each (x, y) column, the ground where the column holds no body
+    y_out: np.ndarray          # (2, nx, nh) how far the body reaches from the centre plane at (x, height),
+                               # within HEIGHT_WINDOW of the height: [0] toward -y, [1] toward +y
+    z_top: np.ndarray          # (nx, ny) the highest sample over each (x, y) column, the ground where it holds no body
     z_bot: np.ndarray          # (nx, ny) the lowest, the ground where the column holds no body
     slice_area: np.ndarray     # (nx,) the area of the car's slice across x, S(x) in m^2
     surface_scales: tuple[SurfaceScale, ...]
@@ -295,9 +308,9 @@ class SurfaceContext:
         z = samples.positions[:, 2]
 
         h = RASTER_STEP
-        nx = int(round((DOMAIN_X_FROM_NOSE[1] - DOMAIN_X_FROM_NOSE[0]) / h))
-        ny = 2 * int(round(DOMAIN_Y_HALF / h))
-        nh = int(round((DOMAIN_Z_FROM_GROUND[1] - DOMAIN_Z_FROM_GROUND[0]) / HEIGHT_STEP))
+        nx = round((DOMAIN_X_FROM_NOSE[1] - DOMAIN_X_FROM_NOSE[0]) / h)
+        ny = 2 * round(DOMAIN_Y_HALF / h)
+        nh = round((DOMAIN_Z_FROM_GROUND[1] - DOMAIN_Z_FROM_GROUND[0]) / HEIGHT_STEP)
         ix = np.clip(((x_rel - DOMAIN_X_FROM_NOSE[0]) / h).astype(np.int64), 0, nx - 1)
         iy = np.clip(((y_rel + DOMAIN_Y_HALF) / h).astype(np.int64), 0, ny - 1)
         ih = np.clip((((z - z_ground) - DOMAIN_Z_FROM_GROUND[0]) / HEIGHT_STEP).astype(np.int64), 0, nh - 1)
@@ -315,7 +328,7 @@ class SurfaceContext:
         side = (y_rel >= 0.0).astype(np.int64)
         y_out = np.zeros(2 * nx * nh, dtype=np.float32)
         np.maximum.at(y_out, (side * nx + ix) * nh + ih, np.abs(y_rel))
-        reach = int(round(HEIGHT_WINDOW / HEIGHT_STEP))
+        reach = round(HEIGHT_WINDOW / HEIGHT_STEP)
         y_out = maximum_filter1d(y_out.reshape(2, nx, nh), size=2 * reach + 1, axis=2, mode="constant", cval=0.0)
 
         return cls(
@@ -326,21 +339,18 @@ class SurfaceContext:
             z_top=z_top.reshape(nx, ny),
             z_bot=z_bot.reshape(nx, ny),
             slice_area=(column_height.sum(axis=1) * h).astype(np.float32),
-            surface_scales=tuple(_surface_scale(surface, samples, scale, step) for scale, step in zip(SURFACE_SCALES, SURFACE_STEPS)),
+            surface_scales=tuple(
+                _surface_scale(surface, samples, scale, step)
+                for scale, step in zip(SURFACE_SCALES, SURFACE_STEPS, strict=True)
+            ),
         )
 
     def shape_descriptor(self) -> dict[str, float]:
-        """Whole-car dimensions for the coverage check against the training cars. Never a model input:
-        on ten cars it would let the networks tell the cars apart instead of learning pressure."""
+        """The car's length, width and height, which the coverage check compares with the training cars'.
+        Never a model input: on ten cars it would let the networks tell the cars apart instead of learning
+        pressure."""
         xmin, xmax, ymin, ymax, zmin, zmax = self.bounds
-        return {
-            "length": float(xmax - xmin),
-            "width": float(ymax - ymin),
-            "height": float(zmax - zmin),
-            "z_min": float(zmin),
-            "max_slice_area": float(self.slice_area.max()),
-            "plan_volume_proxy": float(self.slice_area.sum() * RASTER_STEP),
-        }
+        return {"length": float(xmax - xmin), "width": float(ymax - ymin), "height": float(zmax - zmin)}
 
 
 def _between_bins(q: np.ndarray, lo: float, step: float, n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -356,7 +366,9 @@ def _bilinear(field: np.ndarray, a: tuple[np.ndarray, np.ndarray], b: tuple[np.n
     """A raster `field` (na, nb) read between its bin centres; a bin with no body takes part with its
     empty value."""
     (i, fi), (j, fj) = a, b
-    return (1.0 - fi) * ((1.0 - fj) * field[i, j] + fj * field[i, j + 1]) + fi * ((1.0 - fj) * field[i + 1, j] + fj * field[i + 1, j + 1])
+    return (1.0 - fi) * ((1.0 - fj) * field[i, j] + fj * field[i, j + 1]) + fi * (
+        (1.0 - fj) * field[i + 1, j] + fj * field[i + 1, j + 1]
+    )
 
 
 def extract_query_features(context: SurfaceContext, query_centers: np.ndarray, query_normals: np.ndarray) -> np.ndarray:
@@ -375,7 +387,8 @@ def extract_query_features(context: SurfaceContext, query_centers: np.ndarray, q
     surface_columns: list[np.ndarray] = []
     for s in context.surface_scales:
         whole, ahead = s.read(centers)
-        for part, flat_panel in ((whole, s.flat_panel), (ahead, 0.5 * s.flat_panel), (whole - ahead, 0.5 * s.flat_panel)):
+        half_panel = 0.5 * s.flat_panel
+        for part, flat_panel in ((whole, s.flat_panel), (ahead, half_panel), (whole - ahead, half_panel)):
             surface_columns += [part[:, 1:] / np.maximum(part[:, :1], 1e-12), part[:, :1] / flat_panel]
     surface = np.concatenate(surface_columns, axis=1)
 
@@ -391,7 +404,9 @@ def extract_query_features(context: SurfaceContext, query_centers: np.ndarray, q
     for x_rel in (sx - xmin, *(sx - xmin + dx for dx in SLICE_DX)):
         station = _between_bins(x_rel, DOMAIN_X_FROM_NOSE[0], RASTER_STEP, context.nx)
         i, f = station
-        outboard = np.where(on_plus_side, _bilinear(context.y_out[1], station, height), _bilinear(context.y_out[0], station, height))
+        outboard = np.where(
+            on_plus_side, _bilinear(context.y_out[1], station, height), _bilinear(context.y_out[0], station, height)
+        )
         slice_columns += [
             (1.0 - f) * context.slice_area[i] + f * context.slice_area[i + 1],
             outboard - np.abs(sy),

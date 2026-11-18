@@ -1,5 +1,5 @@
-"""Write `web/model/training-cars.json`, the ten training cars as the model view draws them: each car seen
-from its left (−y) side as a coarse raster of its CFD pressure, with its polygon count and CFD pressure drag.
+"""Write `web/model/training-cars.json`, the ten training cars as the Model page draws them: each car seen
+from its left (−y) side as a coarse raster of its CFD pressure.
 
     uv run surrogate export
 
@@ -32,16 +32,15 @@ def side_raster(centers: np.ndarray, cp: np.ndarray) -> dict[str, object]:
     order = np.argsort(-centers[:, 1])
     values = np.full(nx * nz, np.nan)
     values[cell[order]] = cp[order]
-    hundredths = [None if np.isnan(v) else int(round(v * 100)) for v in values]
-    return {"x0": round(x0, 4), "z0": round(z0, 4), "nx": nx, "nz": nz, "cp": hundredths}
+    hundredths = [None if np.isnan(v) else round(v * 100) for v in values]
+    return {"nx": nx, "nz": nz, "cp": hundredths}
 
 
 def export_training_cars(processed: Path, out: Path) -> None:
+    """Write each training car's side raster, from the preprocessed cases in `processed`, to `out`."""
     manifest = json.loads((processed / "manifest.json").read_text())
-    cases = {case["run"]: case for case in manifest["cases"]}
     cars = []
     for run in manifest["allowed_train_runs"]:
         with np.load(processed / f"run_{run}.npz") as arrays:
-            raster = side_raster(arrays["centers"], arrays["cp"])
-        cars.append({"run": run, "cells": cases[run]["n_cells"], "cdP": cases[run]["exact_cd_p"], **raster})
-    out.write_text(json.dumps({"step": STEP, "cars": cars}, separators=(",", ":")) + "\n")
+            cars.append({"run": run, **side_raster(arrays["centers"], arrays["cp"])})
+    out.write_text(json.dumps({"cars": cars}, separators=(",", ":")) + "\n")

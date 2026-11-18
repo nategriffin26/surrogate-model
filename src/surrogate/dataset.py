@@ -1,9 +1,9 @@
 """The DrivAerML surface files the pipeline reads: the runs it uses, where their files live under
 `data/raw/`, and fetching them from the dataset on Hugging Face.
 
-Each run is one file, `boundary_<run>.vtp`; the force and geometry tables of every run are already in
-`data/metadata/`. A download goes to `boundary_<run>.vtp.part` and is renamed when complete, so a file
-under its own name is always whole, and fetching again continues a part from where it stopped.
+Each run is one file, `boundary_<run>.vtp`. A download goes to `boundary_<run>.vtp.part` and is renamed
+when complete, so a file under its own name is always whole, and fetching again continues a part from where
+it stopped.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 DATASET_URL = "https://huggingface.co/datasets/neashton/drivaerml/resolve/main"
 ALLOWED_TRAIN_RUNS: tuple[int, ...] = (80, 98, 102, 208, 213, 281, 397, 425, 445, 474)
-DEFAULT_HOLDOUT_RUNS: tuple[int, ...] = (1, 500)
+HOLDOUT_RUNS: tuple[int, ...] = (1, 500)
 CHUNK_BYTES = 1 << 20
 
 
