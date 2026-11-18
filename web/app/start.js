@@ -18,7 +18,7 @@ function profile(d) {
 }
 
 /** Facts for each example card, read from the example's own summary. */
-async function exampleFacts() {
+export async function exampleFacts() {
 	return Promise.all(EXAMPLES.map(async ({ id }) => {
 		const response = await fetch(new URL(`${id}.json`, EXAMPLE_BASE));
 		if (!response.ok) throw new Error(`${id}.json: ${response.status}`);

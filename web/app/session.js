@@ -1,4 +1,5 @@
-// The open cases and which one is shown. Each case has one status with its moves in one place:
+// The open cases, which one is shown, and the view they are all seen through. Each case has one status with its
+// moves in one place:
 //   example:  loading → ready | failed
 //   file:     queued → analysing → ready, or failed from queued or analysing
 // and any case can be closed, which cancels its analysis. A file goes to the engine as soon as it is opened; the
@@ -26,10 +27,29 @@ export class Session extends EventTarget {
 		this.active = null;
 		this.serial = 0;
 		this.device = null;
+		/**
+		 * The one view every case is seen through, so flipping tabs compares cars from the same angle on the same
+		 * colour scale. The colour maps start from the first car with a result and then stay put.
+		 */
+		this.view = {
+			field: 'cp',
+			maps: null,
+			display: { edges: false, ground: true },
+			section: { on: true, axis: 1, offset: 0, clip: 0 },
+			dock: 'section',
+			dockCollapsed: false,
+		};
 		engine.device.then((device) => {
 			this.device = device;
 			this.notify(null, 'device');
 		});
+	}
+
+	/** The case with an id, or an error naming the open ones. */
+	byId(id) {
+		const c = this.cases.find((x) => x.id === id);
+		if (!c) throw new Error(`There is no open case ${id}. Open cases: ${this.cases.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`);
+		return c;
 	}
 
 	/** detail.what: 'cases' (opened, closed), 'active', 'status', 'stage', 'geometry', 'full', 'numbers', 'device'. */
@@ -50,11 +70,13 @@ export class Session extends EventTarget {
 		return c;
 	}
 
-	newCase(name, kind, bytes, status) {
+	/** A file case keeps the workspace path of the file it shows. */
+	newCase(name, kind, bytes, status, path = null) {
 		return {
 			id: ++this.serial,
 			name,
 			kind,
+			path,
 			bytes,
 			status,
 			stage: null,
@@ -81,7 +103,7 @@ export class Session extends EventTarget {
 	}
 
 	async openExample(id, label) {
-		const c = this.add(this.newCase(label, 'example', null, 'loading'));
+		const c = this.add({ ...this.newCase(label, 'example', null, 'loading'), example: id });
 		try {
 			const result = await loadResult(new URL(id, EXAMPLES).href);
 			if (c.closed) return;
@@ -95,8 +117,9 @@ export class Session extends EventTarget {
 		}
 	}
 
-	openFile(file) {
-		const c = this.add(this.newCase(file.name, 'file', file.size, 'queued'));
+	/** Analyse a geometry from the workspace: `file` is its blob, as a File named for it. */
+	openFile(file, path) {
+		const c = this.add(this.newCase(file.name, 'file', file.size, 'queued', path));
 		this.analyse(c, file);
 		return c;
 	}

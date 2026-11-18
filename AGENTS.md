@@ -12,13 +12,15 @@ A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML car
    - Weight cell sampling and every metric by polygon area $dA$.
    - Split cross-validation by whole car (5 folds, 8 train and 2 validation), never by cells.
 4. **Python is the reference.** `src/surrogate/` defines the model and `web/engine/` reproduces it in the browser. `tests/test_web_engine.py` holds the two together on inputs, each network's $C_p$, the spread and the drag. A change to either side is finished when the other matches and those tests pass.
-5. **The tool computes in the browser.** Plain ES modules with no build step and no CDN; libraries are vendored in `web/vendor/`. WebGPU with a CPU fallback. Nothing may depend on `SharedArrayBuffer`, so the tool can be hosted as static files without special headers.
-6. **Repository hygiene.** `local/`, `data/raw/` and `data/processed/` stay out of git; `local/` is scratch. Commit only source, tests, model artifacts and documents that describe the code as it is.
+5. **The tool computes in the browser.** Plain ES modules with no build step and no CDN; libraries are vendored in `web/vendor/`. WebGPU with a CPU fallback. Nothing may depend on `SharedArrayBuffer`, so the tool can be hosted as static files without special headers. The one exception is the assistant: its model is reached through the server's `/api/assistant` route, and its Python kernel loads Pyodide from the jsDelivr CDN on first use (vendoring it would add about 45 MB of binaries) under the Content-Security-Policy `KERNEL_POLICY` in `src/surrogate/server.py`, which keeps the kernel off the network. A host without the route or that header shows the assistant as unavailable; the rest of the tool works.
+6. **Repository hygiene.** `local/`, `data/raw/` and `data/processed/` stay out of git; `local/` is scratch. Commit only source, tests, model artifacts and documents that describe the code as it is. The assistant's key lives in the environment or `local/secrets/assistant.env`, never in `web/`, a test, a log or a commit.
 
 ## Contracts
 
 - `web/engine/result.js` documents everything the engine returns. The interface reads the engine through it and nothing else.
 - `web/model/ensemble.json`, written by `surrogate.export_web`, is everything the browser knows about the model: the input definition, the scales, the weights' hash and the numbers shown about the model. Nothing about the model is typed into `web/`.
+- `web/app/operations.js` holds every action the tool offers, each one operation with a name, a description, a JSON Schema and a `run`. The engineer's controls and the assistant run the same operations, so a new action is added there and its control calls it.
+- `web/app/workspace.js` holds every file of the session: geometry the engineer dropped, exports, and what the assistant's kernel writes. The file panel, the kernel's working directory and the file operations all act on it; nothing the assistant does deletes or replaces an engineer's file without the engineer's approval.
 
 ## Changing the model
 
@@ -28,9 +30,10 @@ Choose between designs on cross-validation over the ten training cars. Two singl
 
 ## Checks
 
-- `uv run pytest`: the Python pipeline and the browser engine against it (needs Bun or Deno; full-car tests need the files in `data/raw/`).
-- `deno test --allow-read tests/meshes.test.js tests/result.test.js`: the engine's meshes and file format.
+- `uv run pytest`: the Python pipeline, the browser engine against it, and the assistant's proxies (needs Bun or Deno; full-car tests need the files in `data/raw/`).
+- `deno test --allow-read tests/meshes.test.js tests/result.test.js tests/nearest.test.js`: the engine's meshes, file format and sampling between cars.
 - An interface change is checked in a real browser with WebGPU, on a bundled example and on a full DrivAerML file. A browser without WebGPU exercises only the CPU path.
+- A change to the assistant's prompt (`web/assistant/prompt.js`), its tools or its kernel is checked with real conversations in that browser against the cheap test model (`ASSISTANT_MODEL=meta/muse-spark-1.3-contributor`): the tools it calls, and that every number in its reply comes from a tool result.
 - Analysing a full file takes about 4.5 GB in the browser; a training run or a full-surface job in Python is heavy too. Run at most three such jobs at once on one machine; where `local/bin/heavy` exists, start them through it.
 
 ## Documentation

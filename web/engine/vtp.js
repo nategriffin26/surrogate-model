@@ -9,7 +9,7 @@
  * that says what is wrong and what to do about it.
  *
  * Also writes such a file back with cell arrays added (`addCellArrays`), composed from slices of the
- * original rather than a copy of it.
+ * original rather than a copy of it, and writes any surface given as arrays as a new file (`writeVtp`).
  */
 
 /** The CFD pressure coefficient; the only solver array the engine reads, and only for comparison. */
@@ -722,6 +722,73 @@ export async function addCellArrays(file, arrays, onProgress = () => {}) {
   }
   parts.push(file.slice(cursor));
   return new Blob(parts);
+}
+
+/** VTK's names for the typed arrays a written file may hold. */
+const VTK_TYPES = new Map([
+  [Int8Array, 'Int8'], [Uint8Array, 'UInt8'], [Int16Array, 'Int16'], [Uint16Array, 'UInt16'],
+  [Int32Array, 'Int32'], [Uint32Array, 'UInt32'], [Float32Array, 'Float32'], [Float64Array, 'Float64'],
+]);
+
+/**
+ * A new VTK XML PolyData file of a surface given as arrays, with cell and point arrays: for geometry
+ * that has no file of its own, such as a variant made on the page. Every array is stored raw in one
+ * appended block, little-endian with UInt64 sizes, so the File is composed from the arrays' own bytes.
+ * @param {{ name: string, points: Float32Array, connectivity: Uint32Array, offsets: Uint32Array }} surface
+ *   as in `ParsedSurface`
+ * @param {Record<string, ArrayBufferView>} [cellArrays]  by name, k values per polygon (k = length / polygons)
+ * @param {Record<string, ArrayBufferView>} [pointArrays]  by name, k values per point
+ * @returns {File} named `surface.name`
+ */
+export function writeVtp({ name, points, connectivity, offsets }, cellArrays = {}, pointArrays = {}) {
+  const pointCount = points.length / 3;
+  const cellCount = offsets.length - 1;
+  const blocks = [];
+  let offset = 0;
+  const dataArray = (arrayName, values, type, components) => {
+    blocks.push(words(8, [values.byteLength]), values);
+    const tag = `<DataArray type="${type}" Name="${escapeXml(arrayName)}" NumberOfComponents="${components}" format="appended" offset="${offset}"/>`;
+    offset += 8 + values.byteLength;
+    return tag;
+  };
+  const fields = (arrays, count, holder) => Object.entries(arrays).map(([arrayName, values]) => {
+    const type = VTK_TYPES.get(values.constructor);
+    if (!type) throw new Error(`The array ${arrayName} is a ${values.constructor.name}, which a .vtp file cannot hold.`);
+    const components = values.length / count;
+    if (!Number.isInteger(components) || components < 1) {
+      throw new Error(`The array ${arrayName} has ${values.length} values for ${count} ${holder}; it needs the same number for each.`);
+    }
+    return dataArray(arrayName, values, type, components);
+  });
+
+  const pointData = fields(pointArrays, pointCount, 'points');
+  const cellData = fields(cellArrays, cellCount, 'polygons');
+  const pointsTag = dataArray('Points', points, 'Float32', 3);
+  // Stored as Int32, the type VTK itself writes and every reader takes: the same bytes, since no
+  // surface that fits in memory has 2^31 corners.
+  const corners = new Int32Array(connectivity.buffer, connectivity.byteOffset, offsets[cellCount]);
+  const ends = new Int32Array(offsets.buffer, offsets.byteOffset + 4, cellCount);
+  const polys = [dataArray('connectivity', corners, 'Int32', 1), dataArray('offsets', ends, 'Int32', 1)];
+
+  const xml = [
+    '<?xml version="1.0"?>',
+    '<VTKFile type="PolyData" version="1.0" byte_order="LittleEndian" header_type="UInt64">',
+    '<PolyData>',
+    `<Piece NumberOfPoints="${pointCount}" NumberOfVerts="0" NumberOfLines="0" NumberOfStrips="0" NumberOfPolys="${cellCount}">`,
+    '<PointData>', ...pointData, '</PointData>',
+    '<CellData>', ...cellData, '</CellData>',
+    '<Points>', pointsTag, '</Points>',
+    '<Polys>', ...polys, '</Polys>',
+    '</Piece>',
+    '</PolyData>',
+    '<AppendedData encoding="raw">',
+    '_',
+  ].join('\n');
+  return new File([xml, ...blocks, '\n</AppendedData>\n</VTKFile>\n'], name, { type: 'application/octet-stream' });
+}
+
+function escapeXml(text) {
+  return text.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
 }
 
 /**

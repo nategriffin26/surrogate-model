@@ -100,6 +100,20 @@ export async function buildMeshes(surface, { flip, average, signal }, on) {
 }
 
 /**
+ * A surface drawn as it is, without simplifying: every polygon fan-triangulated and wound outward,
+ * with area-weighted normals at its points. For surfaces small enough to draw whole, such as a
+ * working mesh handed to `predictQuick`.
+ * @param {ParsedSurface} surface
+ * @param {boolean} flip  the polygons are wound inward
+ * @returns {{ positions: Float32Array, normals: Float32Array, indices: Uint32Array }}
+ */
+export function surfaceMesh(surface, flip) {
+  const indices = triangulate(surface, flip, surface.connectivity.length - 2 * (surface.offsets.length - 1));
+  if (!indices) throw new RangeError('Out of memory for the surface\'s triangles.');
+  return { positions: surface.points, normals: pointNormals(surface, flip), indices };
+}
+
+/**
  * @typedef {Object} CellToPoint  Per-polygon values put on points, as the meshes' `cfd` is made.
  * @property {(values: ArrayLike<number>, done?: Uint8Array) => Float32Array} all
  *   (C) per polygon in, (P) out: the value at every file point, which are the full mesh's vertices.

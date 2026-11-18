@@ -2,7 +2,8 @@
  * What the reference pipeline (`surface.py`) measures on a surface, computed in typed-array loops:
  * each polygon's centre, outward normal and area, the bounds, the frontal area, and whether the
  * file's polygons are wound inward. Centres, normals and areas follow VTK's definitions, since the
- * networks were trained on features built from VTK's values.
+ * networks were trained on features built from VTK's values. Also checks a surface handed over as
+ * arrays (`checkSurface`).
  */
 
 /**
@@ -13,6 +14,44 @@
  * @property {number[]} bounds        [xmin, xmax, ymin, ymax, zmin, zmax] of the centres
  * @property {boolean} flip           the file's polygons are wound inward
  */
+
+/**
+ * A surface handed over as arrays (`analyzeSurface`, `predictQuick`), checked as the reader checks a
+ * file's, so a wrong array is named where it comes in rather than failing somewhere in the analysis.
+ * @param {import('./result.js').ParsedSurface} surface
+ * @returns {import('./result.js').ParsedSurface} the same arrays, with `cfd` null when left out
+ */
+export function checkSurface({ name, points, connectivity, offsets, cfd = null }) {
+  const count = (n) => n.toLocaleString('en-US');
+  if (typeof name !== 'string') throw new Error('The surface needs a name (a string).');
+  if (!(points instanceof Float32Array) || points.length % 3 !== 0) {
+    throw new Error('The surface\'s points must be a Float32Array of x, y, z for each point.');
+  }
+  for (let i = 0; i < points.length; i++) {
+    if (!Number.isFinite(points[i])) throw new Error(`The surface's point ${count(Math.floor(i / 3))} has a coordinate that is not a finite number.`);
+  }
+  if (!(connectivity instanceof Uint32Array)) throw new Error('The surface\'s connectivity must be a Uint32Array of point indices.');
+  if (!(offsets instanceof Uint32Array) || offsets.length < 2 || offsets[0] !== 0) {
+    throw new Error('The surface\'s offsets must be a Uint32Array that starts at 0, with one entry more than there are polygons.');
+  }
+  for (let c = 1; c < offsets.length; c++) {
+    if (offsets[c] < offsets[c - 1] + 3) throw new Error(`Polygon ${count(c - 1)} of the surface has fewer than three corners.`);
+  }
+  const corners = offsets[offsets.length - 1];
+  if (corners !== connectivity.length) {
+    throw new Error(`The surface's offsets end at ${count(corners)}, but its connectivity holds ${count(connectivity.length)} indices.`);
+  }
+  const pointCount = points.length / 3;
+  for (let i = 0; i < corners; i++) {
+    if (connectivity[i] >= pointCount) {
+      throw new Error(`The surface's connectivity refers to point ${count(connectivity[i])}, but it has ${count(pointCount)} points.`);
+    }
+  }
+  if (cfd !== null && (!(cfd instanceof Float32Array) || cfd.length !== offsets.length - 1)) {
+    throw new Error(`The surface's cfd must be a Float32Array with one value per polygon (${count(offsets.length - 1)}).`);
+  }
+  return { name, points, connectivity, offsets, cfd };
+}
 
 /**
  * @param {import('./result.js').ParsedSurface} surface
@@ -127,12 +166,16 @@ const SILHOUETTE_PIXEL = 0.005;
 
 /**
  * Projected frontal area, the reference area for the coefficients: the car's outline seen from ahead,
- * drawn on a 5 mm grid by the pixels its points fall in, with enclosed gaps filled. The reference
- * (`estimate_frontal_area`) marks pixels with 1.5 million random samples instead; on DrivAerML cars
- * the two agree within 0.1%, and this one gives the same answer every time.
- * @param {Float32Array} points (P, 3)
+ * drawn on a 5 mm grid by the pixels its surface falls in, with enclosed gaps filled. Pixels are
+ * marked by points on the surface: every point of it, and on polygons wider than half a pixel a
+ * lattice of points half a pixel apart, so a coarse mesh draws its outline as fully as a fine one
+ * (run 1's 600,000-triangle working mesh and its 17.7 million-triangle file agree within 0.01%;
+ * from points alone the working mesh came out 0.5% small). The reference (`estimate_frontal_area`)
+ * marks pixels with 1.5 million random samples instead, which miss some of the pixels the outline
+ * only grazes: on DrivAerML cars this one is 0.2–0.3% larger, and gives the same answer every time.
+ * @param {import('./result.js').ParsedSurface} surface
  */
-export function frontalArea(points) {
+export function frontalArea({ points, connectivity, offsets }) {
   const f32 = Math.fround;
   let ymin = Infinity, ymax = -Infinity, zmin = Infinity, zmax = -Infinity;
   for (let i = 0; i < points.length; i += 3) {
@@ -148,10 +191,28 @@ export function frontalArea(points) {
   const nz = Math.ceil((zmax - zmin) / SILHOUETTE_PIXEL) + 3;
   const pixel = f32(SILHOUETTE_PIXEL);
   const covered = new Uint8Array(ny * nz);
-  for (let i = 0; i < points.length; i += 3) {
-    const iy = Math.min(Math.trunc(f32(f32(points[i + 1] - ymin) / pixel)) + 1, ny - 1);
-    const iz = Math.min(Math.trunc(f32(f32(points[i + 2] - zmin) / pixel)) + 1, nz - 1);
+  const mark = (y, z) => {
+    const iy = Math.min(Math.trunc(f32(f32(y - ymin) / pixel)) + 1, ny - 1);
+    const iz = Math.min(Math.trunc(f32(f32(z - zmin) / pixel)) + 1, nz - 1);
     covered[iy * nz + iz] = 1;
+  };
+  for (let i = 0; i < points.length; i += 3) mark(points[i + 1], points[i + 2]);
+
+  const spacing = SILHOUETTE_PIXEL / 2;
+  for (let c = 0; c + 1 < offsets.length; c++) {
+    const apex = 3 * connectivity[offsets[c]];
+    const ay = points[apex + 1], az = points[apex + 2];
+    for (let k = offsets[c] + 1; k + 1 < offsets[c + 1]; k++) {
+      const b = 3 * connectivity[k], d = 3 * connectivity[k + 1];
+      const uy = points[b + 1] - ay, uz = points[b + 2] - az;
+      const vy = points[d + 1] - ay, vz = points[d + 2] - az;
+      const longest = Math.sqrt(Math.max(uy * uy + uz * uz, vy * vy + vz * vz, (vy - uy) ** 2 + (vz - uz) ** 2));
+      if (longest < spacing) continue;
+      const n = Math.ceil(longest / spacing);
+      for (let i = 0; i <= n; i++) {
+        for (let j = 0; i + j <= n; j++) mark(ay + (i * uy + j * vy) / n, az + (i * uz + j * vz) / n);
+      }
+    }
   }
 
   // Flood the outside from the border through empty pixels (4-connected); everything else is the car.

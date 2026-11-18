@@ -4,11 +4,14 @@
 // holds only the last file's, so otherwise it is the face of the working mesh, valued at its centre. A click places
 // exactly what the preview shows.
 
-import { download, h, s } from './dom.js';
-import { baseName } from './export.js';
+import { VertexGrid, FaceIndex } from '../viewer/picking.js';
+import { round, triple } from './checks.js';
+import { h, s } from './dom.js';
+import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
 import { signed } from './format.js';
 import { icon } from './icons.js';
+import { defineOperation } from './operations.js';
 
 /** A probe site's value of each field the Result view shows. */
 const VALUE = { cp: (site) => site.cp, sigma: (site) => site.sigma, drag: (site) => -site.cp * site.normal[0] };
@@ -75,11 +78,108 @@ function holds(site, p) {
 	return true;
 }
 
+/** Per working mesh, the lookups that find the face under a point; built on first use. */
+const lookups = new WeakMap();
+
+/** The working-mesh face nearest a point, as a probe site. */
+function faceNear(mesh, point) {
+	let lookup = lookups.get(mesh);
+	if (!lookup) lookups.set(mesh, (lookup = { grid: new VertexGrid(mesh.positions), faces: new FaceIndex(mesh) }));
+	return faceSite(mesh, lookup.faces.faceAt(point, lookup.grid.nearest(point)));
+}
+
+/**
+ * The cell a probe at `point` reads, from the working-mesh face nearest the point (`face`, when the caller already
+ * knows it): on the file analysed last, while the engine holds it, the file polygon there; otherwise that face.
+ */
+async function siteAtPoint(engine, c, point, face = faceNear(c.result.mesh, point)) {
+	if (c.kind !== 'file') return face;
+	// The face's normal keeps a point on a thin panel on its own side.
+	const polygon = await engine.polygonAt(c.result, point, face.normal);
+	if (!polygon) return face;
+	return { cell: polygon.index, corners: polygon.corners, point: polygon.center, normal: polygon.normal, cp: polygon.cp, sigma: polygon.sigma };
+}
+
+/** A probe as operations report it. */
+const probeResult = (p) => ({ number: p.n, ...(p.cell === null ? {} : { cell: p.cell }), point_m: p.point.map((v) => round(v, 5)), normal: p.normal.map((v) => round(v, 4)), cp: round(p.cp), sigma: round(p.sigma) });
+
+/** app: { session, engine, update }. Probes as operations, and the probe table as an export. */
+export function defineProbeOperations({ session, engine, update }) {
+	const target = (case_id) => {
+		const c = case_id === undefined ? session.active : session.byId(case_id);
+		if (!c?.result) throw new Error(case_id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${case_id} has no result yet (${c.status}).`);
+		return c;
+	};
+	const caseId = { type: 'integer', description: 'Default the case on screen.' };
+
+	defineOperation({
+		name: 'place_probe',
+		description: 'Pin a probe on a car at the surface cell nearest a point: on a dropped file, the file\'s own polygon with the values predicted for it; on a bundled example, the working-mesh triangle, valued at its centre. Probes are numbered from 1 on each car and listed in the dock\'s probe table. Returns the probe: its number, the file cell index when there is one, its centre and outward normal, Cp and the spread σ(Cp).',
+		parameters: {
+			type: 'object',
+			properties: { point: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, description: '[x, y, z] in metres; snapped to the nearest surface cell.' }, case_id: caseId },
+			required: ['point'],
+			additionalProperties: false,
+		},
+		async run({ point, case_id }) {
+			const c = target(case_id);
+			const site = await siteAtPoint(engine, c, triple('point', point));
+			const probe = { n: c.nextProbe++, ...site };
+			c.probes.push(probe);
+			update('dock', 'layout', 'markers');
+			return probeResult(probe);
+		},
+	});
+
+	defineOperation({
+		name: 'list_probes',
+		description: 'The probes pinned on a car, in order, with each one\'s cell, centre, normal, Cp and σ(Cp).',
+		parameters: { type: 'object', properties: { case_id: caseId }, additionalProperties: false },
+		run: ({ case_id }) => ({ probes: target(case_id).probes.map(probeResult) }),
+	});
+
+	defineOperation({
+		name: 'remove_probe',
+		description: 'Remove one probe from a car by its number. The others keep their numbers.',
+		parameters: { type: 'object', properties: { number: { type: 'integer' }, case_id: caseId }, required: ['number'], additionalProperties: false },
+		run({ number, case_id }) {
+			const c = target(case_id);
+			if (!c.probes.some((p) => p.n === number)) throw new Error(`Case ${c.id} has no probe ${number}. Its probes: ${c.probes.map((p) => p.n).join(', ') || 'none'}.`);
+			c.probes = c.probes.filter((p) => p.n !== number);
+			update('dock', 'layout', 'markers');
+			return { removed: number };
+		},
+	});
+
+	defineOperation({
+		name: 'clear_probes',
+		description: 'Remove every probe from a car.',
+		parameters: { type: 'object', properties: { case_id: caseId }, additionalProperties: false },
+		run({ case_id }) {
+			const c = target(case_id);
+			const removed = c.probes.length;
+			c.probes = [];
+			update('dock', 'layout', 'markers');
+			return { removed };
+		},
+	});
+
+	defineExport({
+		name: 'probes',
+		label: 'Probes',
+		format: 'CSV',
+		title: 'The probe table: number, file cell, position, Cp and σ',
+		unavailable: (c) => (c.probes.length ? null : 'There are no probes on this car. Click the car to pin one.'),
+		make: async (c) => new Blob([probesCsv(c)], { type: 'text/csv' }),
+		fileName: (c) => `${baseName(c)}-probes.csv`,
+	});
+}
+
 /**
  * host: the overlay over the 3D view; view: the shared view (its field is what the readout shows).
- * changed() runs after probes are added or removed.
+ * run(name, args) runs an operation: a click pins its probe through `place_probe`.
  */
-export function createProbes({ host, engine, viewer, active, view, changed }) {
+export function createProbes({ host, engine, viewer, active, view, run }) {
 	const edge = s('polygon', { class: 'edge' });
 	const outline = s('svg', { class: 'cell-outline' }, s('polygon', { class: 'halo' }), edge);
 	const marker = h('div', { class: 'preview-marker' });
@@ -105,14 +205,7 @@ export function createProbes({ host, engine, viewer, active, view, changed }) {
 	let looking = false;
 
 	/** The site under a pick: the file polygon there, or the working mesh's face where the engine holds no polygons. */
-	async function siteAt(c, hit) {
-		const face = faceSite(c.result.mesh, hit.face);
-		if (c.kind !== 'file') return face;
-		// The face's normal keeps a pick on a thin panel on its own side.
-		const polygon = await engine.polygonAt(c.result, hit.point, face.normal);
-		if (!polygon) return face;
-		return { cell: polygon.index, corners: polygon.corners, point: polygon.center, normal: polygon.normal, cp: polygon.cp, sigma: polygon.sigma };
-	}
+	const siteAt = (c, hit) => siteAtPoint(engine, c, hit.point, faceSite(c.result.mesh, hit.face));
 
 	/** The cursor moved over the car (a hit at a client position) or off it (null). */
 	async function hover(hit, clientX, clientY) {
@@ -143,8 +236,9 @@ export function createProbes({ host, engine, viewer, active, view, changed }) {
 	}
 
 	/**
-	 * A click places the previewed site when it lands where the preview was looked up, so the two never disagree;
-	 * otherwise (a touch, or a click before the preview caught up) the site under the click.
+	 * A click pins the previewed site when it lands where the preview was looked up, so the two never disagree;
+	 * otherwise (a touch, or a click before the preview caught up) the site under the click. `place_probe` finds the
+	 * same cell again from its centre.
 	 */
 	async function pin(hit, clientX, clientY) {
 		const c = active();
@@ -153,8 +247,7 @@ export function createProbes({ host, engine, viewer, active, view, changed }) {
 		const site = previewed ? current.site : await siteAt(c, hit);
 		if (!site || c !== active()) return;
 		current = { c, site, clientX, clientY };
-		c.probes.push({ n: c.nextProbe++, ...site });
-		changed();
+		await run('place_probe', { case_id: c.id, point: site.point });
 	}
 
 	/** The preview: outline, marker and readout, placed for the camera as it is now. */
@@ -200,10 +293,7 @@ export function createProbes({ host, engine, viewer, active, view, changed }) {
 
 	/** The probe table. */
 	function table(c) {
-		const remove = (n) => {
-			c.probes = c.probes.filter((p) => p.n !== n);
-			changed();
-		};
+		const remove = (n) => run('remove_probe', { case_id: c.id, number: n });
 		if (c.probes.length === 0) return h('p', { class: 'plot-empty' }, 'No probes');
 		return h('div', { class: 'probes' },
 			h('table', { class: 'probe-table' },
@@ -218,11 +308,8 @@ export function createProbes({ host, engine, viewer, active, view, changed }) {
 	function actions(c) {
 		const none = c.probes.length === 0;
 		const copy = () => navigator.clipboard.writeText(probesCsv(c).replaceAll(',', '\t'));
-		const save = () => download(new Blob([probesCsv(c)], { type: 'text/csv' }), `${baseName(c)}-probes.csv`);
-		const clear = () => {
-			c.probes = [];
-			changed();
-		};
+		const save = () => run('download_export', { export: 'probes' });
+		const clear = () => run('clear_probes', { case_id: c.id });
 		return h('div', { class: 'probe-actions' },
 			h('button', { type: 'button', class: 'tool', disabled: none, onclick: copy }, icon('copy'), 'Copy'),
 			h('button', { type: 'button', class: 'tool', disabled: none, onclick: save }, icon('download'), 'CSV'),

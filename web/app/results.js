@@ -52,8 +52,8 @@ function profileOf(mesh, bounds) {
 	return { path: `M${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L')}Z`, height, map };
 }
 
-/** host: where the card goes; overlay: over the 3D view, for the extremes' markers. */
-export function createResultCard({ host, overlay, viewer, active }) {
+/** host: where the card goes; overlay: over the 3D view, for the extremes' markers; run(name, args) runs an operation. */
+export function createResultCard({ host, overlay, viewer, active, run }) {
 	const derived = new WeakMap();
 	const markers = { max: h('div', { class: 'extreme-marker max', hidden: true }, h('span', {}, 'max')), min: h('div', { class: 'extreme-marker min', hidden: true }, h('span', {}, 'min')) };
 	overlay.append(markers.max, markers.min);
@@ -117,7 +117,7 @@ export function createResultCard({ host, overlay, viewer, active }) {
 		const { extremes: ex, profile } = of(c);
 		const fly = (which) => {
 			marked.pinned = which;
-			viewer.flyTo(ex[which].point, ex[which].normal);
+			run('fly_to', { point: ex[which].point, normal: ex[which].normal });
 			placeMarkers();
 		};
 		const hover = (el, which) => {

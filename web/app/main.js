@@ -1,24 +1,33 @@
-// The tool's shell: open cases in tabs, the 3D view with its toolbar, legend and result card, and the dock of plots
-// and probes under it. Every case is seen through one view (camera, field, colour maps, section and dock tab), so
-// flipping tabs compares cars from the same angle on the same colour scale; each case keeps only its own probes.
+// The tool's shell: open cases in tabs, the 3D view with its toolbar, legend and result card, the dock of plots and
+// probes under it, the workspace's files in a panel on the left and the assistant in one on the right. Every case is
+// seen through one view (camera, field, colour maps, section and dock tab), so flipping tabs compares cars from the
+// same angle on the same colour scale; each case keeps only its own probes.
+//
+// Every action is an operation in the registry (operations.js): the controls here run them as the engineer, the
+// assistant runs the same ones, so the two never disagree about what an action does.
 
 import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
 import { VIEWS, Viewer } from '../viewer/viewer.js';
-import { createSectionTool } from './cut.js';
-import { createDock, dockCsv } from './dock.js';
-import { download, h } from './dom.js';
-import { baseName, savePicture } from './export.js';
+import { defineCaseOperations } from './cases.js';
+import { createSectionTool, defineSectionOperations } from './cut.js';
+import { defineDisplayOperations } from './display.js';
+import { createDock } from './dock.js';
+import { h } from './dom.js';
+import { EXPORTS, baseName, defineExport, defineExportOperations, pictureOf } from './export.js';
 import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
+import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
 import { menu } from './menu.js';
-import { createProbes } from './probes.js';
+import { onOperation, operations, runOperation } from './operations.js';
+import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
 import { createResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
 import { VIEW_KEYS, createToolbar } from './toolbar.js';
+import { createWorkspace } from './workspace.js';
 
 const $ = (selector) => document.querySelector(selector);
 const body = document.body;
@@ -29,36 +38,23 @@ const strip = $('[data-strip]');
 const card = $('[data-card]');
 const paneLabels = $('[data-pane-labels]');
 const modelHost = $('[data-model]');
+const assistantHost = $('[data-assistant]');
 
 const engine = createEngine();
 const session = new Session(engine);
+const workspace = createWorkspace();
 const viewer = new Viewer(viewport);
 viewport.append(createTriad(viewer));
-const display = { edges: false, ground: true };
+const view = session.view;
 let mode = 'result';
 
 const active = () => session.active;
 const ready = () => session.active?.status === 'ready';
+/** Run an operation as the engineer: what every control here does. */
+const run = (name, args) => runOperation(name, args, { session, viewer, engine, by: 'engineer' });
 
-// ---- the shared view ----------------------------------------------------------------------------------------------------
-
-/** The colour maps start from the first car with a result and then stay put, so every car reads on one scale. */
-const view = {
-	field: 'cp',
-	maps: null,
-	section: { on: true, axis: 1, offset: 0, clip: 0 },
-	dock: 'section',
-	dockCollapsed: false,
-};
 /** The camera frames the first car; after that it stays where the engineer put it, whichever car is shown. */
 let framed = false;
-
-/**
- * While the Model view is on screen it may choose what the car shows: panes [{ field, label }], or null to show the
- * shared view. The shared view is left untouched, so Result comes back as it was.
- */
-let modelPanes = null;
-const modelOwnsCar = () => mode === 'model' && modelPanes !== null;
 
 function mapFor(field) {
 	const name = FIELDS[field].map;
@@ -68,9 +64,8 @@ function mapFor(field) {
 	return { ...map, bands: bandCount(map) };
 }
 
-/** The panes the car is drawn in: the Model view's while it owns the car, otherwise the shared field. */
+/** The panes the car is drawn in: the shared field, once the case on screen has one. */
 function panes() {
-	if (modelOwnsCar()) return modelPanes.map((pane) => ({ ...pane, map: mapFor(pane.field) }));
 	const field = active()?.result ? view.field : 'none';
 	return [{ field, map: mapFor(field) }];
 }
@@ -78,79 +73,76 @@ function panes() {
 /** The field the legend shows and edits: the first pane drawn in colour. */
 const legendField = () => panes().find((pane) => FIELDS[pane.field].map)?.field ?? 'none';
 
+// ---- operations ---------------------------------------------------------------------------------------------------------
+
+const tool = { session, viewer, engine, workspace, update };
+defineDisplayOperations(tool);
+defineCaseOperations(tool);
+defineSectionOperations(tool);
+defineProbeOperations(tool);
+defineExportOperations(tool);
+const files = defineFileOperations(tool);
+
+defineExport({
+	name: 'picture',
+	label: 'Picture',
+	format: 'PNG',
+	title: 'The view as drawn, with the colour legend',
+	unavailable: () => null,
+	make: (c) => pictureOf(c, viewer, { field: view.field, map: view.maps[FIELDS[view.field].map] }),
+	fileName: (c) => `${baseName(c)}-${view.field}.png`,
+});
+defineExport({
+	name: 'surface',
+	label: 'Surface',
+	format: 'VTP',
+	title: 'The analysed file with CpPredicted and CpSpread cell arrays added',
+	// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on.
+	unavailable: (c) => (engine.canExportVtp(c.result) ? null : 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
+	make: (c) => engine.exportVtp(c.result),
+	fileName: (c) => `${baseName(c)}_prediction.vtp`,
+});
+
 // ---- components ------------------------------------------------------------------------------------------------------
 
-const progress = createProgress({ cancel: (c) => session.close(c) });
+const progress = createProgress({ cancel: (c) => run('close_case', { case_id: c.id }) });
 
 const toolbar = createToolbar({
-	field: (field) => {
-		view.field = field;
-		update('toolbar', 'legend', 'viewer', 'dock');
-	},
-	view: (name) => viewer.view(name),
-	fit: () => viewer.fit(),
-	projection: (p) => {
-		viewer.setProjection(p);
-		update('toolbar');
-	},
+	field: (field) => run('set_field', { field }),
+	view: (name) => run('set_camera_view', { view: name }),
+	fit: () => run('fit_view', {}),
+	projection: (projection) => run('set_projection', { projection }),
 	toggle: (what) => toggle(what),
 });
 $('[data-toolbar]').append(toolbar.el);
-
-/** Turning the section on brings its plot up; turning it off leaves the probe table in its place. */
-function showSection(on) {
-	view.section.on = on;
-	if (on) {
-		view.dock = 'section';
-		view.dockCollapsed = false;
-	} else if (view.dock === 'section') {
-		view.dock = 'probes';
-	}
-}
 
 function toggle(what) {
 	switch (what) {
 		case 'edges':
 		case 'ground':
-			display[what] = !display[what];
-			viewer.setDisplay(display);
-			break;
+			return run('set_display', { [what]: !view.display[what] });
 		case 'section':
-			if (!active()?.result || modelOwnsCar()) return;
-			showSection(!view.section.on);
-			break;
+			if (!active()?.result) return;
+			return run('set_section', { on: !view.section.on });
 		default:
 			throw new Error(`Unknown toggle ${what}`);
 	}
-	update('toolbar', 'viewer', 'dock', 'layout');
 }
 
 const legend = createLegend({
-	change: (patch) => {
-		Object.assign(view.maps[FIELDS[legendField()].map], patch);
-		update('legend', 'toolbar', 'viewer');
-	},
-	reset: () => {
-		const name = FIELDS[legendField()].map;
-		view.maps[name] = defaultMaps(active().result.mesh)[name];
-		update('legend', 'toolbar', 'viewer');
-	},
+	change: (patch) => run('set_colour_scale', {
+		field: legendField(),
+		...(patch.lo !== undefined ? { min: patch.lo } : {}),
+		...(patch.hi !== undefined ? { max: patch.hi } : {}),
+		...(patch.ramp !== undefined ? { ramp: patch.ramp } : {}),
+		...(patch.banded !== undefined ? { banded: patch.banded } : {}),
+	}),
+	reset: () => run('set_colour_scale', { field: legendField(), reset: true }),
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, engine, viewer, active, view, changed: () => update('dock', 'layout', 'markers') });
-
-const section = createSectionTool({
-	host: overlay,
-	viewport,
-	viewer,
-	active,
-	view,
-	changed: (patch) => {
-		Object.assign(view.section, patch);
-		update('viewer', 'dock');
-	},
-});
+const probes = createProbes({ host: overlay, engine, viewer, active, view, run });
+const section = createSectionTool({ host: overlay, viewport, viewer, active, view, run });
 
 const dock = createDock({
 	section,
@@ -159,7 +151,7 @@ const dock = createDock({
 	view,
 	actions: {
 		tab: (name) => {
-			if (name === 'section') showSection(true);
+			if (name === 'section') return run('set_section', { on: true });
 			view.dock = name;
 			view.dockCollapsed = false;
 			update('toolbar', 'viewer', 'dock', 'layout');
@@ -168,111 +160,112 @@ const dock = createDock({
 			view.dockCollapsed = !view.dockCollapsed;
 			update('dock', 'layout');
 		},
+		save: () => run('download_export', { export: view.dock }),
 	},
 });
 $('[data-dock]').append(dock.el);
 
-// ---- top bar: case tabs, modes, export -------------------------------------------------------------------------------
+// ---- top bar: files, case tabs, modes, export, assistant -------------------------------------------------------------
+
+const filesPanel = createFilesPanel({ session, workspace, run, progress: (c) => progress.fraction(c) });
+$('.work').prepend(filesPanel.el);
+$('.brand').after(filesPanel.toggle);
 
 const tabs = $('[data-cases]');
 function renderTabs() {
-	tabs.replaceChildren(
-		...session.cases.map((c) => h('div', { class: 'case-tab', role: 'tab', 'aria-selected': String(c === active()), 'data-status': c.status, title: c.name },
-			h('button', { type: 'button', class: 'case-open', onclick: () => session.activate(c) },
-				h('span', { class: 'case-state', 'aria-hidden': 'true' }),
-				h('span', { class: 'case-name' }, c.name)),
-			h('button', { type: 'button', class: 'case-close', title: c.status === 'analysing' || c.status === 'queued' ? `Cancel and close ${c.name}` : `Close ${c.name}`, onclick: () => session.close(c) }, icon('close')))),
-		h('button', { type: 'button', class: 'case-add', title: 'Open a file or an example', 'aria-pressed': String(active() === null), onclick: () => session.activate(null) }, icon('plus'), h('span', {}, 'Open')));
+	tabs.replaceChildren(...session.cases.map((c) => h('div', { class: 'case-tab', role: 'tab', 'aria-selected': String(c === active()), 'data-status': c.status, title: c.name },
+		h('button', { type: 'button', class: 'case-open', onclick: () => run('show_case', { case_id: c.id }) },
+			h('span', { class: 'case-state', 'aria-hidden': 'true' }),
+			h('span', { class: 'case-name' }, c.name)),
+		h('button', { type: 'button', class: 'case-close', title: c.status === 'analysing' || c.status === 'queued' ? `Cancel and close ${c.name}` : `Close ${c.name}`, onclick: () => run('close_case', { case_id: c.id }) }, icon('close')))));
 }
 
-const modes = $('[data-modes]');
-modes.append(...['result', 'model'].map((m) => h('button', { type: 'button', role: 'tab', class: 'mode', 'data-mode': m, onclick: () => setMode(m) }, m === 'result' ? 'Result' : 'Model')));
+/**
+ * The model's own page, for reading how it is built, is one click away but not a product control: a quiet toggle in
+ * the top bar that hands it the whole area under the bar and gives the tool back as it was.
+ */
+const modelToggle = h('button', { type: 'button', class: 'model-toggle', 'aria-pressed': 'false', onclick: () => setMode(mode === 'model' ? 'result' : 'model') }, h('span', {}, 'Model'));
+$('[data-model-toggle]').append(modelToggle);
 
 let modelMounted = null;
 function setMode(next) {
 	mode = next;
-	if (mode === 'model' && !modelMounted) {
-		const showPanes = (panes) => {
-			modelPanes = panes;
-			update('toolbar', 'legend', 'viewer');
-		};
-		modelMounted = import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer, showPanes, corner: $('[data-model-corner]') }));
-	}
-	update('layout', 'toolbar', 'legend', 'viewer');
+	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer }));
+	update('layout');
 }
 
-/** A CSV file of one of the dock's tabs, shown or not. */
-function saveCsv(tab) {
-	exportMenu.close();
-	const c = active();
-	download(new Blob([dockCsv(c, { ...view, dock: tab })], { type: 'text/csv' }), `${baseName(c)}-${tab}.csv`);
-}
+/**
+ * The Export menu: every export, downloaded by its row or saved into the workspace by the folder beside it. Those
+ * that cannot be made now are disabled with the reason as their tooltip; the surface file is offered only while the
+ * engine holds the car's whole predicted surface.
+ */
+const exportNote = h('p', { class: 'menu-note', role: 'alert', hidden: true });
+const exportList = h('div', { class: 'menu-list export-list' });
+const exportButton = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
+const exportMenu = menu(exportButton, h('div', {}, exportList, exportNote), { align: 'right' });
+$('[data-export]').append(exportMenu.el);
 
-/** The dropped file with the predicted Cp and its spread added as cell arrays, for ParaView and the like. */
-async function saveSurface() {
-	const item = exportItems.surface;
-	const progress = item.querySelector('kbd');
-	item.disabled = true;
+async function exportTo(row, name, to) {
 	exportNote.hidden = true;
+	row.classList.add('busy');
 	try {
-		const file = await engine.exportVtp(active().result, (fraction) => (progress.textContent = `${Math.round(fraction * 100)} %`));
-		download(file, file.name);
+		await run(to === 'download' ? 'download_export' : 'save_export', { export: name });
 		exportMenu.close();
 	} catch (error) {
 		exportNote.textContent = error.message;
 		exportNote.hidden = false;
 	} finally {
-		progress.textContent = 'VTP';
-		item.disabled = false;
-		refreshExport();
+		row.classList.remove('busy');
 	}
 }
 
-const exportItems = {
-	picture: h('button', { type: 'button', class: 'menu-item', onclick: () => {
-		exportMenu.close();
-		savePicture(active(), viewer, { field: view.field, map: view.maps[FIELDS[view.field].map] });
-	} }, h('span', {}, 'Picture'), h('kbd', {}, 'PNG')),
-	surface: h('button', { type: 'button', class: 'menu-item', title: 'The analysed file with CpPredicted and CpSpread cell arrays added', onclick: saveSurface }, h('span', {}, 'Surface'), h('kbd', {}, 'VTP')),
-	section: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('section') }, h('span', {}, 'Section'), h('kbd', {}, 'CSV')),
-	probes: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('probes') }, h('span', {}, 'Probes'), h('kbd', {}, 'CSV')),
-};
-const exportNote = h('p', { class: 'menu-note', role: 'alert', hidden: true });
-const exportButton = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
-const exportMenu = menu(exportButton, h('div', { class: 'menu-list' }, Object.values(exportItems), exportNote), { align: 'right' });
-$('[data-export]').append(exportMenu.el);
-
-/**
- * What can be exported right now. The surface file exists only while the engine holds the car's whole predicted
- * surface: for a dropped file, from its exact numbers until the next analysis starts, and never on a device too
- * slow to predict every polygon. Rather than a control that cannot be used, it is offered only then.
- */
-function refreshExport() {
+function renderExportMenu() {
 	const c = active();
-	exportItems.surface.hidden = !engine.canExportVtp(c.result);
-	exportItems.section.disabled = !view.section.on;
-	exportItems.probes.disabled = c.probes.length === 0;
+	exportList.replaceChildren(...[...EXPORTS.values()].flatMap((e) => {
+		const why = e.unavailable(c);
+		if (e.name === 'surface' && why) return [];
+		const row = h('div', { class: 'export-row', 'data-export': e.name },
+			h('button', { type: 'button', class: 'menu-item', title: why ?? e.title, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'download') }, h('span', {}, e.label), h('kbd', {}, e.format)),
+			h('button', { type: 'button', class: 'icon-button export-keep', title: `Save ${e.label.toLowerCase()} to files`, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'files') }, icon('keep')));
+		return [row];
+	}));
 }
 exportButton.addEventListener('click', () => {
 	exportNote.hidden = true;
-	refreshExport();
+	renderExportMenu();
 });
+
+// ---- the assistant: a panel on the right, open in either view ------------------------------------------------------------
+
+/** The assistant acts only through the operations, as the engineer's controls do; its runs are marked as its own. */
+const assistantRun = (name, args) => runOperation(name, args, { session, viewer, engine, by: 'assistant' });
+let assistantMounted = null;
+const assistantButton = h('button', { type: 'button', class: 'button assistant-button', 'aria-pressed': 'false', 'aria-controls': 'assistant', onclick: () => setAssistant(!body.classList.contains('assistant-open')) }, icon('assistant'), 'Assistant');
+$('.topbar-end').append(assistantButton);
+
+/** The assistant's column opens beside the stage, which narrows to make room. */
+function setAssistant(open) {
+	body.classList.toggle('assistant-open', open);
+	assistantButton.setAttribute('aria-pressed', String(open));
+	if (open) assistantMounted ??= import('../assistant/index.js').then(({ mountAssistant }) => mountAssistant(assistantHost, { session, engine, viewer, workspace, operations, runOperation: assistantRun, onOperation, close: () => setAssistant(false) }));
+}
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
-const resultCard = createResultCard({ host: card, overlay, viewer, active });
+const resultCard = createResultCard({ host: card, overlay, viewer, active, run });
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
-const start = startScreen({ onFile: (file) => session.openFile(file), onExample: (id, label) => session.openExample(id, label) });
+// An example that fails to load shows why on its own card, so the first screen does not wait on the operation.
+const start = startScreen({ onFile: (file) => addFiles([file], { workspace, run }), onExample: (id) => run('open_example', { example: id }).catch(() => {}) });
 
 function errorCard(c) {
 	return h('div', { class: 'notice', role: 'alert' },
 		h('div', { class: 'notice-title' }, c.name),
 		h('p', { class: 'notice-text' }, c.error),
 		h('div', { class: 'notice-actions' },
-			h('button', { type: 'button', class: 'button button-primary', onclick: () => session.activate(null) }, 'Open another file'),
-			h('button', { type: 'button', class: 'button', onclick: () => session.close(c) }, 'Close')));
+			h('button', { type: 'button', class: 'button button-primary', onclick: () => filesPanel.setOpen(true) }, 'Open another file'),
+			h('button', { type: 'button', class: 'button', onclick: () => run('close_case', { case_id: c.id }) }, 'Close')));
 }
 
 function loadingCard(c) {
@@ -320,10 +313,9 @@ function renderCenter() {
 function renderLayout() {
 	const c = active();
 	body.dataset.screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' ? 'notice' : 'case';
-	if (!ready() && mode === 'model') mode = 'result';
 	body.dataset.mode = mode;
-	for (const b of modes.children) b.setAttribute('aria-selected', String(b.dataset.mode === mode));
-	modes.hidden = !ready();
+	modelToggle.setAttribute('aria-pressed', String(mode === 'model'));
+	modelToggle.title = mode === 'model' ? 'Back to the tool' : 'How the model is built';
 	$('[data-export]').hidden = !ready();
 	modelHost.hidden = mode !== 'model';
 	viewer.hoverPicking = ready();
@@ -333,14 +325,14 @@ function renderLayout() {
 /** While the Model view owns the car, the field picker and the section wait until Result is back. */
 function renderToolbar() {
 	const c = active();
-	const enabled = Boolean(c?.result) && !modelOwnsCar();
+	const enabled = Boolean(c?.result);
 	toolbar.render({
 		fields: RESULT_FIELDS,
 		field: view.field,
 		maps: view.maps,
 		enabled,
 		projection: viewer.projection,
-		display,
+		display: view.display,
 		section: enabled && view.section.on,
 	});
 }
@@ -358,8 +350,8 @@ function applyViewer() {
 	viewer.setPanes(shown);
 	paneLabels.replaceChildren(...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
 	const s = view.section;
-	viewer.setSection(c?.result && s.on && !modelOwnsCar() ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
-	viewer.setDisplay(display);
+	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
+	viewer.setDisplay(view.display);
 }
 
 const RENDER = {
@@ -442,7 +434,7 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 			if (c !== active()) return;
 			update('card', 'dock');
 			// The surface export becomes available with the exact numbers, perhaps while the menu is open.
-			if (ready()) refreshExport();
+			if (ready()) renderExportMenu();
 			return;
 		case 'device':
 			if (active()?.status === 'analysing' || active()?.status === 'queued') update('center');
@@ -496,20 +488,16 @@ dockResizer.addEventListener('pointerdown', (e) => {
 
 const VIEW_BY_KEY = Object.fromEntries(Object.entries(VIEW_KEYS).map(([name, key]) => [key, name]));
 addEventListener('keydown', (e) => {
-	if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
+	if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
 	if (!active()?.surface) return;
 	const key = e.key.toLowerCase();
-	if (VIEW_BY_KEY[key] && VIEWS[VIEW_BY_KEY[key]]) viewer.view(VIEW_BY_KEY[key]);
-	else if (key === 'f') viewer.fit();
-	else if (key === 'p' || key === 'o') {
-		viewer.setProjection(key === 'p' ? 'perspective' : 'orthographic');
-		update('toolbar');
-	} else if (key === 'e') toggle('edges');
-	else if (key === 'g') toggle('ground');
-	else if (key === 's') toggle('section');
+	if (VIEW_BY_KEY[key] && VIEWS[VIEW_BY_KEY[key]]) run('set_camera_view', { view: VIEW_BY_KEY[key] });
+	else if (key === 'f') run('fit_view', {});
+	else if (key === 'p' || key === 'o') run('set_projection', { projection: key === 'p' ? 'perspective' : 'orthographic' });
+	else if (key === 'e' || key === 'g' || key === 's') toggle({ e: 'edges', g: 'ground', s: 'section' }[key]);
 });
 
-acceptDrops((file) => session.openFile(file));
+acceptDrops((file) => addFiles([file], { workspace, run }));
 present(null);
 
-export const app = { engine, session, viewer, view, update };
+export const app = { engine, session, viewer, view, workspace, update, run, openPath: files.openPath };

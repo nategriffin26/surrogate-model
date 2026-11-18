@@ -701,6 +701,8 @@ export class Viewer extends EventTarget {
 
 	resize() {
 		const { W, H, w, h } = this.paneSize();
+		const before = this.pane;
+		this.pane = { w, h };
 		this.renderer.setSize(W, H, false);
 		this.perspective.aspect = w / h;
 		this.perspective.updateProjectionMatrix();
@@ -710,9 +712,21 @@ export class Viewer extends EventTarget {
 		o.top = h / 2;
 		o.bottom = -h / 2;
 		o.updateProjectionMatrix();
+		// A pane that narrows or widens at the same height (a side panel opening, a second pane) keeps showing the same
+		// width of the world about the orbit centre, so the car shrinks into the room left rather than being cut off.
+		if (before && before.h === h && before.w !== w && before.w > 1 && w > 1) this.scaleView(before.w / w);
 		this.resetLod(this.lod.layer);
 		this.requestRender();
 		this.dispatchEvent(new CustomEvent('resize'));
+	}
+
+	/** Show k times as much of the world about the orbit centre, without turning the camera. */
+	scaleView(k) {
+		const camera = this.camera;
+		if (camera.isPerspectiveCamera) camera.position.sub(this.target).multiplyScalar(k).add(this.target);
+		else camera.zoom /= k;
+		camera.updateProjectionMatrix();
+		this.controls.update();
 	}
 
 	// ---- picking ----------------------------------------------------------------------------------------------------
@@ -761,14 +775,16 @@ export class Viewer extends EventTarget {
 		el.addEventListener('pointerdown', (e) => {
 			down = { x: e.clientX, y: e.clientY, button: e.button };
 		});
-		// A single click waits for a possible second one, so a double-click (pivot) never also counts as a click.
+		// A single click waits for a possible second one, so a double-click (pivot) never also counts as a click. What it
+		// hit is picked at once, with the camera as it was clicked: the view may move during the wait (a view key).
 		el.addEventListener('click', (e) => {
 			if (!down || down.button !== 0 || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
 			clearTimeout(tapTimer);
 			if (e.detail > 1) return;
 			const { clientX, clientY } = e;
+			const picked = this.pick(clientX, clientY);
 			tapTimer = setTimeout(async () => {
-				const hit = await this.pick(clientX, clientY);
+				const hit = await picked;
 				this.dispatchEvent(new CustomEvent('tap', { detail: { hit, clientX, clientY } }));
 			}, 230);
 		});

@@ -1,16 +1,24 @@
 /**
- * The result of analysing one surface file, and its on-disk form.
+ * The result of analysing one surface, from a file or from arrays, and its on-disk form.
  *
- * The engine returns a `Result` for a dropped file. The bundled examples are the same object
- * stored as `<name>.json` (everything but the arrays) plus `<name>.bin` (gzip over the mesh, in
- * meshoptimizer's index and vertex codecs with quantized positions, fields and normals, and over the
- * lookups as raw arrays; see `packResult`), so the interface never needs to know which of the two
- * it is showing.
+ * The engine returns a `Result` for a dropped file or a surface given as arrays. The bundled examples
+ * are the same object stored as `<name>.json` (everything but the arrays) plus `<name>.bin` (gzip
+ * over the mesh, in meshoptimizer's index and vertex codecs with quantized positions, fields and
+ * normals, and over the lookups as raw arrays; see `packResult`), so the interface never needs to
+ * know which of the two it is showing.
  *
- * Frame: metres, x downstream, z up, the car symmetric about y = 0.
+ * Beside the `Engine`, two plain functions run on whatever thread calls them: `writeVtp` (vtp.js)
+ * writes any surface with cell and point arrays as a .vtp file, and `sampleFields` (nearest.js) reads
+ * one car's fields at another car's vertices, for difference maps.
+ *
+ * Frame: metres, x downstream, z up, the car's centre plane at y = 0.
  *
  * @typedef {Object} Result
- * @property {{ name: string, cells: number }} source  The file as read: its name and polygon count.
+ * @property {'full' | 'quick'} form  How it was made. 'full': by `analyze` or `analyzeSurface`, from
+ *   a working mesh simplified from the surface, with forces from an area sample of its polygons and
+ *   then, through `exact`, from every one. 'quick': by `predictQuick`, every polygon of the surface it
+ *   was given predicted at once, with the lookups built from those polygons, for studies.
+ * @property {{ name: string, cells: number }} source  The surface analysed: its name (the file's) and polygon count.
  * @property {{ bounds: number[], length: number, width: number, height: number, frontalArea: number }} geometry
  *   `bounds` is [xmin, xmax, ymin, ymax, zmin, zmax]. `frontalArea` is the reference area for coefficients.
  * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null,
@@ -21,15 +29,29 @@
  *   rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
  * @property {{ r2: number } | null} accuracy
  *   Area-weighted agreement with CFD over the surface. Null when the file has no CFD.
- *   `forces` and `accuracy` are sums over the file's polygons. In the Result `analyze` resolves with
- *   they run over an evenly spaced area sample of them (drag within about 0.0005 of the full sum);
- *   `exact` brings them summed over every polygon.
+ *   `forces` and `accuracy` are sums over the surface's polygons. In a full Result as `analyze`
+ *   resolves with it they run over an evenly spaced area sample of them (drag within about 0.0005 of
+ *   the full sum); `exact` brings them summed over every polygon. A quick Result sums every polygon.
  * @property {Coverage} coverage
  * @property {{ stage: Stage, seconds: number }[]} timings
  * @property {string} device  What ran the networks, as `Engine.device` names it.
  * @property {string} model   SHA-256 of the network weights it was computed with (`web/model/weights.bin`).
- * @property {DisplayMesh} mesh
+ * @property {DisplayMesh} mesh  A full Result's working mesh, or a quick Result's surface itself.
  * @property {SurfaceLookups} lookups
+ * @property {CellSet} [cells]  A quick Result's polygons with the values the networks gave each.
+ *
+ * @typedef {Object} CellSet  A surface's polygons with what the analysis knows of each, for the
+ *   page's and the assistant's own sums and plots. `centers`, `normals` and `areas` are those the
+ *   networks were asked at (VTK's, as in training); `area × cp × n` sums to the forces.
+ * @property {Float32Array} points        (P, 3)
+ * @property {Uint32Array} connectivity   as in `ParsedSurface`
+ * @property {Uint32Array} offsets        (C + 1)
+ * @property {Float32Array} centers       (C, 3)
+ * @property {Float32Array} normals       (C, 3) unit, pointing out of the car
+ * @property {Float64Array} areas         (C)
+ * @property {Float32Array} cp            (C) the networks' mean Cp
+ * @property {Float32Array} sigma         (C) spread σ(Cp)
+ * @property {Float32Array | null} cfd    (C) CFD Cp, when the surface carried it
  *
  * @typedef {Omit<import('./features.js').SurfaceContext, 'layout'> & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
  *   The whole-car lookups the features read (`SurfaceContext` in `features.js`, a few MB), built from
@@ -55,8 +77,8 @@
  * @typedef {Object} Engine  Runs in a worker; one instance per page. Create it on page load: it
  *   loads the networks and prepares the GPU up front so the first file starts at once.
  * @property {(file: File, on?: AnalyzeEvents, options?: { signal?: AbortSignal }) => Promise<Result>} analyze
- *   Resolves once `Result.mesh`, the working mesh, carries its fields. The working mesh is a
- *   faithful simplification that the tools (probing, section cuts, plots) run on.
+ *   A full analysis. Resolves once `Result.mesh`, the working mesh, carries its fields. The working
+ *   mesh is a faithful simplification that the tools (probing, section cuts, plots) run on.
  *   Rejects with an Error whose message says what is wrong with the file and what to do.
  *   Analyses run one at a time, in the order asked for, each to its end: a later one starts once
  *   every earlier one has sent its last event (`exact` and the last `fullFields`, or its failure) or
@@ -64,6 +86,28 @@
  *   has started. Aborting `signal` abandons this analysis, whether waiting, running or ended, and
  *   releases what the engine holds of it: its promise rejects with a DOMException named 'AbortError'
  *   if still pending, and its events stop, including those after it resolved.
+ * @property {(surface: ParsedSurface, on?: AnalyzeEvents, options?: { signal?: AbortSignal }) => Promise<Result>} analyzeSurface
+ *   `analyze` for a surface given as arrays, such as a variant of a car made on the page: the same
+ *   stages, events and Result, and afterwards the same `explain`, `polygonAt`, `exportVtp` and
+ *   `fileCells`. `analyze(file)` is reading the file, then this. The arrays move to the engine's
+ *   worker rather than being copied, so the caller's are empty afterwards; each must therefore be a
+ *   whole buffer of its own (`byteOffset` 0, its buffer's full length), or the call rejects saying so.
+ *   Rejects with an Error naming the array that is wrong.
+ * @property {(surface: ParsedSurface, options?: { signal?: AbortSignal }) => Promise<Result>} predictQuick
+ *   A quick Result (`Result.form`) for a surface given as arrays, typically a variant of a working
+ *   mesh (`workingCells`): no events, nothing drawn first, nothing held afterwards. It waits its turn
+ *   behind running analyses like they do, but leaves the car analysed last held. The arrays move to
+ *   the worker as for `analyzeSurface`. Aborting `signal` abandons it.
+ *   Give it a working mesh or a variant of one, nothing coarser: the lookups' 2 cm rasters are filled
+ *   from polygon centres, so a coarser mesh leaves some of their columns empty and the prediction
+ *   degrades.
+ * @property {(result: Result) => CellSet} workingCells  A result's working mesh as polygons, made on
+ *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's
+ *   Cp, σ and CFD the mean of its corners', so `area × cp` sums the field the viewer draws exactly.
+ *   For a quick Result, its own `cells`. Works for every result, the bundled examples too.
+ * @property {(result: Result) => Promise<CellSet | null>} fileCells  The polygons of the car analysed
+ *   last, the file's own, copied in the worker and handed over whole (about 650 MB for a DrivAerML
+ *   car); null unless `canExportVtp(result)`.
  * @property {(result: Result, point: number[], normal: number[]) => Promise<Explanation>} explain
  *   For a result this engine analysed or one `loadResult` read: everything the model was told at a
  *   surface point and what each network answered. For the file analysed last, while the engine holds
@@ -80,15 +124,17 @@
  *   milliseconds, also while the rest of the surface is being predicted.
  * @property {(result: Result) => boolean} canExportVtp  Whether `exportVtp` can run for `result`: true
  *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
- *   engine holds the last file's prediction only); never for a bundled example, nor on a device too
- *   slow to predict every polygon. Check it when offering the export.
+ *   engine holds the last car's prediction only); never for a bundled example or a quick Result, nor
+ *   on a device too slow to predict every polygon. Check it when offering the export.
  * @property {(result: Result, onProgress?: (fraction: number) => void) => Promise<File>} exportVtp
- *   The analysed file with the prediction added as two Float32 cell arrays, one value per polygon:
- *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). Every
- *   other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and the File is
- *   composed from slices of the original rather than a copy, so saving it streams from the user's
- *   disk. Named `<file>_prediction.vtp`. `onProgress` reports 0 to 1. Rejects with an Error whose
- *   message says what to do when `canExportVtp` is false or the original can no longer be read.
+ *   The analysed car with the prediction added as two Float32 cell arrays, one value per polygon:
+ *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). For a
+ *   file, every other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and
+ *   the File is composed from slices of the original rather than a copy, so saving it streams from
+ *   the user's disk. A surface given as arrays is written as a new file (`writeVtp`), with its CFD as
+ *   `CpMeanTrim` when it carried it. Named `<name>_prediction.vtp`. `onProgress` reports 0 to 1.
+ *   Rejects with an Error whose message says what to do when `canExportVtp` is false or the original
+ *   can no longer be read.
  * @property {Promise<string>} device  What runs the networks, short enough to show as is:
  *   "WebGPU (<adapter>)" when the browser names the adapter, "WebGPU", or "CPU (<n> threads)".
  * @property {Promise<ModelCard>} model  The model, for the model view.
@@ -181,12 +227,14 @@
  *   plan-view outline ('outline') is measured outboard, away from the centre plane on the point's own
  *   side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0] on the −y side
  *
- * @typedef {Object} ParsedSurface  The file's surface as the parser hands it to the rest of the engine.
+ * @typedef {Object} ParsedSurface  A surface as the parser hands it to the rest of the engine, or as
+ *   the page gives it to `analyzeSurface` and `predictQuick`, where `cfd` may be left out.
  * @property {string} name
  * @property {Float32Array} points        (P, 3)
  * @property {Uint32Array} connectivity   the point ids of every polygon, back to back
- * @property {Uint32Array} offsets        (C + 1) polygon c owns connectivity[offsets[c] .. offsets[c + 1])
- * @property {Float32Array | null} cfd    (C) CpMeanTrim per polygon when the file carried it
+ * @property {Uint32Array} offsets        (C + 1) polygon c owns connectivity[offsets[c] .. offsets[c + 1]);
+ *   offsets[0] is 0 and offsets[C] the length of `connectivity`
+ * @property {Float32Array | null} [cfd]  (C) CpMeanTrim per polygon when the surface carries it
  */
 
 import { MeshoptDecoder } from '../vendor/meshoptimizer/meshopt_decoder.mjs';

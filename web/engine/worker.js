@@ -1,7 +1,8 @@
 /**
- * The engine's worker: turns a dropped file into a `Result` (`engine.js` is the page's side).
+ * The engine's worker: turns a dropped file, or a surface given as arrays, into a `Result`
+ * (`engine.js` is the page's side).
  *
- * reading     the file, streamed into typed arrays (vtp.js)
+ * reading     the file, streamed into typed arrays (vtp.js), or the arrays given, checked (geometry.js)
  * measuring   every polygon's centre, normal and area; the frontal area; the whole-car lookups the
  *             features read (geometry.js, features.js); CFD drag when the file carries CFD
  * meshing     the full mesh, drawn at once, and the working mesh (meshes.js)
@@ -17,16 +18,17 @@
  *
  * Analyses run one at a time, each to its end, in the order asked for: a car's background prediction
  * is part of its analysis, and two files at once would need twice the memory. Only an abort ends one
- * early.
+ * early. A quick prediction (`predictQuick`) waits its turn the same way: it predicts every polygon
+ * of the surface it is given at once, with nothing drawn first and nothing left for the background.
  */
 
-import { addCellArrays, readSurface } from './vtp.js';
-import { boundsOf, measureCells, frontalArea } from './geometry.js';
+import { addCellArrays, CFD_ARRAY, readSurface, writeVtp } from './vtp.js';
+import { boundsOf, checkSurface, measureCells, frontalArea } from './geometry.js';
 import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
-import { buildMeshes, cellToPoint } from './meshes.js';
+import { buildMeshes, cellToPoint, surfaceMesh } from './meshes.js';
 import { cfdDrag, coverage, evenPicks, SurfaceTally } from './analysis.js';
 import { describePolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
 
@@ -80,9 +82,9 @@ let turn = Promise.resolve();
 /** The analysis running, if any. */
 let running = null;
 /**
- * The car analysed last: its file, polygons, lookups and predictions so far, with an index of its
- * polygons for `explain` and `polygonAt`. `complete` once every polygon is predicted, for
- * `exportVtp`. Let go when its analysis is aborted or the next starts.
+ * The car analysed last: its file (null when it came as arrays), polygons, lookups and predictions
+ * so far, with an index of its polygons for `explain` and `polygonAt`. `complete` once every polygon
+ * is predicted, for `exportVtp` and `fileCells`. Let go when its analysis is aborted or the next starts.
  */
 let lastCar = null;
 /** The lookups `explain` was last given for a result whose polygons are not held, made ready to use. */
@@ -92,10 +94,11 @@ class Aborted extends Error {}
 
 self.onmessage = ({ data }) => {
   switch (data.type) {
-    case 'analyze': {
+    case 'analyze':
+    case 'predictQuick': {
       const job = { id: data.id, aborted: false, controller: new AbortController() };
       jobs.set(job.id, job);
-      turn = turn.then(() => run(job, data.file));
+      turn = turn.then(() => run(job, data));
       break;
     }
     case 'abort': {
@@ -113,21 +116,29 @@ self.onmessage = ({ data }) => {
     case 'export':
       exportVtp(data);
       break;
+    case 'fileCells':
+      answerFileCells(data);
+      break;
     default:
       throw new Error(`Unknown engine request ${data.type}`);
   }
 };
 
 /**
- * One analysis, start to end, once those before it have ended. Starting lets go of the car analysed
- * last and tells the page (`released`); the page lets go of aborted and failed analyses itself.
+ * One analysis or quick prediction, start to end, once those before it have ended. Starting an
+ * analysis lets go of the car analysed last and tells the page (`released`); a quick prediction
+ * leaves it held. The page lets go of aborted and failed analyses itself.
  */
-async function run(job, file) {
+async function run(job, request) {
   if (!job.aborted) {
     running = job;
-    if (lastCar) self.postMessage({ type: 'released', id: lastCar.id });
-    lastCar = null;
-    await analyze(job, file);
+    if (request.type === 'analyze') {
+      if (lastCar) self.postMessage({ type: 'released', id: lastCar.id });
+      lastCar = null;
+      await analyze(job, request);
+    } else {
+      await predictQuick(job, request.surface);
+    }
     running = null;
     engine.then(({ runners }) => runners.pool.broadcast({ type: 'release' }), () => {});
   }
@@ -144,7 +155,8 @@ function checkpoint(current) {
   if (current.aborted) throw new Aborted();
 }
 
-async function analyze(current, file) {
+/** A full analysis of `file`, or of `surface` (arrays) when there is no file. */
+async function analyze(current, input) {
   const post = (message, transfer = []) => {
     if (!current.aborted) self.postMessage({ ...message, id: current.id }, transfer);
   };
@@ -155,7 +167,7 @@ async function analyze(current, file) {
     const stages = stageClock(post);
 
     stages.begin('reading');
-    const surface = await readSurface(file, stages.progress);
+    const surface = input.file ? await readSurface(input.file, stages.progress) : checkSurface(input.surface);
     checkpoint(current);
 
     stages.begin('measuring');
@@ -238,14 +250,9 @@ async function analyze(current, file) {
       estimate.add(picks.weight, cells.normals[3 * c], pickModels, j, pickedCells.length, pickFields.cp[j], surface.cfd?.[c]);
     }
     const result = {
-      source: { name: file.name, cells: cells.areas.length },
-      geometry: {
-        bounds: car.bounds,
-        length: car.bounds[1] - car.bounds[0],
-        width: car.bounds[3] - car.bounds[2],
-        height: car.bounds[5] - car.bounds[4],
-        frontalArea: car.frontal,
-      },
+      form: 'full',
+      source: { name: surface.name, cells: cells.areas.length },
+      geometry: geometryOf(car),
       ...surfaceNumbers(estimate, car),
       coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: stages.timings,
@@ -254,7 +261,7 @@ async function analyze(current, file) {
       mesh,
       lookups: lookupsOf(car.context, ensemble.features),
     };
-    lastCar = { id: current.id, file, surface, cells, context: car.context, predicted, index: null, complete: false };
+    lastCar = { id: current.id, file: input.file ?? null, surface, cells, context: car.context, predicted, index: null, complete: false };
     post({ type: 'result', result });
     lastCar.index = indexPolygons(surface, cells);
 
@@ -270,17 +277,88 @@ async function analyze(current, file) {
     if (complete && lastCar?.id === current.id) lastCar.complete = true;
   } catch (error) {
     if (error instanceof Aborted || current.aborted) return;
-    post({ type: 'failed', message: describeFailure(error, file) });
+    post({ type: 'failed', message: describeFailure(error, input) });
     // Work still queued for this analysis (the area picks) has no one waiting for it.
     abort(current);
   }
+}
+
+/**
+ * Every polygon of a surface given as arrays predicted at once, with the lookups built from those
+ * polygons: the quick form of an analysis (`Result.form`), for studies that compare many variants
+ * of a working mesh. Its result carries the polygons themselves with their predictions (`cells`).
+ */
+async function predictQuick(current, given) {
+  const post = (message, transfer = []) => {
+    if (!current.aborted) self.postMessage({ ...message, id: current.id }, transfer);
+  };
+  try {
+    const { ensemble, layout, runners } = await engine;
+    if (runners.gpu?.lost) runners.gpu = await createGpuNetworks(ensemble);
+    const started = performance.now();
+    const surface = checkSurface(given);
+    const car = measure(surface, layout, () => {});
+    runners.pool.broadcast({ type: 'context', context: car.context });
+    const measured = performance.now();
+
+    const { cells } = car;
+    const count = cells.areas.length;
+    const batch = await predictBatch(current, runners, cells, Uint32Array.from({ length: count }, (_, c) => c), () => {});
+    checkpoint(current);
+    const { cp, sigma } = batch.fields;
+    const tally = new SurfaceTally(runners.networks, car.frontal);
+    for (let c = 0; c < count; c++) tally.add(cells.areas[c], cells.normals[3 * c], batch.models, c, count, cp[c], surface.cfd?.[c]);
+    const drawn = surfaceMesh(surface, car.flip);
+    const mesh = {
+      ...displayMesh({ ...drawn, cfd: surface.cfd && car.average.all(surface.cfd) }),
+      cp: car.average.all(cp),
+      sigma: car.average.all(sigma),
+    };
+    const result = {
+      form: 'quick',
+      source: { name: surface.name, cells: count },
+      geometry: geometryOf(car),
+      ...surfaceNumbers(tally, car),
+      coverage: coverage(car.bounds, ensemble.card.dimensions),
+      timings: [
+        { stage: 'measuring', seconds: (measured - started) / 1000 },
+        { stage: 'predicting', seconds: (performance.now() - measured) / 1000 },
+      ],
+      device: deviceName(runners.gpu),
+      model: ensemble.weightsSha256,
+      mesh,
+      lookups: lookupsOf(car.context, ensemble.features),
+      cells: {
+        points: surface.points, connectivity: surface.connectivity, offsets: surface.offsets,
+        centers: cells.centers, normals: cells.normals, areas: cells.areas, cp, sigma, cfd: surface.cfd,
+      },
+    };
+    // `mesh.positions` is `cells.points`: the clone keeps them one array, and each buffer moves once.
+    const arrays = [...Object.values(result.cells), mesh.normals, mesh.indices, mesh.cp, mesh.sigma, mesh.cfd];
+    post({ type: 'result', result }, [...new Set(arrays.filter(Boolean).map((array) => array.buffer))]);
+  } catch (error) {
+    if (error instanceof Aborted || current.aborted) return;
+    post({ type: 'failed', message: describeFailure(error, { surface: given }) });
+    abort(current);
+  }
+}
+
+/** The Result's `geometry` of a measured car. */
+function geometryOf({ bounds, frontal }) {
+  return {
+    bounds,
+    length: bounds[1] - bounds[0],
+    width: bounds[3] - bounds[2],
+    height: bounds[5] - bounds[4],
+    frontalArea: frontal,
+  };
 }
 
 /** Polygon geometry, the frontal area, the feature lookups, the polygon-to-point operator and the CFD drag. */
 function measure(surface, layout, progress) {
   const cells = measureCells(surface);
   progress(0.5);
-  const frontal = frontalArea(surface.points);
+  const frontal = frontalArea(surface);
   progress(0.6);
   const context = buildContext(cells, layout);
   progress(0.8);
@@ -658,24 +736,55 @@ function heldCar(analysis) {
 }
 
 /**
- * The analysed file with its prediction added as cell arrays, beside the file's own (DrivAerML's CFD
- * pressure coefficient is `CpMeanTrim`): `CpPredicted`, the networks' mean, and `CpSpread`, σ(Cp).
+ * The `CellSet` of the car analysed last, copied here and handed over whole; null unless every
+ * polygon is predicted. About 650 MB for a DrivAerML car, so it is made only when asked for.
+ */
+function answerFileCells({ id, analysis }) {
+  const car = heldCar(analysis);
+  if (!car?.complete) {
+    self.postMessage({ type: 'answer', id, answer: null });
+    return;
+  }
+  const { surface, cells, predicted } = car;
+  const set = {
+    points: surface.points.slice(),
+    connectivity: surface.connectivity.slice(),
+    offsets: surface.offsets.slice(),
+    centers: cells.centers.slice(),
+    normals: cells.normals.slice(),
+    areas: cells.areas.slice(),
+    cp: predicted.cp.slice(),
+    sigma: predicted.sigma.slice(),
+    cfd: surface.cfd ? surface.cfd.slice() : null,
+  };
+  self.postMessage({ type: 'answer', id, answer: set }, Object.values(set).filter(Boolean).map((array) => array.buffer));
+}
+
+/**
+ * The analysed car with its prediction added as cell arrays: `CpPredicted`, the networks' mean, and
+ * `CpSpread`, σ(Cp). A file gets them beside its own arrays (DrivAerML's CFD pressure coefficient is
+ * `CpMeanTrim`); a surface that came as arrays is written as a new file, with its CFD as `CpMeanTrim`.
  */
 async function exportVtp({ id, analysis }) {
   const car = heldCar(analysis);
   try {
     if (!car?.complete) {
-      throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse its file again.');
+      throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse it again.');
+    }
+    const arrays = { CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
+    const name = `${car.surface.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
+    if (!car.file) {
+      const cfd = car.surface.cfd ? { [CFD_ARRAY]: car.surface.cfd } : {};
+      self.postMessage({ type: 'exported', id, file: writeVtp({ ...car.surface, name }, { ...cfd, ...arrays }) });
+      return;
     }
     let reported = 0;
-    const arrays = { CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
     const vtp = await addCellArrays(car.file, arrays, (fraction) => {
       if (fraction >= reported + 0.01) {
         reported = fraction;
         self.postMessage({ type: 'exportProgress', id, fraction });
       }
     });
-    const name = `${car.file.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
     self.postMessage({ type: 'exported', id, file: new File([vtp], name, { type: 'application/octet-stream' }) });
   } catch (error) {
     // Reading the file again fails with a DOMException when it was moved or changed after the drop.
@@ -687,9 +796,12 @@ async function exportVtp({ id, analysis }) {
 }
 
 /** The message for a failed analysis: the file's own problem as the reader words it, or what ran out. */
-function describeFailure(error, file) {
+function describeFailure(error, { file, surface }) {
   if (error instanceof RangeError && /allocat|memory/i.test(error.message)) {
-    return `This device ran out of memory analysing ${file.name} (${(file.size / 1e6).toFixed(0)} MB). Close other tabs or windows and try again, or use a machine with more memory.`;
+    const what = file
+      ? `${file.name} (${(file.size / 1e6).toFixed(0)} MB)`
+      : `${surface.name} (${(surface.offsets.length - 1).toLocaleString('en-US')} polygons)`;
+    return `This device ran out of memory analysing ${what}. Close other tabs or windows and try again, or use a machine with more memory.`;
   }
   return error.message;
 }

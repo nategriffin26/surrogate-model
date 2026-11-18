@@ -1,36 +1,18 @@
 // The dock under the 3D view: the section plot and the probe table. The section plot can be saved as CSV; the probe
 // table has its own copy and save.
 
-import { download, h } from './dom.js';
+import { h } from './dom.js';
 import { icon } from './icons.js';
-import { sectionCsv } from './cut.js';
-import { baseName } from './export.js';
-import { probesCsv } from './probes.js';
-
-/** The data behind the dock's current tab, as CSV. */
-export function dockCsv(c, view) {
-	switch (view.dock) {
-		case 'section':
-			return sectionCsv(c, view);
-		case 'probes':
-			return probesCsv(c);
-		default:
-			throw new Error(`Unknown dock tab ${view.dock}`);
-	}
-}
 
 /**
- * view: the shared view (its dock tab and section). actions: tab(name), collapse(). The section tool supplies the
- * section plot and its controls, the probes their table and its actions.
+ * view: the shared view (its dock tab and section). actions: tab(name), collapse(), save(). The section tool
+ * supplies the section plot and its controls, the probes their table and its actions.
  */
 export function createDock({ section, probes, active, view, actions }) {
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
-	const save = h('button', { type: 'button', class: 'icon-button dock-save', title: 'Save plot as CSV', onclick: () => {
-		const c = active();
-		download(new Blob([dockCsv(c, view)], { type: 'text/csv' }), `${baseName(c)}-${view.dock}.csv`);
-	} }, icon('download'));
+	const save = h('button', { type: 'button', class: 'icon-button dock-save', title: 'Save plot as CSV', onclick: () => actions.save() }, icon('download'));
 	const collapse = h('button', { type: 'button', class: 'icon-button dock-collapse', title: 'Collapse plots', onclick: () => actions.collapse() }, icon('chevron'));
 	const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 	svg.setAttribute('class', 'plot');

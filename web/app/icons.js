@@ -19,6 +19,18 @@ const PATHS = {
 	bands: 'M2 13h3V9.5h3V6h3V2.5h3',
 	chevron: 'M4.5 6.5 8 10l3.5-3.5',
 	cancel: 'M3.5 3.5h9v9h-9z',
+	assistant: 'M2.5 3h11v8H7.5L4.5 13.5V11h-2zM5.5 7h.01M8 7h.01M10.5 7h.01',
+	folder: 'M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z',
+	file: 'M4 1.8h5l3 3v9.4H4zM9 1.8v3h3',
+	text: 'M4 1.8h5l3 3v9.4H4zM9 1.8v3h3M6 8h4M6 10.5h4',
+	geometry: 'M2 13 6 4l4 9zM6 4l6-1.5L10 13M12 2.5l2.5 8.5L10 13',
+	image: 'M2.5 3h11v10h-11zM2.5 11 6 7.5l3 3 2-2 2.5 2.5M10.5 5.8h.01',
+	table: 'M2.5 3h11v10h-11zM2.5 6.5h11M2.5 10h11M6.5 3v10',
+	report: 'M4 1.8h8v12.4H4zM6 5h4M6 7.5h4M6 10h2.5',
+	more: 'M3 8h1M7.5 8h1M12 8h1',
+	upload: 'M8 10.5V2M4.5 5.5 8 2l3.5 3.5M2.5 13.5h11',
+	keep: 'M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1zM8 7v4M6 9h4',
+	run: 'M5 3.5v9l7-4.5z',
 };
 
 export function icon(name) {

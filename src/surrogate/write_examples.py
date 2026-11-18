@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pyvista as pv
 
-from surrogate.server import WEB_ROOT, ToolRequestHandler
+from surrogate.server import DEFAULT_MODEL, WEB_ROOT, AssistantConfig, ToolRequestHandler
 
 REPO = Path(__file__).resolve().parents[2]
 CHROME = os.environ.get("CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -133,7 +133,9 @@ def write_examples(jobs: dict[str, tuple[Path, Path]]) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
     outcome: dict[str, str] = {}
     done = threading.Event()
-    handler = partial(ExampleWriter, jobs=jobs, outcome=outcome, done=done, directory=str(WEB_ROOT))
+    # Writing examples needs no assistant, so its route stays off whatever key this machine holds.
+    no_assistant = AssistantConfig(key=None, model=DEFAULT_MODEL, enabled=False)
+    handler = partial(ExampleWriter, jobs=jobs, outcome=outcome, done=done, directory=str(WEB_ROOT), assistant=no_assistant)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/writer.html"

@@ -3,7 +3,8 @@
 body {
 	/* The plots take about a third of the height: tall enough to read, while most of the screen stays with the car. */
 	--dock: clamp(200px, 32vh, 340px);
-	--model: clamp(480px, 40vw, 640px);
+	--assistant: clamp(340px, 27vw, 440px);
+	--files: 328px;
 	display: grid;
 	grid-template-rows: 48px minmax(0, 1fr);
 	height: 100vh;
@@ -33,30 +34,39 @@ body.resizing * { cursor: inherit !important; }
 .case-close .icon { width: 12px; height: 12px; }
 .case-tab:hover .case-close, .case-tab[aria-selected="true"] .case-close, .case-close:focus-visible { opacity: 1; }
 .case-close:hover { background: var(--tint); color: var(--heading); }
-.case-add { display: flex; align-items: center; gap: 6px; flex: none; padding: 0 12px; color: var(--muted); font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; }
-.case-add:hover { color: var(--link); }
-.case-add[aria-pressed="true"] { color: var(--heading); border-bottom-color: var(--heading); }
 .topbar-end { display: flex; align-items: center; gap: 12px; margin-left: auto; flex: none; }
-.modes { display: flex; padding: 2px; border-radius: 8px; background: var(--tint); }
-.mode { padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
-.mode[aria-selected="true"] { background: #fff; color: var(--heading); box-shadow: 0 1px 2px rgba(13, 34, 51, 0.12); }
+.model-toggle { height: 30px; padding: 0 10px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 500; transition: background 0.15s, color 0.15s; }
+.model-toggle:hover { background: var(--tint); color: var(--heading); }
+.model-toggle[aria-pressed="true"] { background: var(--tint); color: var(--link); }
 
 /* ---- work area ---- */
-.work { display: grid; grid-template-columns: minmax(0, 1fr) 0; grid-template-areas: "stage side"; min-height: 0; }
+/* The file panel, the stage (toolbar, view and dock) and the assistant are columns of one grid, so a panel that
+   opens narrows the stage rather than covering it, and every part of the stage keeps one content box. Each side
+   panel keeps its own width and slides in as its column opens, from its own edge. */
+.work {
+	display: grid; grid-template-columns: var(--files-column, 0px) minmax(0, 1fr) var(--side-column, 0px) var(--assist-column, 0px);
+	grid-template-areas: "files stage side assist"; min-height: 0; transition: grid-template-columns 0.24s var(--ease);
+}
 .stage { grid-area: stage; display: grid; grid-template-rows: 44px minmax(0, 1fr) 0 var(--dock); grid-template-areas: "toolbar" "view" "resizer" "dock"; min-width: 0; min-height: 0; }
 .toolbar-host { grid-area: toolbar; }
 .viewport { grid-area: view; }
 .dock-resizer { grid-area: resizer; }
 .dock-host { grid-area: dock; }
-.model-host { grid-area: side; }
+.model-host { grid-area: side; min-width: 0; min-height: 0; overflow: auto; }
+.files, .assistant-host { min-height: 0; background: #fff; visibility: hidden; transition: visibility 0s 0.24s; }
+.files { grid-area: files; justify-self: end; border-right: 1px solid var(--hair); }
+.assistant-host { grid-area: assist; justify-self: start; width: var(--assistant); border-left: 1px solid var(--hair); }
+body.files-open { --files-column: var(--files); }
+body.assistant-open { --assist-column: var(--assistant); }
+body.files-open .files, body.assistant-open .assistant-host { visibility: visible; transition: none; }
 body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 37px; }
 body:is([data-screen="start"], [data-screen="notice"]) .stage { grid-template-rows: 0 minmax(0, 1fr) 0 0; }
 body:is([data-screen="start"], [data-screen="notice"]) :is(.toolbar-host, .dock-host, .dock-resizer, .legend-host, .card-host, .triad) { display: none; }
-body[data-mode="model"] .work { grid-template-columns: minmax(0, 1fr) var(--model); }
-body[data-mode="model"] .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
-body[data-mode="model"] :is(.dock-host, .dock-resizer, .card-host, .overlay) { display: none; }
-body:not([data-mode="model"]) .model-corner { display: none; }
-.model-host { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--hair); }
+/* The model's page takes the whole area under the top bar; the tool waits, as it was, until it comes back. */
+body[data-mode="model"] .work { grid-template-columns: 0px 0px minmax(0, 1fr) 0px; transition: none; }
+body[data-mode="model"] :is(.stage, .files, .assistant-host, .files-button, .cases, [data-export], .assistant-button) { display: none !important; }
+:is(.assistant-button, .files-button)[aria-pressed="true"] { border-color: var(--link); color: var(--link); background: var(--tint); }
+.files-button { align-self: center; margin-left: -4px; }
 
 .dock-resizer { position: relative; z-index: 6; }
 .dock-resizer::before { content: ""; position: absolute; inset: -4px 0; cursor: row-resize; }
@@ -99,6 +109,12 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .menu-item[aria-checked="true"] { color: var(--link); font-weight: 500; }
 .menu-rule { border: 0; border-top: 1px solid var(--hair); margin: 5px 4px; }
 .menu-note { width: 220px; margin: 4px 10px 6px; color: var(--rose); font-size: 12.5px; }
+.menu-item.danger { color: var(--rose); }
+.export-list { min-width: 220px; }
+.export-row { display: flex; align-items: center; gap: 2px; }
+.export-row .menu-item { flex: 1; }
+.export-row.busy { opacity: 0.55; pointer-events: none; }
+.export-keep { width: 30px; height: 30px; }
 .menu-item .ramp-swatch { width: 56px; }
 .menu-item:has(.ramp-swatch) { justify-content: flex-start; }
 .controls-list { display: grid; grid-template-columns: auto auto; gap: 6px 18px; margin: 4px 6px; font-size: 13px; white-space: nowrap; }
@@ -125,7 +141,6 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .pane-labels { position: absolute; inset: 0 0 auto 0; display: flex; z-index: 3; pointer-events: none; }
 .pane-label { flex: 1; padding: 12px 16px; font-family: var(--head); font-weight: 600; font-size: 14px; color: var(--heading); }
 .pane-label + .pane-label { border-left: 1px solid var(--rule); }
-.model-corner { position: absolute; left: 12px; top: 12px; z-index: 4; }
 .viewport:has(.pane-label) .legend-host { top: auto; bottom: 12px; left: 50%; transform: translateX(-50%); }
 .legend-host { position: absolute; left: 12px; top: 12px; z-index: 4; }
 .card-host { position: absolute; right: 12px; top: 12px; bottom: 12px; z-index: 4; display: flex; flex-direction: column; pointer-events: none; }
@@ -378,6 +393,60 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 
+/* ---- files: the workspace, in the column at the left ---- */
+.files { width: var(--files); display: flex; flex-direction: column; }
+.files-head { display: flex; align-items: center; gap: 6px; flex: none; height: 52px; padding: 0 8px 0 18px; border-bottom: 1px solid var(--hair); }
+.files-title { margin-right: auto; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
+.files-upload { height: 28px; padding: 0 11px; }
+.files-note { margin: 10px 18px 0; color: var(--rose); font-size: 12.5px; }
+.files-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0 14px; }
+.files-list { min-height: 40px; border-radius: 6px; transition: background 0.15s; }
+.files-list.drop-target { background: var(--tint); }
+.file-row, .example-row {
+	position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 10px;
+	width: 100%; padding: 7px 8px 7px calc(18px + var(--depth, 0) * 18px); text-align: left; cursor: pointer; transition: background 0.12s;
+}
+.file-row:hover, .example-row:hover, .file-row:focus-visible { background: var(--tint); outline: none; }
+.file-row.current, .example-row.current { background: rgba(11, 111, 191, 0.07); }
+.file-row.current::before, .example-row.current::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 1px; background: var(--link); }
+.file-row.drop-target { background: rgba(11, 111, 191, 0.12); }
+.file-icon { display: grid; place-items: center; color: var(--steel); }
+.file-text { display: grid; min-width: 0; }
+.file-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--heading); }
+.file-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.file-state { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.file-state.ready { color: var(--link); }
+.file-state.failed { color: var(--rose); }
+.file-action {
+	height: 24px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 12px; background: #fff; color: var(--heading);
+	font-size: 12px; font-weight: 500; transition: border-color 0.12s, color 0.12s;
+}
+.file-action:hover { border-color: var(--link); color: var(--link); }
+.file-run { display: inline-flex; align-items: center; gap: 4px; }
+.file-run .icon { width: 10px; height: 10px; fill: currentColor; }
+.file-more { width: 24px; height: 24px; }
+/* A row's actions sit over the end of its text, shown on hover or focus, so names and details use the full width. */
+.file-actions {
+	position: absolute; right: 6px; top: 50%; display: flex; align-items: center; gap: 2px; padding-left: 22px; transform: translateY(-50%);
+	background: linear-gradient(90deg, rgba(238, 244, 251, 0), var(--tint) 20px); opacity: 0; transition: opacity 0.12s;
+}
+.file-row:is(:hover, :focus-within) .file-actions, .file-actions:has([aria-expanded="true"]) { opacity: 1; }
+/* Each row's actions are their own layer; the row whose menu is open lifts above the rows after it. */
+.file-row:has(.file-more[aria-expanded="true"]) { z-index: 2; }
+.file-progress { position: absolute; left: calc(48px + var(--depth, 0) * 18px); right: 12px; bottom: 3px; height: 2px; border-radius: 1px; background: var(--link); transform-origin: left; transition: transform 0.2s linear; }
+.file-edit { width: 100%; height: 24px; margin: -2px 0 -1px -5px; padding: 0 5px; border: 1px solid var(--link); border-radius: 4px; font-size: 13px; color: var(--heading); outline: none; }
+.file-row.folder { grid-template-columns: 20px minmax(0, 1fr) auto; }
+.folder-chevron { display: grid; place-items: center; width: 24px; color: var(--faint); }
+.folder-chevron .icon { transition: transform 0.15s var(--ease); }
+.folder[aria-expanded="false"] .folder-chevron .icon { transform: rotate(-90deg); }
+.files-empty { display: block; margin: 8px 14px; padding: 22px 12px; border: 1.5px dashed #9cb9c8; border-radius: 8px; color: var(--muted); font-size: 13px; text-align: center; cursor: pointer; }
+.files-empty:hover { border-color: var(--link); background: rgba(238, 244, 251, 0.6); }
+.files-group { margin-top: 10px; padding: 14px 18px 6px; border-top: 1px solid var(--hair); font-size: 12px; color: var(--muted); }
+.example-row { grid-template-columns: 44px minmax(0, 1fr); }
+.example-mark { width: 44px; height: 14px; overflow: visible; }
+.example-mark path { fill: rgba(238, 244, 251, 0.9); stroke: var(--steel); stroke-width: 3; stroke-linejoin: round; }
+
 /* ---- smaller windows ---- */
 /* A short window keeps the extremes' values and drops their side view, so the card stays clear of the car. */
 @media (max-height: 760px) {
@@ -395,7 +464,7 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 	.app-name { display: none; }
 	.stage, body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
 	:is(.dock-host, .dock-resizer, .topbar-end, .tool-group, .legend-tools) { display: none !important; }
-	.work { grid-template-columns: minmax(0, 1fr) 0 !important; }
+	.work { grid-template-columns: 0px minmax(0, 1fr) 0px 0px !important; }
 	.card-host { top: auto; }
 	.toolbar { gap: 8px; padding: 0 8px; overflow-x: auto; }
 	.legend { width: 220px; }

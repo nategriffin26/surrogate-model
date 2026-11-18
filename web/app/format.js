@@ -20,7 +20,8 @@ export const counts = (a, b) => Math.round((a - b) / DRAG_COUNT);
 export function bytes(n) {
 	if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
 	if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
-	return `${Math.round(n / 1e3)} kB`;
+	if (n >= 1e3) return `${Math.round(n / 1e3)} kB`;
+	return `${n} B`;
 }
 
 /** Digits that resolve a step on an axis or a legend. */

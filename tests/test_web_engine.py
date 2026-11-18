@@ -1,6 +1,7 @@
 """The browser engine (`web/engine`) against the Python pipeline it reimplements, on a small synthetic
-car: the reader across the ways VTK writes a .vtp and the files it must refuse, the polygon geometry,
-the features at every polygon and each network's Cp there; and the exporter of `web/model/`.
+car: the reader across the ways VTK writes a .vtp and the files it must refuse, the polygon geometry
+and frontal area, the features at every polygon and each network's Cp there, analysis of a surface
+given as arrays, the quick prediction, the export and the .vtp writer; and the exporter of `web/model/`.
 
 The engine's modules run under Bun or Deno through `tests/web_engine_outputs.mjs`, as the browser
 runs them; without either runtime these tests skip.
@@ -27,7 +28,7 @@ from surrogate.export_web import export_web_model, feature_definition
 from surrogate.features import FeatureColumns, SurfaceContext, extract_query_features
 from surrogate.inference import run_vtp_inference
 from surrogate.model import Z_CLIP, SurrogateEnsemble
-from surrogate.surface import SurfaceMesh, read_vtp_surface
+from surrogate.surface import SurfaceMesh, estimate_frontal_area, read_vtp_surface
 
 REPO = Path(__file__).resolve().parents[1]
 CHECKPOINT = REPO / "artifacts/ensemble.pt"
@@ -91,10 +92,11 @@ def _write_vtp(surface: pv.PolyData, path: Path, *, mode: str = "binary", encode
     return path
 
 
-def _run_engine(mode: str, path: Path, out_dir: Path, model: Path | None = None) -> dict:
-    """Run the engine's modules on `path`; `model` is the model directory (engine, pick) or a feature definition (features)."""
+def _run_engine(mode: str, path: Path, out_dir: Path, argument: Path | str | None = None) -> dict:
+    """Run the engine's modules on `path`; `argument` is the model directory (engine, pick), a feature
+    definition (features) or the stretch factor (stretch)."""
     out_dir.mkdir(exist_ok=True)
-    command = [*RUNTIME, str(RUNNER), mode, str(path), str(out_dir)] + ([str(model)] if model else [])
+    command = [*RUNTIME, str(RUNNER), mode, str(path), str(out_dir)] + ([str(argument)] if argument else [])
     subprocess.run(command, check=True, cwd=REPO, timeout=300)
     return json.loads((out_dir / "outcome.json").read_text())
 
@@ -206,6 +208,18 @@ def test_reader_names_what_is_wrong_with_a_file_it_refuses(car: pv.PolyData, tmp
     make, message = REFUSALS[case]
     outcome = _run_engine("parse", make(car, tmp_path / "car.vtp"), tmp_path / "out")
     assert message in outcome.get("error", ""), outcome
+
+
+@requires_runtime
+def test_frontal_area_does_not_depend_on_how_finely_the_surface_is_meshed(tmp_path: Path) -> None:
+    """Catches a frontal area drawn from the surface's points alone, which a coarse mesh's outline
+    leaks through: a box of 12 triangles must give the box's frontal area, as the reference does."""
+    box = pv.Box(bounds=(0.0, 4.0, -0.9, 0.9, 0.0, 1.4)).triangulate()
+    box.points = np.asarray(box.points, dtype=np.float32)
+    area = _run_engine("parse", _write_vtp(box, tmp_path / "box.vtp"), tmp_path / "out")["frontalArea"]
+    # Within the one pixel row and column the 5 mm grid adds along the outline.
+    assert area == pytest.approx(1.8 * 1.4, rel=0.01)
+    assert area == pytest.approx(estimate_frontal_area(box), rel=0.01)
 
 
 @requires_runtime
@@ -331,6 +345,81 @@ def test_polygons_asked_on_demand_match_the_reference(car: pv.PolyData, model_di
         _assert_polygon(pick["polygon"], pick["target"], mesh, surface, reference.cp_mean, reference.cp_std)
 
 
+STRETCH = 1.1
+
+
+def _stretched(car: pv.PolyData, factor: float) -> pv.PolyData:
+    """The car stretched lengthwise as the runner's `stretch` mode does it: each float32 x times the
+    factor in float64, stored as float32."""
+    stretched = car.copy()
+    points = np.array(stretched.points)
+    points[:, 0] = (points[:, 0].astype(np.float64) * factor).astype(np.float32)
+    stretched.points = points
+    return stretched
+
+
+@requires_runtime
+def test_a_surface_given_as_arrays_is_analysed_as_its_file(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `analyzeSurface` analysing a car made on the page otherwise than `analyze` analyses the
+    same car written to a file; its export, `fileCells` or `workingCells` going wrong for such a car;
+    or arrays it must refuse getting through."""
+    stretched = _write_vtp(_stretched(car, STRETCH), tmp_path / "stretched_car.vtp")
+    from_arrays = _run_engine("stretch", _write_vtp(car, tmp_path / "car.vtp"), tmp_path / "arrays", str(STRETCH))
+    from_file = _run_engine("analysis", stretched, tmp_path / "file")
+    assert from_arrays["form"] == "full"
+    for part in ("geometry", "sampled", "exact"):
+        assert from_arrays[part] == from_file[part], part
+    assert from_arrays["moved"], "the arrays were copied to the engine instead of moved"
+    refusals = from_arrays["refusals"]
+    assert "whole buffer of its own" in refusals["viewOfLargerBuffer"]
+    assert "offsets end at" in refusals["offsetsShort"]
+    assert "refers to point" in refusals["pointMissing"]
+
+    out = tmp_path / "arrays"
+    reference = run_vtp_inference(stretched, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    surface = read_vtp_surface(stretched)
+    np.testing.assert_allclose(_array(out, "file_cp.f32"), reference.cp_mean, atol=1e-4)
+    np.testing.assert_allclose(_array(out, "file_sigma.f32"), reference.cp_std, atol=1e-4)
+    np.testing.assert_allclose(_array(out, "file_centers.f32").reshape(-1, 3), surface.centers, atol=1e-6)
+    np.testing.assert_allclose(_array(out, "file_normals.f32").reshape(-1, 3), surface.normals, atol=1e-5)
+    np.testing.assert_allclose(_array(out, "file_areas.f64"), surface.areas, rtol=1e-5)
+
+    assert from_arrays["exportName"] == "stretched_car_prediction.vtp"
+    expected, exported = pv.read(stretched), _read_without_complaint(out / "exported.vtp")
+    np.testing.assert_array_equal(exported.points, expected.points)
+    np.testing.assert_array_equal(exported.faces, expected.faces)
+    np.testing.assert_array_equal(exported.cell_data["CpPredicted"], _array(out, "file_cp.f32"))
+    np.testing.assert_array_equal(exported.cell_data["CpSpread"], _array(out, "file_sigma.f32"))
+    np.testing.assert_array_equal(exported.cell_data["CpMeanTrim"], expected.cell_data["CpMeanTrim"])
+
+    # The working mesh's triangles as VTK measures them, each with the mean Cp of its corners.
+    triangles = _array(out, "working_indices.u32").reshape(-1, 3).astype(np.int64)
+    working = pv.PolyData(_array(out, "working_positions.f32").reshape(-1, 3), np.column_stack([np.full(len(triangles), 3), triangles]).ravel())
+    np.testing.assert_allclose(_array(out, "working_areas.f64"), working.compute_cell_sizes(length=False, volume=False).cell_data["Area"], rtol=1e-5)
+    np.testing.assert_allclose(_array(out, "working_centers.f32").reshape(-1, 3), working.cell_centers().points, atol=1e-6)
+    normals = working.compute_normals(cell_normals=True, point_normals=False, consistent_normals=False, auto_orient_normals=False).cell_data["Normals"]
+    np.testing.assert_allclose(_array(out, "working_normals.f32").reshape(-1, 3), normals, atol=1e-5)
+    np.testing.assert_allclose(_array(out, "working_cp.f32"), _array(out, "working_vertex_cp.f32")[triangles].mean(axis=1), atol=1e-6)
+
+
+@requires_runtime
+def test_quick_prediction_matches_the_reference_at_every_polygon(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `predictQuick` giving other values than the reference at the polygons it is given,
+    summing its forces over other polygons, weights or field, drawing other than the whole surface,
+    or leaving the car held as if it were an analysis."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    outcome = _run_engine("quick", path, tmp_path / "out")
+    reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    out = tmp_path / "out"
+    np.testing.assert_allclose(_array(out, "cp.f32"), reference.cp_mean, atol=1e-4)
+    np.testing.assert_allclose(_array(out, "sigma.f32"), reference.cp_std, atol=1e-4)
+    _assert_drag_by_facing(outcome["forces"], _drag_by_facing(read_vtp_surface(path), reference.cp_mean, outcome["geometry"]["frontalArea"]))
+    corners = np.diff(vtk_to_numpy(car.GetPolys().GetOffsetsArray()))
+    assert outcome["form"] == "quick"
+    assert (outcome["triangles"], outcome["vertices"]) == (int((corners - 2).sum()), car.n_points)
+    assert not outcome["exportable"] and outcome["sameCells"]
+
+
 @requires_runtime
 def test_a_bundled_example_is_explained_at_a_vertex(tmp_path: Path) -> None:
     """Catches `explain` failing, or `polygonAt` answering, for a bundled example opened before any
@@ -413,6 +502,25 @@ def test_exporting_an_exported_file_replaces_its_prediction(car: pv.PolyData, tm
     again = _read_without_complaint(second / "exported.vtp")
     np.testing.assert_allclose(again.cell_data["CpPredicted"], once.cell_data["CpPredicted"], atol=1e-6)
     np.testing.assert_array_equal(again.cell_data["CpMeanTrim"], once.cell_data["CpMeanTrim"])
+
+
+@requires_runtime
+def test_written_vtp_reads_back_in_vtk_with_the_same_cells_and_arrays(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `writeVtp` writing a file VTK reads otherwise than it was given (other points or
+    polygons, arrays of another type, width or order) or reads with complaints."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    outcome = _run_engine("write", path, tmp_path / "out")
+    assert outcome == {"name": "written.vtp", "readBack": True}
+    original, written = pv.read(path), _read_without_complaint(tmp_path / "out" / "written.vtp")
+    np.testing.assert_array_equal(written.points, original.points)
+    np.testing.assert_array_equal(written.faces, original.faces)
+    assert written.cell_data["CpMeanTrim"].dtype == np.float32
+    np.testing.assert_array_equal(written.cell_data["CpMeanTrim"], original.cell_data["CpMeanTrim"])
+    assert written.cell_data["centers"].dtype == np.float64
+    np.testing.assert_allclose(written.cell_data["centers"], read_vtp_surface(path).centers, atol=1e-6)
+    assert written.cell_data["corners"].dtype == np.uint8
+    np.testing.assert_array_equal(written.cell_data["corners"], np.diff(vtk_to_numpy(original.GetPolys().GetOffsetsArray())))
+    np.testing.assert_array_equal(written.point_data["height"], original.points[:, 2])
 
 
 @requires_runtime

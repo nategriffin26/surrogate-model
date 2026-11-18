@@ -2,8 +2,11 @@
 // on the car, the car optionally clipped at it, and the shown field plotted along the outer surface it cuts, with a
 // cursor linked to the car.
 
+import { finite, oneOf, round } from './checks.js';
 import { h } from './dom.js';
+import { baseName, defineExport } from './export.js';
 import { metres, niceTicks, signed } from './format.js';
+import { defineOperation } from './operations.js';
 import { drawCursor, drawPlot, valueAlong } from './plots.js';
 import { CUT_AXES, branches, cut } from './section.js';
 
@@ -62,11 +65,115 @@ export function sectionCsv(c, view) {
 	return lines.join('\n') + '\n';
 }
 
+const CLIPS = { off: 0, keep_below: 1, keep_above: -1 };
+
+/** app: { session, update }. The section as operations, and its plot's points as an export. */
+export function defineSectionOperations({ session, update }) {
+	const view = session.view;
+	const shown = () => {
+		const c = session.active;
+		if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
+		return c;
+	};
+	const summary = () => ({ on: view.section.on, axis: AXIS_NAMES[view.section.axis], position_m: view.section.offset, clip: Object.keys(CLIPS).find((k) => CLIPS[k] === view.section.clip) });
+
+	defineOperation({
+		name: 'set_section',
+		description: 'Place the section: a plane normal to x, y or z at a position in metres, its line drawn on the car and the shown field plotted along the outer surface it cuts (Cp with suction, negative Cp, upward). y = 0 is the car\'s centreline. The car can be clipped at the plane to see inside. Turning it on brings its plot up in the dock. Every car is seen through the same section.',
+		parameters: {
+			type: 'object',
+			properties: {
+				on: { type: 'boolean', description: 'Whether the section is drawn and plotted.' },
+				axis: { type: 'string', enum: AXIS_NAMES, description: 'Axis the plane is normal to. Changing it without a position puts the plane at the car\'s middle along that axis (y = 0 for y).' },
+				position_m: { type: 'number', description: 'Where the plane crosses its axis, in metres.' },
+				clip: { type: 'string', enum: Object.keys(CLIPS), description: 'Hide the car on one side of the plane: keep_below keeps the part where the coordinate is below the position.' },
+			},
+			additionalProperties: false,
+		},
+		run({ on, axis, position_m, clip }) {
+			const c = shown();
+			const s = view.section;
+			if (axis !== undefined) {
+				s.axis = AXIS_NAMES.indexOf(oneOf('axis', axis, AXIS_NAMES));
+				const b = c.result.geometry.bounds;
+				if (position_m === undefined) s.offset = s.axis === 1 ? 0 : Number(((b[2 * s.axis] + b[2 * s.axis + 1]) / 2).toFixed(3));
+			}
+			if (position_m !== undefined) s.offset = finite('position_m', position_m);
+			if (clip !== undefined) s.clip = CLIPS[oneOf('clip', clip, Object.keys(CLIPS))];
+			if (on !== undefined && on !== s.on) {
+				s.on = Boolean(on);
+				// Turning the section on brings its plot up; turning it off leaves the probe table in its place.
+				if (s.on) {
+					view.dock = 'section';
+					view.dockCollapsed = false;
+				} else if (view.dock === 'section') {
+					view.dock = 'probes';
+				}
+			}
+			update('toolbar', 'viewer', 'dock', 'layout');
+			return summary();
+		},
+	});
+
+	defineOperation({
+		name: 'read_section',
+		description: 'Numbers along the section on a case: for each branch of the outer surface it cuts (Upper and Lower, or y > 0 and y < 0 for a z section), the range it spans along the plot axis and the lowest and highest value of a field with where they are. Optionally the field at given positions along the plot axis (x for y and z sections, y for x sections). Values interpolate linearly along the working mesh\'s edges, as drawn.',
+		parameters: {
+			type: 'object',
+			properties: {
+				case_id: { type: 'integer', description: 'Default the case on screen.' },
+				field: { type: 'string', enum: Object.keys(QUANTITY), description: 'cp, drag (−Cp·nₓ) or sigma; default cp.' },
+				at_m: { type: 'array', items: { type: 'number' }, description: 'Positions along the plot axis, in metres, to read the field at.' },
+			},
+			additionalProperties: false,
+		},
+		run({ case_id, field = 'cp', at_m = [] }) {
+			const c = case_id === undefined ? shown() : session.byId(case_id);
+			if (!c.result) throw new Error(`Case ${c.id} has no result yet (${c.status}).`);
+			if (!view.section.on) throw new Error('The section is off. Turn it on with set_section first.');
+			oneOf('field', field, Object.keys(QUANTITY));
+			at_m.forEach((x, i) => finite(`at_m[${i}]`, x));
+			const { along, branches: names } = CUT_AXES[view.section.axis];
+			const point = (r) => r.p.map((v) => round(v, 4));
+			return {
+				...summary(),
+				plot_axis: AXIS_NAMES[along],
+				branches: sectionRows(c, view.section, field).map((paths, b) => {
+					const rows = paths.flat();
+					if (rows.length === 0) return { name: names[b], points: 0 };
+					const low = rows.reduce((m, r) => (r.value < m.value ? r : m));
+					const high = rows.reduce((m, r) => (r.value > m.value ? r : m));
+					return {
+						name: names[b],
+						points: rows.length,
+						from_m: round(Math.min(...rows.map((r) => r.along)), 4),
+						to_m: round(Math.max(...rows.map((r) => r.along)), 4),
+						min: { value: round(low.value), at_m: point(low) },
+						max: { value: round(high.value), at_m: point(high) },
+						...(at_m.length ? { at: at_m.map((x) => ({ position_m: x, value: valueOn(paths, x) === null ? null : round(valueOn(paths, x)) })) } : {}),
+					};
+				}),
+			};
+		},
+	});
+
+	defineExport({
+		name: 'section',
+		label: 'Section',
+		format: 'CSV',
+		title: 'The section plot\'s points: branch, x, y, z and the field shown',
+		unavailable: () => (view.section.on ? null : 'The section is off. Turn it on to export its plot.'),
+		make: async (c) => new Blob([sectionCsv(c, view)], { type: 'text/csv' }),
+		fileName: (c) => `${baseName(c)}-section.csv`,
+	});
+}
+
 /**
  * host: the overlay over the 3D view (markers for the plot cursor); viewport: the element the car is dragged in;
- * view: the shared view, whose section and field this tool reads. changed(patch) applies a change to the section.
+ * view: the shared view, whose section and field this tool reads. run(name, args) runs an operation: the controls
+ * change the section through `set_section`.
  */
-export function createSectionTool({ host, viewport, viewer, active, view, changed }) {
+export function createSectionTool({ host, viewport, viewer, active, view, run }) {
 	const markers = [0, 1].map((b) => h('div', { class: `cut-marker b${b}`, hidden: true }));
 	host.append(...markers);
 	let plot = null;
@@ -121,13 +228,13 @@ export function createSectionTool({ host, viewport, viewer, active, view, change
 		viewer.setSection({ ...view.section, plane: true });
 		const move = (ev) => {
 			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / perMetre;
-			changed({ offset: Number(offset.toFixed(3)) });
+			run('set_section', { position_m: Number(offset.toFixed(3)) });
 		};
 		const up = () => {
 			dragging = false;
 			viewport.removeEventListener('pointermove', move);
 			viewport.removeEventListener('pointerup', up);
-			changed({});
+			run('set_section', {});
 		};
 		viewport.addEventListener('pointermove', move);
 		viewport.addEventListener('pointerup', up);
@@ -205,22 +312,19 @@ export function createSectionTool({ host, viewport, viewer, active, view, change
 	const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', 'aria-label': 'Position, m', spellcheck: 'false' });
 	position.addEventListener('change', () => {
 		const value = Number(position.value.replace('\u2212', '-'));
-		if (Number.isFinite(value)) changed({ offset: value });
+		if (Number.isFinite(value)) run('set_section', { position_m: value });
 		else position.value = signed(view.section.offset, 3);
 	});
 	position.addEventListener('keydown', (e) => e.key === 'Enter' && position.blur());
 	const slider = h('input', { type: 'range', class: 'slider', step: 0.001, 'aria-label': 'Position' });
-	slider.addEventListener('input', () => changed({ offset: Number(slider.value) }));
+	slider.addEventListener('input', () => run('set_section', { position_m: Number(slider.value) }));
 	const segments = (label, values, pick) => {
 		const buttons = values.map((value) => h('button', { type: 'button', role: 'radio', class: 'segment', onclick: () => pick(value) }));
 		return { el: h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons), buttons };
 	};
-	const normal = segments('Normal', [0, 1, 2], (axis) => {
-		const b = active().result.geometry.bounds;
-		changed({ axis, offset: axis === 1 ? 0 : Number(((b[2 * axis] + b[2 * axis + 1]) / 2).toFixed(3)) });
-	});
+	const normal = segments('Normal', [0, 1, 2], (axis) => run('set_section', { axis: AXIS_NAMES[axis] }));
 	normal.buttons.forEach((b, axis) => (b.textContent = AXIS_NAMES[axis]));
-	const clip = segments('Clip', [0, 1, -1], (value) => changed({ clip: value }));
+	const clip = segments('Clip', [0, 1, -1], (value) => run('set_section', { clip: Object.keys(CLIPS).find((k) => CLIPS[k] === value) }));
 	const axisLabel = h('span', { class: 'control-label' });
 	const controlsEl = h('div', { class: 'cut-controls' },
 		h('span', { class: 'control-label' }, 'Normal'), normal.el,

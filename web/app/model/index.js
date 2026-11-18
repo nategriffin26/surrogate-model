@@ -5,7 +5,6 @@
 // the view without a change here.
 
 import { h, put } from '../dom.js';
-import { createCorner } from './corner.js';
 import { columnValue, inputGroups, inputLayers } from './inputs.js';
 import { LAYERS, measure } from './measures.js';
 import { Stencil } from './stencil.js';
@@ -51,7 +50,7 @@ function cutName(mark, columns) {
 	return dz === 0 ? 'Outline at the point’s height' : `Outline ${cm(dz)} ${dz < 0 ? 'lower' : 'higher'}`;
 }
 
-export function mountModelView(host, { engine, session, viewer, showPanes, corner }) {
+export function mountModelView(host, { engine, session, viewer }) {
 	const stencil = new Stencil(viewer);
 	const canvas = viewer.canvas;
 	const tip = h('div', { class: 'model-tip', hidden: true, role: 'tooltip' });
@@ -215,7 +214,6 @@ export function mountModelView(host, { engine, session, viewer, showPanes, corne
 		if (panes === carPanes) return;
 		const reframe = carPanes !== null && panes.length !== carPanes.length;
 		carPanes = panes;
-		showPanes(panes);
 		if (reframe) viewer.fit();
 	}
 
@@ -408,7 +406,6 @@ export function mountModelView(host, { engine, session, viewer, showPanes, corne
 			state.scaleShown = new Set(scales);
 			story = createStory({ card, groups: state.groups, layers: state.layers, act });
 			host.prepend(story.el);
-			cornerCard = createCorner(corner, scales, act);
 			observeStory();
 			sync();
 		},

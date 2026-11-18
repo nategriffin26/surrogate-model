@@ -1,15 +1,14 @@
-// The marks of `measures.js` drawn on the viewer's car. Everything is depth-tested against the car: what lies on
-// the surface or in front of it is drawn in full, what the car hides is drawn faintly, so the eye can tell which is
-// which. Cuts are the car's own outlines, lifted a hair off the surface; regional boxes are shaded volumes, and
-// the surface inside them is tinted by the weight each voxel has in the input. The point is a handle the reader
-// drags.
+// The marks of `measures.js` for one group of inputs, drawn on the page's car in the group's colour. Everything is
+// depth-tested against the car: what lies on the surface or in front of it is drawn in full, what the car hides is
+// drawn faintly, so the eye can tell which is which. Cuts are the car's own outlines, lifted a hair off the surface;
+// boxes are shaded volumes, and the surface inside them is tinted by the weight each voxel has in the input. The
+// point is a handle the reader drags.
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { SurfaceCutter } from './cuts.js';
-import { KIND_COLORS } from './inputs.js';
 
 /** Length of the drawn normal, in metres. */
 const NORMAL_LENGTH = 0.2;
@@ -21,25 +20,21 @@ const SPAN_MARGIN = 0.06;
 const DOT_LIFT = 0.012;
 /** Dot diameters in CSS pixels. */
 const DOT = { handle: 21, reading: 6, flag: 8 };
-/** How near the pointer, in CSS pixels, a mark must be to be under it. */
-const REACH = { handle: 14, reading: 7, line: 5 };
-/** Opacity of marks outside the focus. */
-const FAINT = 0.22;
-/** At most this many regional boxes are tinted on the surface at once (four scales, three samples each). */
+/** How near the pointer, in CSS pixels, the handle must be to be under it. */
+const REACH = 14;
+/** At most this many boxes are tinted on the surface at once (four sizes, three places each). */
 const BLOCKS = 12;
-const INK = KIND_COLORS.position;
+const INK = '#0d2233';
 
 const DOT_VERTEX = /* glsl */ `
 attribute vec3 color;
 attribute float size;
 attribute float style;
-attribute float alpha;
 uniform float uPixelRatio;
 uniform float uLift;
 varying vec3 vColor;
 varying float vStyle;
 varying float vSize;
-varying float vAlpha;
 void main() {
 	vec4 view = modelViewMatrix * vec4(position, 1.0);
 	view.xyz += (isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-view.xyz)) * uLift;
@@ -48,7 +43,6 @@ void main() {
 	gl_PointSize = vSize;
 	vColor = color;
 	vStyle = style;
-	vAlpha = alpha;
 }`;
 
 // A disc in the mark's colour inside a white rim (style 0), a ring around a white middle (1), or the handle: a white
@@ -59,7 +53,6 @@ uniform float uPixelRatio;
 varying vec3 vColor;
 varying float vStyle;
 varying float vSize;
-varying float vAlpha;
 void main() {
 	float r = length(gl_PointCoord - 0.5) * vSize;
 	float edge = 0.5 * vSize;
@@ -81,7 +74,7 @@ void main() {
 		color = mix(vec3(1.0), vColor, ink * (1.0 - hole));
 	}
 	if (cover <= 0.0) discard;
-	gl_FragColor = vec4(color, cover * uOpacity * vAlpha);
+	gl_FragColor = vec4(color, cover * uOpacity);
 	#include <colorspace_fragment>
 }`;
 
@@ -148,27 +141,23 @@ export class Stencil {
 	constructor(viewer) {
 		this.viewer = viewer;
 		this.object = null;
-		this.drawn = [];
+		this.point = null;
 		this.car = null;
 		const pixelRatio = viewer.renderer.getPixelRatio();
 		const line = (linewidth, opacity, hidden) => new LineMaterial({
 			vertexColors: true, transparent: true, depthWrite: false, linewidth, opacity,
 			...(hidden ? { depthFunc: THREE.GreaterDepth, opacity: opacity * 0.2 } : {}),
 		});
-		// Per width and strength: the part of a line in view, then the part the car hides.
+		// Per width: the part of a line in view, then the part the car hides.
 		this.lines = {};
-		for (const [name, width] of [['major', 2.5], ['minor', 1.5]]) {
-			for (const [strength, opacity] of [['strong', 1], ['faint', FAINT]]) {
-				this.lines[`${name}:${strength}`] = [line(width, opacity, false), line(width * 0.7, opacity, true)];
-			}
-		}
+		for (const [name, width] of [['major', 2.5], ['minor', 1.5]]) this.lines[name] = [line(width, 1, false), line(width * 0.7, 1, true)];
 		const dots = (opacity, depthFunc) => new THREE.ShaderMaterial({
 			uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: DOT_LIFT } },
 			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
 		});
 		this.dots = [dots(1, THREE.LessEqualDepth), dots(0.3, THREE.GreaterDepth)];
 		const box = (side, opacity) => new THREE.ShaderMaterial({
-			uniforms: { uColor: { value: new THREE.Color(KIND_COLORS.bend) }, uOpacity: { value: opacity } },
+			uniforms: { uColor: { value: new THREE.Color() }, uOpacity: { value: opacity } },
 			vertexShader: BOX_VERTEX, fragmentShader: BOX_FRAGMENT, transparent: true, depthWrite: false, side,
 		});
 		this.boxes = { back: box(THREE.BackSide, 0.045), front: box(THREE.FrontSide, 0.07) };
@@ -182,7 +171,7 @@ export class Stencil {
 				uCell: { value: new Array(BLOCKS).fill(1) },
 				uStrength: { value: new Array(BLOCKS).fill(0) },
 				uSizes: { value: 1 },
-				uColor: { value: new THREE.Color(KIND_COLORS.bend) },
+				uColor: { value: new THREE.Color() },
 				uLift: { value: 0.002 },
 			},
 			vertexShader: TINT_VERTEX, fragmentShader: TINT_FRAGMENT, transparent: true, depthWrite: false,
@@ -232,56 +221,53 @@ export class Stencil {
 	}
 
 	/**
-	 * Draw the point, and the marks of the layers shown. `strong(mark)` says whether a mark stands out or recedes;
-	 * `beside` (prediction beside CFD) draws the point alone, so the two fields can be compared.
+	 * Draw the point, and one group's marks in its colour.
 	 * @param {{ position: number[], normal: number[] }} point
 	 * @param {import('./measures.js').Mark[]} marks
-	 * @param {(mark: import('./measures.js').Mark) => boolean} strong
+	 * @param {string} hex  the group's colour
 	 */
-	draw(point, marks, strong, beside = false) {
+	draw(point, marks, hex) {
 		const group = new THREE.Group();
-		const drawn = beside ? [] : marks;
 		const lines = {};
-		const addLine = (style, on, from, to, color) => {
-			const key = `${style}:${on ? 'strong' : 'faint'}`;
-			lines[key] ??= { positions: [], colors: [] };
-			lines[key].positions.push(...from, ...to);
-			lines[key].colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+		const addLine = (style, from, to, color) => {
+			lines[style] ??= { positions: [], colors: [] };
+			lines[style].positions.push(...from, ...to);
+			lines[style].colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
 		};
 		const dots = [];
+		const color = new THREE.Color(hex);
+		const ink = new THREE.Color(INK);
 		const tint = this.tintMaterial.uniforms;
 		tint.uStrength.value.fill(0);
+		tint.uColor.value.copy(color);
+		for (const box of Object.values(this.boxes)) box.uniforms.uColor.value.copy(color);
 		let blocks = 0;
 		const tinted = new Set();
-		const color = (kind) => new THREE.Color(KIND_COLORS[kind]);
 
-		for (const mark of drawn) {
-			const on = strong(mark);
+		for (const mark of marks) {
 			if (mark.type === 'reading') {
-				dots.push({ at: mark.at, size: mark.kind === 'flag' ? DOT.flag : DOT.reading, style: mark.hollow ? 1 : 0, color: color(mark.kind), alpha: on ? 1 : FAINT });
+				dots.push({ at: mark.at, size: mark.kind === 'flag' ? DOT.flag : DOT.reading, style: mark.hollow ? 1 : 0, color });
 			} else if (mark.type === 'guide') {
-				addLine('minor', on, mark.from, mark.to, color(mark.kind));
+				addLine('minor', mark.from, mark.to, color);
 			} else if (mark.type === 'cut') {
 				const { positions, normals } = this.segments(mark);
 				const style = mark.own ? 'major' : 'minor';
-				const c = color(mark.layer);
 				for (let i = 0; i < positions.length; i += 6) {
 					const lift = (k) => positions[i + k] + normals[i + k] * CUT_LIFT;
-					addLine(style, on, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], c);
+					addLine(style, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], color);
 				}
 			} else if (mark.type === 'block') {
-				for (const [a, b] of BOX_EDGES) addLine(mark.sample === 'here' ? 'major' : 'minor', on, corner(mark, a), corner(mark, b), color('bend'));
+				for (const [a, b] of BOX_EDGES) addLine(mark.sample === 'here' ? 'major' : 'minor', corner(mark, a), corner(mark, b), color);
 				if (mark.sample === 'here') {
 					for (const side of ['back', 'front']) {
 						const box = new THREE.Mesh(this.boxGeometry, this.boxes[side]);
 						box.position.set(...mark.min.map((v, k) => (v + mark.max[k]) / 2));
 						box.scale.set(...mark.max.map((v, k) => v - mark.min[k]));
 						box.renderOrder = ORDER[side];
-						box.visible = on;
 						group.add(box);
 					}
 				}
-				if (on && blocks < BLOCKS) {
+				if (blocks < BLOCKS) {
 					tint.uMin.value[blocks].fromArray(mark.min);
 					tint.uWeights.value[blocks].fromArray(mark.weights);
 					tint.uCell.value[blocks] = mark.cell;
@@ -297,11 +283,11 @@ export class Stencil {
 
 		// The point: its facing as an arrow, and the handle.
 		const tip = point.position.map((p, k) => p + point.normal[k] * NORMAL_LENGTH);
-		addLine('major', true, point.position, tip, color('position'));
+		addLine('major', point.position, tip, ink);
 		this.cone.position.fromArray(tip);
 		this.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...point.normal));
 		group.add(this.cone);
-		dots.push({ at: point.position, size: DOT.handle, style: 2, color: color('position'), alpha: 1 });
+		dots.push({ at: point.position, size: DOT.handle, style: 2, color: ink });
 
 		for (const [key, { positions, colors }] of Object.entries(lines)) {
 			const geometry = new LineSegmentsGeometry().setPositions(positions).setColors(colors);
@@ -314,7 +300,6 @@ export class Stencil {
 		this.addDots(group, dots);
 		this.release();
 		this.object = group;
-		this.drawn = drawn;
 		this.point = point.position;
 		this.viewer.setMarkers(group);
 	}
@@ -325,7 +310,6 @@ export class Stencil {
 		geometry.setAttribute('color', new THREE.Float32BufferAttribute(dots.flatMap((d) => d.color.toArray()), 3));
 		geometry.setAttribute('size', new THREE.Float32BufferAttribute(dots.map((d) => d.size), 1));
 		geometry.setAttribute('style', new THREE.Float32BufferAttribute(dots.map((d) => d.style), 1));
-		geometry.setAttribute('alpha', new THREE.Float32BufferAttribute(dots.map((d) => d.alpha), 1));
 		for (const material of this.dots) {
 			const points = new THREE.Points(geometry, material);
 			points.frustumCulled = false;
@@ -337,7 +321,6 @@ export class Stencil {
 	/** Take the marks off the car. */
 	clear() {
 		this.release();
-		this.drawn = [];
 		this.point = null;
 		this.viewer.setMarkers(null);
 	}
@@ -375,42 +358,6 @@ export class Stencil {
 		const project = this.point && this.projector(clientX, clientY);
 		if (!project) return false;
 		const [x, y] = project(this.point);
-		return Math.hypot(x - clientX, y - clientY) <= REACH.handle;
-	}
-
-	/** The drawn mark under (clientX, clientY): a reading before a line, the nearest of each. */
-	markAt(clientX, clientY) {
-		const project = this.projector(clientX, clientY);
-		if (!project) return null;
-		let best = null;
-		let bestDistance = Infinity;
-		const consider = (mark, distance, reach) => {
-			if (distance <= reach && distance < bestDistance) {
-				best = mark;
-				bestDistance = distance;
-			}
-		};
-		const toSegment = (a, b) => {
-			const [ax, ay] = project(a);
-			const [bx, by] = project(b);
-			const dx = bx - ax, dy = by - ay;
-			const t = Math.max(0, Math.min(1, ((clientX - ax) * dx + (clientY - ay) * dy) / (dx * dx + dy * dy || 1)));
-			return Math.hypot(ax + t * dx - clientX, ay + t * dy - clientY);
-		};
-		for (const mark of this.drawn) {
-			if (mark.type !== 'reading') continue;
-			const [x, y] = project(mark.at);
-			consider(mark, Math.hypot(x - clientX, y - clientY), REACH.reading);
-		}
-		if (best) return best;
-		for (const mark of this.drawn) {
-			if (mark.type === 'guide') consider(mark, toSegment(mark.from, mark.to), REACH.line);
-			else if (mark.type === 'block') for (const [a, b] of BOX_EDGES) consider(mark, toSegment(corner(mark, a), corner(mark, b)), REACH.line);
-			else if (mark.type === 'cut') {
-				const { positions } = this.segments(mark);
-				for (let i = 0; i < positions.length; i += 6) consider(mark, toSegment(positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6)), REACH.line);
-			}
-		}
-		return best;
+		return Math.hypot(x - clientX, y - clientY) <= REACH;
 	}
 }

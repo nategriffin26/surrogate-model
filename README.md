@@ -20,15 +20,23 @@ uv run surrogate-app
 
 Open `http://127.0.0.1:8740/` in a browser with WebGPU (current Chrome, Edge or Safari), then drop a `boundary_i.vtp` file on the page or open one of the two bundled examples (runs 1 and 500). `--port` picks another port.
 
-The app is for an engineer who has a geometry and no CFD run for it. The Result view treats the prediction as a solution to work with: the pressure field on the car, pressure drag with the range across the five networks and its split between forward-facing and rearward-facing surfaces, the highest and lowest pressure and where they are, section cuts, and point probes that read the file's own cell under the cursor. It exports pictures, CSV, and the prediction as a `.vtp` on the file's own mesh (`CpPredicted` and `CpSpread` added as cell arrays) for ParaView or a loads mapping. A line appears when the geometry lies outside the training cars' dimensions. The Model view explains the model on the car itself: what it is told about a point that can be dragged across the surface, what each group of inputs contributes, the networks, and the prediction beside CFD when the file carries it.
+The app is for an engineer who has a geometry and no CFD run for it. The Result view treats the prediction as a solution to work with: the pressure field on the car, pressure drag with the range across the five networks and its split between forward-facing and rearward-facing surfaces, the highest and lowest pressure and where they are, section cuts, and point probes that read the file's own cell under the cursor. It exports pictures, CSV, and the prediction as a `.vtp` on the file's own mesh (`CpPredicted` and `CpSpread` added as cell arrays) for ParaView or a loads mapping, to download or to keep in the workspace. The workspace, in a panel on the left, holds every file of the session: geometry dropped or chosen, exports, and what the assistant writes; a geometry runs the model from its row and opens its result, and the bundled examples are listed beside the files. Every action, from a control or from the assistant, is one operation in one registry, so both act on the car and the files alike. A line appears when the geometry lies outside the training cars' dimensions. The Model view explains the model on the car itself: what it is told about a point that can be dragged across the surface, what each group of inputs contributes, the networks, and the prediction beside CFD when the file carries it.
 
-The whole analysis runs in the browser, so the 650 MB file never leaves the machine and `surrogate-app` only serves static files:
+The whole analysis runs in the browser, so the 650 MB file never leaves the machine; `surrogate-app` serves the files and the assistant's route to its model:
 
-- `web/engine/` reads the `.vtp`, builds the same lookups and 191 inputs as `src/surrogate/features.py`, and runs the five networks on the GPU at every cell of the file. A first result comes from about a million cells spaced evenly by area; the numbers summed over every cell replace it a few seconds later. On an Apple M5 Pro, run 1 (8.8M cells) shows its result about 5 s after the drop and its all-cell numbers at about 12 s. Without WebGPU the networks run on CPU threads (34 s to the result on the same machine).
+- `web/engine/` reads the `.vtp`, builds the same lookups and 191 inputs as `src/surrogate/features.py`, and runs the five networks on the GPU at every cell of the file. A first result comes from about a million cells spaced evenly by area; the numbers summed over every cell replace it a few seconds later. On an Apple M5 Pro, run 1 (8.8M cells) shows its result about 5 s after the drop and its all-cell numbers at about 12 s. Without WebGPU the networks run on CPU threads (34 s to the result on the same machine). The engine also analyses a surface given as arrays, such as a car reshaped on the page, exactly as it would the same surface saved to a file; predicts every cell of a 600,000-triangle mesh at once for studies that compare variants; writes any surface with cell arrays as a `.vtp`; and reads one car's pressure at another car's surface for difference maps.
 - `web/viewer/` draws the file's own mesh, every cell (17.7M triangles for run 1), where the GPU keeps up. A 600,000-triangle simplified copy, made by edge collapse onto the file's own points, serves section cuts, slower GPUs and the bundled examples.
-- The Python pipeline is the reference. `tests/test_web_engine.py` runs the browser engine's modules under Bun or Deno and holds its cell geometry, inputs, each network's $C_p$ and the spread to the Python values. On the two holdout files the all-cell drag from the browser and from `run_vtp_inference` agree to `0.0003`, which is the difference between their two frontal-area estimates.
+- The Python pipeline is the reference. `tests/test_web_engine.py` runs the browser engine's modules under Bun or Deno and holds its cell geometry, inputs, each network's $C_p$ and the spread to the Python values. On the two holdout files the all-cell drag from the browser and from `run_vtp_inference` agree to `0.0007`, which is the difference between their two frontal-area estimates.
 
 There is no build step: the app is plain ES modules, with three.js and meshoptimizer vendored in `web/vendor/`.
+
+### Assistant
+
+The Assistant panel holds one agent the engineer talks to. Its tools are the operations the app's own controls run (`web/app/operations.js`), so what it does shows on screen as if the engineer had done it, and a Python kernel. Each tool call is a step in the conversation that opens to show what was asked and what came back. Operations that open, write, download or delete ask the engineer first, and so does Python code that removes, replaces or moves the engineer's files. The stop button ends a run at once.
+
+The kernel is Pyodide (Python 3.14 with numpy, scipy, pandas and matplotlib) in a worker of its own, loaded from the jsDelivr CDN on first use and kept for the conversation. Its working directory is the app's workspace, the same files the Files panel shows. It has no network: its script is served with a Content-Security-Policy that allows only the Pyodide CDN, and the request functions are removed once Pyodide has loaded. Its module `pressure` gives the open cases as numpy arrays, runs any operation, predicts a changed geometry with the browser engine and writes `.vtp` files, so a study is a loop of deform, predict and measure. A run computing for more than 60 s is stopped by restarting the kernel.
+
+The page sends the conversation to `/api/assistant`, and the server adds the key, the model, the reasoning effort and the output limit before forwarding it to OpenRouter and streaming the reply back. To enable it, set `OPENROUTER_API_KEY` in the environment or in `local/secrets/assistant.env`; `ASSISTANT_MODEL` picks the model (default `anthropic/claude-opus-5.5`) and `ASSISTANT_ENABLED=0` switches it off. Without a key the panel says the assistant is not available and the rest of the app works as before. `deploy/assistant-worker/` serves the same route on a public site as a Cloudflare Worker, with limits of 120 requests a minute overall, 30 a minute per visitor and 5,000 a day.
 
 ## Model
 
@@ -54,7 +62,7 @@ uv run python -m surrogate.write_examples   # runs 1 and 500, analysed in headle
 uv run pytest
 ```
 
-`artifacts/ensemble.pt` (3.7 MB) is the trained ensemble and `artifacts/metrics.json` holds the numbers in the results table. The engine's mesh and file-format tests run under Deno: `deno test --allow-read tests/meshes.test.js tests/result.test.js`.
+`artifacts/ensemble.pt` (3.7 MB) is the trained ensemble and `artifacts/metrics.json` holds the numbers in the results table. The engine's mesh, file-format and sampling tests run under Deno: `deno test --allow-read tests/meshes.test.js tests/result.test.js tests/nearest.test.js`.
 
 Python inference on any `.vtp`, with or without `CpMeanTrim`, asks the model at every cell of the file (about 25 s for 8.8M cells):
 
@@ -102,16 +110,20 @@ src/surrogate/       the model in Python; the reference for the browser engine
   inference.py         any .vtp -> Cp at every cell
   export_web.py        trained ensemble -> web/model/
   write_examples.py    bundled examples, written by the browser engine itself
-  server.py            uv run surrogate-app
+  server.py            uv run surrogate-app: the tool's files and the assistant's route to its model
 web/                 the browser tool
-  engine/              .vtp reader, inputs, networks on WebGPU; result.js documents what it returns
+  engine/              .vtp reader and writer, inputs, networks on WebGPU; result.js documents what it returns
   viewer/              3D view of the file's mesh
-  app/                 interface; app/model/ is the Model view
+  app/                 interface; operations.js (every action, for controls and assistant) and workspace.js
+                       (every file) are its two contracts; app/model/ is the Model view
+  assistant/           the assistant: its conversation loop, panel and prompt, and the Pyodide kernel with
+                       pressure.py, the module that gives Python the cases, the operations and the model
   model/               exported weights and model description
   examples/            runs 1 and 500, analysed
   vendor/              three.js, meshoptimizer
 artifacts/           ensemble.pt, metrics.json
-tests/               the Python pipeline, and the browser engine against it
+tests/               the Python pipeline, the browser engine against it, and the assistant's two proxies
+deploy/              assistant-worker/: the assistant's route as a Cloudflare Worker for the public site
 data/                DrivAerML tables; the surface files are fetched (data/README.md)
 ```
 

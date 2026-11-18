@@ -1,0 +1,100 @@
+/* The assistant's panel, in the tool's light theme (web/app/theme.css). */
+
+.assistant { display: grid; grid-template-rows: 44px minmax(0, 1fr) auto; height: 100%; min-width: 0; }
+.assistant-head { display: flex; align-items: center; gap: 2px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--hair); }
+.assistant-title { margin: 0 auto 0 0; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
+
+.assistant-log { overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px 24px; scroll-padding-bottom: 24px; }
+.exchange { display: grid; gap: 10px; animation: rise 0.22s var(--ease); }
+.exchange + .exchange { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hair); }
+.question { margin: 0; color: var(--heading); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply { display: grid; gap: 8px; min-width: 0; }
+.reply-note { margin: 0; color: var(--faint); font-size: 12.5px; }
+.reply-error { margin: 0; color: var(--rose); font-size: 13px; }
+.pending { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 12.5px; }
+
+/* The reply's text. */
+.answer { color: var(--ink); overflow-wrap: anywhere; }
+.answer > * { margin: 0; }
+.answer > * + * { margin-top: 8px; }
+.answer ul, .answer ol { padding-left: 20px; }
+.answer li + li { margin-top: 2px; }
+.answer .md-heading { font-weight: 600; color: var(--heading); }
+.answer code { font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace; padding: 1px 4px; border-radius: 4px; background: var(--tint); }
+.answer .md-code { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; padding: 8px 10px; border-radius: 6px; background: #f6f9fb; overflow-x: auto; }
+.md-table, .output-table-scroll { overflow-x: auto; }
+.md-table table, .output-table table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.md-table th, .output-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 5px 10px 5px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.md-table td, .output-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); color: var(--heading); white-space: nowrap; }
+:is(.md-table, .output-table) :is(td, th):last-child { padding-right: 0; }
+:is(.md-table, .output-table) td.num { text-align: right; }
+
+/* A tool call: one quiet row, opened to see what was asked and what came back. */
+.step { min-width: 0; }
+.step-row, .step-sub { display: grid; grid-template-columns: 8px auto minmax(0, 1fr) 16px; align-items: center; gap: 8px; width: 100%; min-height: 26px; text-align: left; }
+.step-row { padding: 0 4px; margin: 0 -4px; width: calc(100% + 8px); border-radius: 6px; transition: background 0.12s; }
+.step-row:hover { background: var(--tint); }
+.step-name { color: var(--heading); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.step-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.step-chevron { display: grid; place-items: center; color: var(--faint); opacity: 0; transition: opacity 0.12s; }
+.step-chevron .icon { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform 0.15s var(--ease); }
+.step-row:hover .step-chevron, .step-row[aria-expanded="true"] .step-chevron { opacity: 1; }
+.step-row[aria-expanded="true"] .step-chevron .icon { transform: none; }
+.step-state { width: 6px; height: 6px; border-radius: 50%; background: var(--mist); justify-self: center; }
+.step.running > .step-row .step-state, .step-sub.running .step-state { background: var(--link); animation: breathe 1.1s ease-in-out infinite; }
+.step.failed > .step-row .step-state, .step-sub.failed .step-state { background: var(--rose); }
+.step-subs { padding-left: 14px; }
+.step-sub { grid-template-columns: 8px auto minmax(0, 1fr); min-height: 22px; }
+.step-sub .step-name { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.step-body { margin: 4px 0 6px 14px; padding-left: 12px; border-left: 1px solid var(--hair); animation: pop 0.16s var(--ease); }
+.step-label { margin: 8px 0 3px; color: var(--muted); font-size: 12px; }
+.step-label:first-child { margin-top: 2px; }
+.step-body pre { margin: 0; max-height: 280px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #f6f9fb; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-body .step-error { color: var(--rose); }
+.step-body .stderr { color: var(--orange); }
+.step-outputs { display: grid; gap: 8px; }
+.step-outputs:not(:empty) { margin-top: 6px; }
+
+/* What the code showed: figures and tables, in the conversation. */
+.output-figure { position: relative; margin: 0; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; background: #fff; }
+.output-figure img { display: block; width: 100%; height: auto; }
+.figure-save { position: absolute; top: 6px; right: 6px; background: rgba(255, 255, 255, 0.9); opacity: 0; transition: opacity 0.12s, background 0.15s, color 0.15s; }
+.output-figure:hover .figure-save, .figure-save:focus-visible { opacity: 1; }
+.output-table-scroll { max-height: 280px; overflow: auto; }
+.output-table th { position: sticky; top: 0; background: #fff; }
+.output-table-more { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
+
+/* A question for the engineer. */
+.approval { display: grid; gap: 8px; padding: 10px 0 2px; animation: pop 0.16s var(--ease); }
+.approval-question { margin: 0; color: var(--heading); font-weight: 500; overflow-wrap: anywhere; }
+.approval-actions { display: flex; gap: 8px; }
+.approval-decided { margin: 0; color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* Before the first message, and when the assistant is not here. */
+.assistant-start { display: grid; gap: 2px; margin-top: 4px; }
+.suggestion { padding: 7px 10px; margin: 0 -10px; border-radius: 6px; color: var(--muted); text-align: left; transition: background 0.12s, color 0.12s; }
+.suggestion:hover { background: var(--tint); color: var(--link); }
+.assistant-note { display: grid; gap: 10px; justify-items: start; color: var(--muted); font-size: 13px; }
+.assistant-note p { margin: 0; }
+.assistant-note-title { color: var(--heading); font-weight: 600; font-size: 14px; }
+.assistant-note code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* The message box. */
+.assistant-composer { position: relative; padding: 10px 12px 12px; border-top: 1px solid var(--hair); }
+.assistant-input {
+	display: block; width: 100%; min-height: 40px; max-height: 180px; resize: none; padding: 10px 44px 10px 12px;
+	border: 1px solid var(--rule); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; line-height: 1.45; outline: none;
+	transition: border-color 0.15s;
+}
+.assistant-input:focus { border-color: var(--link); }
+.assistant-input::placeholder { color: var(--faint); }
+.assistant-send {
+	position: absolute; right: 18px; bottom: 18px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+	background: var(--action); color: #fff; transition: background 0.15s;
+}
+.assistant-send:hover { background: #1b4fe0; }
+.assistant-send.stop { background: var(--heading); }
+.assistant-send.stop .icon { width: 12px; height: 12px; fill: currentColor; }
+
+.spinner { width: 12px; height: 12px; border: 1.5px solid var(--mist); border-top-color: var(--link); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes breathe { 50% { opacity: 0.35; } }

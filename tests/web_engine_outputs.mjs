@@ -8,27 +8,35 @@
 //   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs analysis <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs pick     <surface.vtp> <out dir> <model dir>
+//   bun tests/web_engine_outputs.mjs stretch  <surface.vtp> <out dir> <factor>
+//   bun tests/web_engine_outputs.mjs quick    <surface.vtp> <out dir>
+//   bun tests/web_engine_outputs.mjs write    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs example  <example base>  <out dir>
 //
-// `parse` writes the parsed surface; `engine` adds the polygon geometry, the features at every
-// polygon centre, each network's Cp there, and the features again from the lookups as an example
-// pack stores and reads them back; `features` writes the features of the given definition at every
-// polygon centre. A file the reader rejects gives outcome.json { "error": message } and nothing else.
+// `parse` writes the parsed surface and its frontal area; `engine` adds the polygon geometry, the
+// features at every polygon centre, each network's Cp there, and the features again from the lookups
+// as an example pack stores and reads them back; `features` writes the features of the given
+// definition at every polygon centre. A file the reader rejects gives outcome.json { "error": message }
+// and nothing else.
 // `sequence` runs the whole engine (`createEngine`, with `web/model`) on the file twice, asking for
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
 // `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
 // predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
 // forces, the `exact` numbers, and what `polygonAt` and `explain` give at points just outside two
 // dozen polygons. `pick` times `polygonAt`'s lookup at points outside two hundred polygons, the
-// networks asked at each on demand, without the rest of the engine. `example` asks a fresh engine,
-// which has analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
+// networks asked at each on demand, without the rest of the engine. `stretch` stretches the car
+// lengthwise by `factor` and analyses it from arrays (`analyzeSurface`), writing what `analysis` does
+// and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
+// `quick` writes `predictQuick`'s result for the file's surface. `write` writes the file's surface
+// anew with `writeVtp`, with cell and point arrays of several types and widths. `example` asks a
+// fresh engine, which has analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { readSurface } from '../web/engine/vtp.js';
-import { measureCells } from '../web/engine/geometry.js';
+import { readSurface, writeVtp } from '../web/engine/vtp.js';
+import { frontalArea, measureCells } from '../web/engine/geometry.js';
 import { buildContext, computeFeatures, featureLayout } from '../web/engine/features.js';
 import { ensembleStatistics, loadEnsemble, networkActivations, predictOnCpu } from '../web/engine/network.js';
 import { packResult, unpackResult } from '../web/engine/result.js';
@@ -160,6 +168,97 @@ if (mode === 'pick') {
   process.exit(0);
 }
 
+/** The surface with arrays of its own, as `analyzeSurface` and `predictQuick` take them. */
+const ownArrays = ({ name, points, connectivity, offsets, cfd }) => ({
+  name, points: points.slice(), connectivity: connectivity.slice(), offsets: offsets.slice(), cfd: cfd && cfd.slice(),
+});
+
+if (mode === 'stretch') {
+  const file = new File([readFileSync(path)], basename(path));
+  const read = await readSurface(file);
+  // Lengthwise in float64, stored as float32: what numpy gives for float32 points times a float.
+  const points = read.points.map((value, i) => (i % 3 === 0 ? value * Number(modelSource) : value));
+  const engine = createEngine();
+
+  const shared = new Float32Array(points.length + 3);
+  shared.set(points);
+  const refuse = (surface) => engine.analyzeSurface(surface).then(() => null, (error) => error.message);
+  const refusals = {
+    viewOfLargerBuffer: await refuse({ ...ownArrays(read), points: shared.subarray(0, points.length) }),
+    offsetsShort: await refuse({ ...ownArrays(read), offsets: read.offsets.slice(0, -1) }),
+    pointMissing: await refuse({ ...ownArrays(read), points: points.slice(0, -3) }),
+  };
+
+  let exact;
+  const everyPolygon = new Promise((resolve) => { exact = resolve; });
+  const surface = { ...ownArrays(read), name: `stretched_${read.name}`, points };
+  const result = await engine.analyzeSurface(surface, { exact });
+  const numbers = await everyPolygon;
+  const cells = await engine.fileCells(result);
+  const working = engine.workingCells(result);
+  const vtp = await engine.exportVtp(result);
+  writeFileSync(join(outDir, 'exported.vtp'), new Uint8Array(await vtp.arrayBuffer()));
+  for (const name of ['centers', 'normals', 'areas', 'cp', 'sigma']) {
+    write(`file_${name}.${name === 'areas' ? 'f64' : 'f32'}`, cells[name]);
+    write(`working_${name}.${name === 'areas' ? 'f64' : 'f32'}`, working[name]);
+  }
+  write('working_positions.f32', result.mesh.positions);
+  write('working_indices.u32', result.mesh.indices);
+  write('working_vertex_cp.f32', result.mesh.cp);
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
+    form: result.form,
+    geometry: result.geometry,
+    sampled: { forces: result.forces },
+    exact: numbers,
+    moved: surface.points.length === 0,
+    refusals,
+    exportName: vtp.name,
+  }));
+  process.exit(0);
+}
+
+if (mode === 'quick') {
+  const read = await readSurface(new File([readFileSync(path)], basename(path)));
+  const engine = createEngine();
+  const result = await engine.predictQuick(ownArrays(read));
+  write('cp.f32', result.cells.cp);
+  write('sigma.f32', result.cells.sigma);
+  write('vertex_cp.f32', result.mesh.cp);
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
+    form: result.form,
+    geometry: result.geometry,
+    forces: result.forces,
+    accuracy: result.accuracy,
+    triangles: result.mesh.indices.length / 3,
+    vertices: result.mesh.positions.length / 3,
+    exportable: engine.canExportVtp(result),
+    sameCells: engine.workingCells(result) === result.cells,
+  }));
+  process.exit(0);
+}
+
+if (mode === 'write') {
+  const read = await readSurface(new File([readFileSync(path)], basename(path)));
+  const { centers } = measureCells(read);
+  const sizes = Uint8Array.from({ length: read.offsets.length - 1 }, (_, c) => read.offsets[c + 1] - read.offsets[c]);
+  const heights = Float32Array.from({ length: read.points.length / 3 }, (_, p) => read.points[3 * p + 2]);
+  const vtp = writeVtp(
+    { ...read, name: 'written.vtp' },
+    { CpMeanTrim: read.cfd, centers: Float64Array.from(centers), corners: sizes },
+    { height: heights },
+  );
+  const bytes = new Uint8Array(await vtp.arrayBuffer());
+  writeFileSync(join(outDir, 'written.vtp'), bytes);
+  // The engine's own reader takes it back as it was given.
+  const back = await readSurface(new File([bytes], vtp.name));
+  const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
+    name: vtp.name,
+    readBack: ['points', 'connectivity', 'offsets', 'cfd'].every((key) => same(back[key], read[key])),
+  }));
+  process.exit(0);
+}
+
 let surface;
 try {
   surface = await readSurface(new File([readFileSync(path)], basename(path)));
@@ -172,7 +271,7 @@ write('connectivity.u32', surface.connectivity);
 write('offsets.u32', surface.offsets);
 if (surface.cfd) write('cfd.f32', surface.cfd);
 
-let outcome = { cells: surface.offsets.length - 1, hasCfd: Boolean(surface.cfd) };
+let outcome = { cells: surface.offsets.length - 1, hasCfd: Boolean(surface.cfd), frontalArea: frontalArea(surface) };
 if (mode === 'engine' || mode === 'features') {
   const ensemble = mode === 'engine' ? await loadEnsemble(pathToFileURL(`${modelSource}/`)) : null;
   const layout = featureLayout(ensemble ? ensemble.features : JSON.parse(readFileSync(modelSource, 'utf8')));
