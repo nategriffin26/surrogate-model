@@ -1,6 +1,6 @@
 # Demo outline
 
-How the tool is presented to a customer: an aerodynamics team that has a geometry and no CFD run for it.
+How the tool is presented to a customer: an aerodynamics team that has a geometry and no CFD run for it. The five slides in [demo-slides.pdf](demo-slides.pdf) are shown first, then the tool is run live on the customer's file.
 
 1. **The cost.** One DrivAerML CFD run took around 40 hours on 1,536 cores. Surrogate Model gives the pressure on all 8.8 million cells of run 1 in about 12 seconds on a laptop.
 2. **Their file.** The customer's `.vtp` is dropped on the page. The pressure field is on the car about five seconds later, computed in the browser; the file is not uploaded.
