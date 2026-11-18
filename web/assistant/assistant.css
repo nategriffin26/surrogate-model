@@ -1,14 +1,16 @@
 /* The assistant's panel, in the tool's light theme (web/app/theme.css). */
 
-.assistant { display: grid; grid-template-rows: 44px minmax(0, 1fr) auto; height: 100%; min-width: 0; }
+/* Every column below is minmax(0, 1fr): a grid's implicit column grows to its widest content, and one wide table
+   would make the whole message wider than the panel. What cannot fit scrolls or wraps inside its own box. */
+.assistant { display: grid; grid-template-rows: 44px minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); height: 100%; min-width: 0; }
 .assistant-head { display: flex; align-items: center; gap: 2px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--hair); }
 .assistant-title { margin: 0 auto 0 0; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
 
 .assistant-log { overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px 24px; scroll-padding-bottom: 24px; }
-.exchange { display: grid; gap: 10px; animation: rise 0.22s var(--ease); }
+.exchange { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; animation: rise 0.22s var(--ease); }
 .exchange + .exchange { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hair); }
 .question { margin: 0; color: var(--heading); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
-.reply { display: grid; gap: 8px; min-width: 0; }
+.reply { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .reply-note { margin: 0; color: var(--faint); font-size: 12.5px; }
 .reply-error { margin: 0; color: var(--rose); font-size: 13px; }
 .pending { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 12.5px; }
@@ -24,8 +26,12 @@
 .answer .md-code { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; padding: 8px 10px; border-radius: 6px; background: #f6f9fb; overflow-x: auto; }
 .md-table, .output-table-scroll { overflow-x: auto; }
 .md-table table, .output-table table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.md-table th, .output-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 5px 10px 5px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-.md-table td, .output-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); color: var(--heading); white-space: nowrap; }
+.md-table th, .output-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 5px 10px 5px 0; border-bottom: 1px solid var(--rule); }
+.md-table td, .output-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); color: var(--heading); }
+/* A reply's table wraps its text at spaces to fit the panel and keeps numbers whole; a data table from code keeps
+   each row on one line and scrolls. */
+.md-table table { overflow-wrap: normal; }
+.md-table td.num, .output-table :is(th, td) { white-space: nowrap; }
 :is(.md-table, .output-table) :is(td, th):last-child { padding-right: 0; }
 :is(.md-table, .output-table) td.num { text-align: right; }
 
@@ -52,7 +58,7 @@
 .step-body pre { margin: 0; max-height: 280px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #f6f9fb; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-body .step-error { color: var(--rose); }
 .step-body .stderr { color: var(--orange); }
-.step-outputs { display: grid; gap: 8px; }
+.step-outputs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .step-outputs:not(:empty) { margin-top: 6px; }
 
 /* What the code showed: figures and tables, in the conversation. */
