@@ -41,12 +41,8 @@ def case_evaluation_summary(
     """The field metrics of one car's area-weighted cell sample, and its pressure drag and lift from the
     CFD and from the prediction."""
     field = surface_field_metrics(cp_true, cp_pred)
-    sample_true_forces = compute_pressure_forces(
-        cp_true, normals, None, total_area=total_area, ref_area=frontal_area
-    )
-    pred_forces = compute_pressure_forces(
-        cp_pred, normals, None, total_area=total_area, ref_area=frontal_area
-    )
+    sample_true_forces = compute_pressure_forces(cp_true, normals, None, total_area=total_area, ref_area=frontal_area)
+    pred_forces = compute_pressure_forces(cp_pred, normals, None, total_area=total_area, ref_area=frontal_area)
     cd_err = pred_forces["cd_p"] - sample_true_forces["cd_p"]
     return {
         **field,

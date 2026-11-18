@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
 import pytest
 import pyvista as pv
-from test_web_engine import _synthetic_car
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
 
@@ -37,11 +36,13 @@ def _cell_arrays(path: Path) -> dict[str, np.ndarray]:
     return {cells.GetArrayName(i): vtk_to_numpy(cells.GetArray(i)) for i in range(cells.GetNumberOfArrays())}
 
 
-def test_predict_writes_the_prediction_on_the_files_own_cells(tmp_path: Path, checkpoint: Path) -> None:
+def test_predict_writes_the_prediction_on_the_files_own_cells(
+    tmp_path: Path, checkpoint: Path, synthetic_car: Callable[[], pv.PolyData]
+) -> None:
     """Catches a written file whose arrays sit on other cells than the file's own (a reordered or
     re-meshed surface), arrays under other names or types than the browser's export, and the file's own
     arrays dropped: the same car with its cells shuffled must get the same values, shuffled the same way."""
-    car = _synthetic_car()
+    car = synthetic_car()
     order = np.random.default_rng(7).permutation(car.n_cells)
     faces = np.concatenate([[len(ids), *ids] for ids in (car.get_cell(i).point_ids for i in order)])
     shuffled = pv.PolyData(np.asarray(car.points), faces)
@@ -65,11 +66,11 @@ def test_predict_writes_the_prediction_on_the_files_own_cells(tmp_path: Path, ch
 
 
 def test_predict_compares_with_cfd_only_when_the_file_carries_it(
-    tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str], synthetic_car: Callable[[], pv.PolyData]
 ) -> None:
     """Catches a summary that reports agreement with CFD for a file without `CpMeanTrim`, or omits it for
     one with, and a JSON summary that cannot be written (NumPy values json cannot encode)."""
-    car = _synthetic_car()
+    car = synthetic_car()
     car.save(tmp_path / "with_cfd.vtp")
     car.clear_data()
     car.save(tmp_path / "geometry_only.vtp")
@@ -90,10 +91,10 @@ def test_predict_compares_with_cfd_only_when_the_file_carries_it(
 
 
 def test_predict_refuses_an_output_that_is_not_a_vtp(
-    tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str], synthetic_car: Callable[[], pv.PolyData]
 ) -> None:
     """Catches `--output car.vtk` written silently in another format than the browser's export."""
-    _synthetic_car().save(tmp_path / "car.vtp")
+    synthetic_car().save(tmp_path / "car.vtp")
     with pytest.raises(SystemExit) as stopped:
         cli.main(["predict", str(tmp_path / "car.vtp"), "--output", str(tmp_path / "car.vtk")])
     assert stopped.value.code == 1

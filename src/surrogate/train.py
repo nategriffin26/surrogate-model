@@ -267,8 +267,7 @@ def _run_pointnet_global_ablation(
             for r in tr_runs + te_runs
         }
         car_y = {
-            r: torch.as_tensor((arrays_by_run[r]["cp"] - ym) / ys, dtype=torch.float32, device=device)
-            for r in tr_runs
+            r: torch.as_tensor((arrays_by_run[r]["cp"] - ym) / ys, dtype=torch.float32, device=device) for r in tr_runs
         }
 
         net = PointNetGlobalMLP(in_dim=x_cat.shape[1], global_dim=POINTNET_DIM).to(device)

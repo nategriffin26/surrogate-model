@@ -2,12 +2,58 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
+import pyvista as pv
 import torch
+from vtkmodules.vtkFiltersCore import vtkAppendPolyData
 
 from surrogate.features import FEATURE_COLUMNS
 from surrogate.model import FoldModel, PerCellMLP, SurrogateEnsemble
+
+
+def _synthetic_car() -> pv.PolyData:
+    """A car-sized closed body of quads with a tapered, cambered roof, a triangulated wheel, and a
+    pentagon and a hexagon fin; wound inward as DrivAerML's files are, with CFD pressure and a
+    solver field the engine must ignore."""
+    body = pv.Box(bounds=(-0.75, 3.9, -0.95, 0.95, -0.3, 1.2), level=12, quads=True)
+    points = np.asarray(body.points, dtype=np.float64)
+    along = (points[:, 0] + 0.75) / 4.65
+    points[:, 2] = (
+        -0.3 + (points[:, 2] + 0.3) * (1.0 - 0.3 * along**2) + 0.08 * np.sin(np.pi * along) * (points[:, 2] > 0.5)
+    )
+    points[:, 1] *= 1.0 - 0.12 * np.sin(np.pi * along)
+    body.points = points
+    wheel = pv.Sphere(radius=0.3, center=(0.6, 0.8, 0.0), theta_resolution=16, phi_resolution=10)
+    angles = np.linspace(0.0, 2.0 * np.pi, 6)[:-1]
+    pentagon = pv.PolyData(
+        np.column_stack([3.4 + 0.2 * np.cos(angles), np.full(5, 0.3), 1.0 + 0.2 * np.sin(angles)]),
+        faces=[5, 0, 1, 2, 3, 4],
+    )
+    angles = np.linspace(0.0, 2.0 * np.pi, 7)[:-1]
+    hexagon = pv.PolyData(
+        np.column_stack([3.4 + 0.2 * np.cos(angles), np.full(6, -0.3), 1.0 + 0.2 * np.sin(angles)]),
+        faces=[6, 0, 1, 2, 3, 4, 5],
+    )
+
+    append = vtkAppendPolyData()
+    for part in (body, wheel, pentagon, hexagon):
+        append.AddInputData(part)
+    append.Update()
+    car = pv.wrap(append.GetOutput()).flip_faces()
+    car.points = np.asarray(car.points, dtype=np.float32)
+    centers = np.asarray(car.cell_centers().points)
+    car.cell_data["CpMeanTrim"] = (np.sin(3.0 * centers[:, 0]) * np.cos(2.0 * centers[:, 2])).astype(np.float32)
+    car.cell_data["pMeanTrim"] = np.full(car.n_cells, np.nan, dtype=np.float32)
+    return car
+
+
+@pytest.fixture(scope="session")
+def synthetic_car() -> Callable[[], pv.PolyData]:
+    """The builder of the small synthetic car; each call gives a fresh surface a test may change."""
+    return _synthetic_car
 
 
 @pytest.fixture

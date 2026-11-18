@@ -497,7 +497,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = command("fetch", "download DrivAerML surface files into data/raw")
     sub.add_argument(
-        "runs", nargs="?", choices=RUN_SETS, default="all",
+        "runs",
+        nargs="?",
+        choices=RUN_SETS,
+        default="all",
         help="all twelve (default, 7.8 GB), the ten training cars (6.5 GB) or the two holdout cars (1.3 GB); "
         "files already here are skipped and an interrupted download continues",
     )

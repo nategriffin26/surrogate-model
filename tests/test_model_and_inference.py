@@ -72,9 +72,7 @@ def test_moving_a_car_off_the_training_cars_ground_height_leaves_its_coverage_un
     assert (moved["status"], moved["reasons"]) == (unmoved["status"], unmoved["reasons"])
 
 
-def test_uniform_pressure_on_a_closed_body_gives_zero_drag(
-    tmp_path: Path, dummy_ensemble: SurrogateEnsemble
-) -> None:
+def test_uniform_pressure_on_a_closed_body_gives_zero_drag(tmp_path: Path, dummy_ensemble: SurrogateEnsemble) -> None:
     """Catches drag estimated from a sample of cells: uniform pressure on a closed surface has no
     net force, which only the sum over every cell reproduces (120,000 random cells give 0.002 here)."""
     for fold in dummy_ensemble.folds:

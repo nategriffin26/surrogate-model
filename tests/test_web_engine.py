@@ -14,6 +14,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -51,42 +52,31 @@ requires_runtime = pytest.mark.skipif(RUNTIME is None, reason="needs Bun or Deno
 DENO = shutil.which("deno")
 
 
-def _synthetic_car() -> pv.PolyData:
-    """A car-sized closed body of quads with a tapered, cambered roof, a triangulated wheel, and a
-    pentagon and a hexagon fin; wound inward as DrivAerML's files are, with CFD pressure and a
-    solver field the engine must ignore."""
-    body = pv.Box(bounds=(-0.75, 3.9, -0.95, 0.95, -0.3, 1.2), level=12, quads=True)
-    points = np.asarray(body.points, dtype=np.float64)
-    along = (points[:, 0] + 0.75) / 4.65
-    points[:, 2] = -0.3 + (points[:, 2] + 0.3) * (1.0 - 0.3 * along**2) + 0.08 * np.sin(np.pi * along) * (points[:, 2] > 0.5)
-    points[:, 1] *= 1.0 - 0.12 * np.sin(np.pi * along)
-    body.points = points
-    wheel = pv.Sphere(radius=0.3, center=(0.6, 0.8, 0.0), theta_resolution=16, phi_resolution=10)
-    angles = np.linspace(0.0, 2.0 * np.pi, 6)[:-1]
-    pentagon = pv.PolyData(np.column_stack([3.4 + 0.2 * np.cos(angles), np.full(5, 0.3), 1.0 + 0.2 * np.sin(angles)]), faces=[5, 0, 1, 2, 3, 4])
-    angles = np.linspace(0.0, 2.0 * np.pi, 7)[:-1]
-    hexagon = pv.PolyData(np.column_stack([3.4 + 0.2 * np.cos(angles), np.full(6, -0.3), 1.0 + 0.2 * np.sin(angles)]), faces=[6, 0, 1, 2, 3, 4, 5])
-
-    append = vtkAppendPolyData()
-    for part in (body, wheel, pentagon, hexagon):
-        append.AddInputData(part)
-    append.Update()
-    car = pv.wrap(append.GetOutput()).flip_faces()
-    car.points = np.asarray(car.points, dtype=np.float32)
-    centers = np.asarray(car.cell_centers().points)
-    car.cell_data["CpMeanTrim"] = (np.sin(3.0 * centers[:, 0]) * np.cos(2.0 * centers[:, 2])).astype(np.float32)
-    car.cell_data["pMeanTrim"] = np.full(car.n_cells, np.nan, dtype=np.float32)
-    return car
-
-
-def _write_vtp(surface: pv.PolyData, path: Path, *, mode: str = "binary", encode: bool = True, compressor: str | None = None,
-               header: str = "UInt64", big_endian: bool = False, pieces: int = 1) -> Path:
+def _write_vtp(
+    surface: pv.PolyData,
+    path: Path,
+    *,
+    mode: str = "binary",
+    encode: bool = True,
+    compressor: str | None = None,
+    header: str = "UInt64",
+    big_endian: bool = False,
+    pieces: int = 1,
+) -> Path:
     writer = vtkXMLPolyDataWriter()
     writer.SetFileName(str(path))
     writer.SetInputData(surface)
-    {"binary": writer.SetDataModeToBinary, "appended": writer.SetDataModeToAppended, "ascii": writer.SetDataModeToAscii}[mode]()
+    {
+        "binary": writer.SetDataModeToBinary,
+        "appended": writer.SetDataModeToAppended,
+        "ascii": writer.SetDataModeToAscii,
+    }[mode]()
     writer.SetEncodeAppendedData(encode)
-    {None: writer.SetCompressorTypeToNone, "zlib": writer.SetCompressorTypeToZLib, "lz4": writer.SetCompressorTypeToLZ4}[compressor]()
+    {
+        None: writer.SetCompressorTypeToNone,
+        "zlib": writer.SetCompressorTypeToZLib,
+        "lz4": writer.SetCompressorTypeToLZ4,
+    }[compressor]()
     {"UInt32": writer.SetHeaderTypeToUInt32, "UInt64": writer.SetHeaderTypeToUInt64}[header]()
     if big_endian:
         writer.SetByteOrderToBigEndian()
@@ -110,8 +100,8 @@ def _array(out_dir: Path, name: str) -> np.ndarray:
 
 
 @pytest.fixture(scope="module")
-def car() -> pv.PolyData:
-    return _synthetic_car()
+def car(synthetic_car: Callable[[], pv.PolyData]) -> pv.PolyData:
+    return synthetic_car()
 
 
 @pytest.fixture(scope="module")
@@ -123,7 +113,11 @@ def model_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 # Every way VTK writes the binary data the reader accepts: inline base64, appended raw and appended
 # base64, each plain and zlib-compressed, with UInt32 and UInt64 headers; and ASCII.
-LAYOUTS = {"inline": {"mode": "binary"}, "appended-raw": {"mode": "appended", "encode": False}, "appended-base64": {"mode": "appended"}}
+LAYOUTS = {
+    "inline": {"mode": "binary"},
+    "appended-raw": {"mode": "appended", "encode": False},
+    "appended-base64": {"mode": "appended"},
+}
 ENCODINGS = {
     **{
         f"{layout}-{compression}-{header.lower()}": {**settings, "compressor": compressor, "header": header}
@@ -138,7 +132,9 @@ ENCODINGS = {
 @requires_runtime
 @pytest.mark.parametrize("triangles_only", [False, True], ids=["mixed-polygons", "triangles-only"])
 @pytest.mark.parametrize("encoding", ENCODINGS, ids=list(ENCODINGS))
-def test_reader_gives_vtk_surface_for_every_encoding(car: pv.PolyData, tmp_path: Path, encoding: str, triangles_only: bool) -> None:
+def test_reader_gives_vtk_surface_for_every_encoding(
+    car: pv.PolyData, tmp_path: Path, encoding: str, triangles_only: bool
+) -> None:
     """Catches a reader that mis-decodes one of the ways VTK and ParaView write a .vtp."""
     surface = car.triangulate() if triangles_only else car
     path = _write_vtp(surface, tmp_path / "car.vtp", **ENCODINGS[encoding])
@@ -151,7 +147,9 @@ def test_reader_gives_vtk_surface_for_every_encoding(car: pv.PolyData, tmp_path:
     expected = reader.GetOutput()
     polys = expected.GetPolys()
     out = tmp_path / "out"
-    np.testing.assert_array_equal(_array(out, "points.f32"), vtk_to_numpy(expected.GetPoints().GetData()).astype(np.float32).ravel())
+    np.testing.assert_array_equal(
+        _array(out, "points.f32"), vtk_to_numpy(expected.GetPoints().GetData()).astype(np.float32).ravel()
+    )
     np.testing.assert_array_equal(_array(out, "connectivity.u32"), vtk_to_numpy(polys.GetConnectivityArray()))
     np.testing.assert_array_equal(_array(out, "offsets.u32"), vtk_to_numpy(polys.GetOffsetsArray()))
     np.testing.assert_array_equal(_array(out, "cfd.f32"), vtk_to_numpy(expected.GetCellData().GetArray("CpMeanTrim")))
@@ -243,16 +241,22 @@ def test_engine_geometry_features_and_networks_match_python(car: pv.PolyData, mo
     features = extract_query_features(SurfaceContext.from_surface(surface), surface.centers, surface.normals)
     browser_features = _array(out, "features.f32").reshape(features.shape)
     worst = np.abs(browser_features - features).max(axis=0)
-    assert worst.max() < 1e-4, f"feature columns {np.flatnonzero(worst >= 1e-4).tolist()} differ by up to {worst.max():.3g}"
+    assert worst.max() < 1e-4, (
+        f"feature columns {np.flatnonzero(worst >= 1e-4).tolist()} differ by up to {worst.max():.3g}"
+    )
 
     ensemble = SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu"))
     expected = ensemble.predict_features(features)
-    np.testing.assert_allclose(_array(out, "models.f32").reshape(expected.cp_per_fold.shape), expected.cp_per_fold, atol=1e-4)
+    np.testing.assert_allclose(
+        _array(out, "models.f32").reshape(expected.cp_per_fold.shape), expected.cp_per_fold, atol=1e-4
+    )
     np.testing.assert_allclose(_array(out, "sigma.f32"), expected.cp_std, atol=1e-4)
     # An example keeps the reads `explain` makes at its vertices of a scale with more kept nodes than
     # vertices, in float32, and every other lookup exactly: explain on an example sees the analysis's
     # inputs to within float32 rounding of those reads.
-    np.testing.assert_allclose(_array(out, "features_from_example.f32"), _array(out, "features.f32"), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(
+        _array(out, "features_from_example.f32"), _array(out, "features.f32"), rtol=1e-6, atol=1e-6
+    )
 
     # `explain` gives the same Cp to the bit, and each network's layers as PyTorch computes them.
     browser_models = _array(out, "models.f32").reshape(expected.cp_per_fold.shape)
@@ -335,7 +339,9 @@ def test_drag_and_totals_follow_their_definitions(car: pv.PolyData, tmp_path: Pa
     _assert_totals(outcome["exact"], surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
 
 
-def _assert_polygon(polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMesh, cp: np.ndarray, sigma: np.ndarray) -> None:
+def _assert_polygon(
+    polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMesh, cp: np.ndarray, sigma: np.ndarray
+) -> None:
     assert polygon["index"] == c
     np.testing.assert_array_equal(np.reshape(polygon["corners"], (-1, 3)), mesh.get_cell(c).points.astype(np.float32))
     np.testing.assert_allclose(polygon["center"], surface.centers[c], atol=1e-6)
@@ -355,7 +361,10 @@ def test_polygon_at_gives_the_polygon_under_a_pick(car: pv.PolyData, tmp_path: P
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
     mesh, surface = pv.read(path), read_vtp_surface(path)
     for probe in probes:
-        assert probe["explained"] == {"index": probe["target"], "cfd": float(mesh.cell_data["CpMeanTrim"][probe["target"]])}
+        assert probe["explained"] == {
+            "index": probe["target"],
+            "cfd": float(mesh.cell_data["CpMeanTrim"][probe["target"]]),
+        }
         for polygon in (probe["early"], probe["late"]):
             _assert_polygon(polygon, probe["target"], mesh, surface, reference.cp_mean, reference.cp_std)
 
@@ -390,12 +399,25 @@ def test_file_and_working_cells_follow_their_definitions(car: pv.PolyData, tmp_p
 
     # The working mesh's triangles as VTK measures them, each with the mean Cp of its corners.
     triangles = _array(out, "working_indices.u32").reshape(-1, 3).astype(np.int64)
-    working = pv.PolyData(_array(out, "working_positions.f32").reshape(-1, 3), np.column_stack([np.full(len(triangles), 3), triangles]).ravel())
-    np.testing.assert_allclose(_array(out, "working_areas.f64"), working.compute_cell_sizes(length=False, volume=False).cell_data["Area"], rtol=1e-5)
-    np.testing.assert_allclose(_array(out, "working_centers.f32").reshape(-1, 3), working.cell_centers().points, atol=1e-6)
-    normals = working.compute_normals(cell_normals=True, point_normals=False, consistent_normals=False, auto_orient_normals=False).cell_data["Normals"]
+    working = pv.PolyData(
+        _array(out, "working_positions.f32").reshape(-1, 3),
+        np.column_stack([np.full(len(triangles), 3), triangles]).ravel(),
+    )
+    np.testing.assert_allclose(
+        _array(out, "working_areas.f64"),
+        working.compute_cell_sizes(length=False, volume=False).cell_data["Area"],
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        _array(out, "working_centers.f32").reshape(-1, 3), working.cell_centers().points, atol=1e-6
+    )
+    normals = working.compute_normals(
+        cell_normals=True, point_normals=False, consistent_normals=False, auto_orient_normals=False
+    ).cell_data["Normals"]
     np.testing.assert_allclose(_array(out, "working_normals.f32").reshape(-1, 3), normals, atol=1e-5)
-    np.testing.assert_allclose(_array(out, "working_cp.f32"), _array(out, "working_vertex_cp.f32")[triangles].mean(axis=1), atol=1e-6)
+    np.testing.assert_allclose(
+        _array(out, "working_cp.f32"), _array(out, "working_vertex_cp.f32")[triangles].mean(axis=1), atol=1e-6
+    )
 
 
 @requires_runtime
@@ -450,7 +472,9 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     other.points = np.asarray(car.center + 1.02 * (car.points - car.center), dtype=np.float32)
     surfaces = ((car, "car.vtp"), (remeshed, "remeshed.vtp"), (bare, "bare.vtp"), (other, "other.vtp"))
     files = [_write_vtp(surface, tmp_path / name) for surface, name in surfaces]
-    outcome = _run_engine("reference", _write_vtp(case, tmp_path / "case.vtp"), tmp_path / "out", ",".join(map(str, files)))
+    outcome = _run_engine(
+        "reference", _write_vtp(case, tmp_path / "case.vtp"), tmp_path / "out", ",".join(map(str, files))
+    )
     out, cfd = tmp_path / "out", np.asarray(car.cell_data["CpMeanTrim"])
 
     alone = outcome["alone"]
@@ -578,12 +602,16 @@ def test_written_vtp_reads_back_in_vtk_with_the_same_cells_and_arrays(car: pv.Po
     assert written.cell_data["centers"].dtype == np.float64
     np.testing.assert_allclose(written.cell_data["centers"], read_vtp_surface(path).centers, atol=1e-6)
     assert written.cell_data["corners"].dtype == np.uint8
-    np.testing.assert_array_equal(written.cell_data["corners"], np.diff(vtk_to_numpy(original.GetPolys().GetOffsetsArray())))
+    np.testing.assert_array_equal(
+        written.cell_data["corners"], np.diff(vtk_to_numpy(original.GetPolys().GetOffsetsArray()))
+    )
     np.testing.assert_array_equal(written.point_data["height"], original.points[:, 2])
 
 
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
-def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str) -> None:
+def test_features_follow_the_model_files_definition(
+    car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str
+) -> None:
     """Catches browser features that assume the shipped definition: with two surface scales and two
     stations besides the point's own (43 columns) they must still match Python's column for column,
     from lookups built on the CPU and on the GPU; and slice reads that are not Python's to the bit,
@@ -598,14 +626,20 @@ def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: 
     monkeypatch.setattr(feature_module, "SURFACE_SCALES", (0.05, 0.25))
     monkeypatch.setattr(feature_module, "SURFACE_STEPS", (0.025, 0.25 / 3.0))
     monkeypatch.setattr(feature_module, "SLICE_DX", (-0.4, 0.4))
-    monkeypatch.setattr(feature_module, "FEATURE_COLUMNS", FeatureColumns(local=slice(0, 7), surface=slice(7, 31), slices=slice(31, 43)))
+    monkeypatch.setattr(
+        feature_module, "FEATURE_COLUMNS", FeatureColumns(local=slice(0, 7), surface=slice(7, 31), slices=slice(31, 43))
+    )
     definition = tmp_path / "definition.json"
     definition.write_text(json.dumps(feature_definition()))
     path = _write_vtp(car, tmp_path / "car.vtp")
     out = tmp_path / "out"
     out.mkdir()
-    runtime, mode = (RUNTIME, "features") if device == "cpu" else ([DENO, "run", "--allow-read", "--allow-write"], "features-gpu")
-    subprocess.run([*runtime, str(RUNNER), mode, str(path), str(out), str(definition)], check=True, cwd=REPO, timeout=300)
+    runtime, mode = (
+        (RUNTIME, "features") if device == "cpu" else ([DENO, "run", "--allow-read", "--allow-write"], "features-gpu")
+    )
+    subprocess.run(
+        [*runtime, str(RUNNER), mode, str(path), str(out), str(definition)], check=True, cwd=REPO, timeout=300
+    )
     outcome = json.loads((out / "outcome.json").read_text())
     if device == "gpu" and not outcome["gpu"]:
         pytest.skip("Deno offers no WebGPU adapter on this machine")
@@ -617,10 +651,15 @@ def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: 
     # Relative to each column's size: on this coarse car a surface column reaches 37, and the GPU's
     # float32 grid coordinates leave about 5e-6 of it.
     worst = np.abs(browser - expected).max(axis=0) / np.maximum(np.abs(expected).max(axis=0), 1.0)
-    assert worst.max() < 2e-5, f"feature columns {np.flatnonzero(worst >= 2e-5).tolist()} differ by up to {worst.max():.3g} of their size"
+    assert worst.max() < 2e-5, (
+        f"feature columns {np.flatnonzero(worst >= 2e-5).tolist()} differ by up to {worst.max():.3g} of their size"
+    )
     slices = feature_module.FEATURE_COLUMNS.slices
     differing = np.flatnonzero((browser[:, slices] != expected[:, slices]).any(axis=1))
-    assert differing.size == 0, f"{differing.size} of {len(browser)} cells read other slice values than Python, the first {differing[:5].tolist()}"
+    assert differing.size == 0, (
+        f"{differing.size} of {len(browser)} cells read other slice values than Python, "
+        f"the first {differing[:5].tolist()}"
+    )
 
 
 GRID_SHAPES = [(12, 10, 8), (15, 6, 10)]
@@ -647,7 +686,13 @@ def _grid_case(nodes: tuple[int, int, int], directory: Path) -> dict[str, np.nda
     x, y = np.arange(nodes[0])[:, None, None], np.arange(nodes[1])[None, :, None]
     field = (np.sin(0.3 * x) * np.cos(0.2 * y) + 0.1 * rng.standard_normal(nodes)).astype(np.float32)
     directory.mkdir()
-    spec = {"origin": origin.tolist(), "step": step, "nodes": list(nodes), "sigmaNodes": sigma, "sumsBlock": int(np.prod(nodes)) // 3 + 7}
+    spec = {
+        "origin": origin.tolist(),
+        "step": step,
+        "nodes": list(nodes),
+        "sigmaNodes": sigma,
+        "sumsBlock": int(np.prod(nodes)) // 3 + 7,
+    }
     (directory / "spec.json").write_text(json.dumps(spec))
     for name, array in {"points": points, "weights": weights, "field": field}.items():
         array.astype("<f4").tofile(directory / f"{name}.f32")
@@ -666,7 +711,12 @@ def _grid_case(nodes: tuple[int, int, int], directory: Path) -> dict[str, np.nda
 
 
 def _grid_errors(expected: dict[str, np.ndarray], out_dir: Path, device: str) -> dict[str, float]:
-    return {name: float(np.abs(_array(out_dir, f"{name}.f32") - expected[name].ravel()).max() / np.abs(expected[name]).max()) for name in GRID_TOLERANCES[device]}
+    return {
+        name: float(
+            np.abs(_array(out_dir, f"{name}.f32") - expected[name].ravel()).max() / np.abs(expected[name]).max()
+        )
+        for name in GRID_TOLERANCES[device]
+    }
 
 
 @requires_runtime
@@ -677,7 +727,9 @@ def test_grid_operations_on_the_cpu_match_numpy(nodes: tuple[int, int, int], tmp
     expected = _grid_case(nodes, tmp_path / "inputs")
     out = tmp_path / "out"
     out.mkdir()
-    subprocess.run([*RUNTIME, str(RUNNER), "grid-cpu", str(tmp_path / "inputs"), str(out)], check=True, cwd=REPO, timeout=300)
+    subprocess.run(
+        [*RUNTIME, str(RUNNER), "grid-cpu", str(tmp_path / "inputs"), str(out)], check=True, cwd=REPO, timeout=300
+    )
     errors = _grid_errors(expected, out, "cpu")
     assert all(errors[name] <= limit for name, limit in GRID_TOLERANCES["cpu"].items()), errors
 
@@ -691,7 +743,12 @@ def test_grid_operations_on_the_gpu_match_numpy(nodes: tuple[int, int, int], tmp
     expected = _grid_case(nodes, tmp_path / "inputs")
     out = tmp_path / "out"
     out.mkdir()
-    subprocess.run([DENO, "run", "--allow-read", "--allow-write", str(RUNNER), "grid-gpu", str(tmp_path / "inputs"), str(out)], check=True, cwd=REPO, timeout=300)
+    subprocess.run(
+        [DENO, "run", "--allow-read", "--allow-write", str(RUNNER), "grid-gpu", str(tmp_path / "inputs"), str(out)],
+        check=True,
+        cwd=REPO,
+        timeout=300,
+    )
     outcome = json.loads((out / "outcome.json").read_text())
     if not outcome["gpu"]:
         pytest.skip("Deno offers no WebGPU adapter on this machine")
@@ -723,5 +780,9 @@ def test_bundled_examples_match_the_model_and_fit_the_host() -> None:
         stale = f"web/examples/{example.stem} was computed with another model: run `uv run surrogate examples`"
         assert summary["model"] == weights_sha256, stale
         assert summary["lookups"]["definition"] == feature_definition(), stale
-    oversized = [str(path.relative_to(REPO)) for path in (REPO / "web").rglob("*") if path.is_file() and path.stat().st_size > 25_000_000]
+    oversized = [
+        str(path.relative_to(REPO))
+        for path in (REPO / "web").rglob("*")
+        if path.is_file() and path.stat().st_size > 25_000_000
+    ]
     assert not oversized, f"over 25 MB: {oversized}"

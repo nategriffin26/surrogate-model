@@ -101,8 +101,8 @@ class FoldModel:
     fold_index: int
     train_runs: tuple[int, ...]
     val_runs: tuple[int, ...]
-    x_mean: np.ndarray     # (F,) float32
-    x_std: np.ndarray      # (F,) float32
+    x_mean: np.ndarray  # (F,) float32
+    x_std: np.ndarray  # (F,) float32
     y_mean: float
     y_std: float
     model: PerCellMLP
@@ -112,8 +112,8 @@ class FoldModel:
 class EnsemblePrediction:
     """The ensemble's mean Cp, its spread σ(Cp), and each network's Cp."""
 
-    cp_mean: np.ndarray      # (M,) float32
-    cp_std: np.ndarray       # (M,) float32, the networks' standard deviation times the ensemble's spread_scale
+    cp_mean: np.ndarray  # (M,) float32
+    cp_std: np.ndarray  # (M,) float32, the networks' standard deviation times the ensemble's spread_scale
     cp_per_fold: np.ndarray  # (K, M) float32
 
 
@@ -225,9 +225,7 @@ class SurrogateEnsemble:
             compute_pressure_forces(cp, normals, areas, total_area=total_area, ref_area=frontal_area)
             for cp in prediction.cp_per_fold
         ]
-        mean = compute_pressure_forces(
-            prediction.cp_mean, normals, areas, total_area=total_area, ref_area=frontal_area
-        )
+        mean = compute_pressure_forces(prediction.cp_mean, normals, areas, total_area=total_area, ref_area=frontal_area)
         return {
             "cd_p": mean["cd_p"],
             "cd_p_per_fold": [f["cd_p"] for f in per_fold],

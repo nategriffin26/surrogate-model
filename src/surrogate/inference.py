@@ -31,8 +31,8 @@ class InferenceResult:
     frontal_area: float
     bounds: tuple[float, float, float, float, float, float]
     dimensions: tuple[float, float, float]
-    cp_mean: np.ndarray             # (N,) float32, in the file's cell order
-    cp_std: np.ndarray              # (N,) float32, the spread σ(Cp) (see SurrogateEnsemble)
+    cp_mean: np.ndarray  # (N,) float32, in the file's cell order
+    cp_std: np.ndarray  # (N,) float32, the spread σ(Cp) (see SurrogateEnsemble)
     forces: dict[str, Any]
     ground_truth_forces: dict[str, float] | None
     ground_truth_metrics: dict[str, Any] | None

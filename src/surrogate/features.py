@@ -99,8 +99,8 @@ class SurfaceSamples:
     """The points every lookup is filled from, each carrying a share of the surface's area."""
 
     positions: np.ndarray  # (S, 3) float32
-    areas: np.ndarray      # (S,) float64 m^2
-    normals: np.ndarray    # (S, 3) float32, the outward normal of the polygon the sample is on
+    areas: np.ndarray  # (S,) float64 m^2
+    normals: np.ndarray  # (S, 3) float32, the outward normal of the polygon the sample is on
 
 
 def _squared_length(vectors: np.ndarray) -> np.ndarray:
@@ -155,11 +155,13 @@ def surface_samples(surface: SurfaceMesh) -> SurfaceSamples:
     e2 = pk - p0
     longest = np.maximum(np.maximum(_squared_length(e1), _squared_length(e2)), _squared_length(pk - pj))
     cuts = np.ceil(np.sqrt(longest) / half).astype(np.int64)
-    cross = np.column_stack([
-        e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1],
-        e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2],
-        e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0],
-    ])
+    cross = np.column_stack(
+        [
+            e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1],
+            e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2],
+            e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0],
+        ]
+    )
     area = 0.5 * np.sqrt(_squared_length(cross))
 
     positions = [surface.centers[~wide]]
@@ -217,7 +219,7 @@ class SurfaceScale:
 
     scale: float
     grid: Grid
-    kept: np.ndarray   # (K,) int32 flat numbers of the nodes a read at a cell touches, ascending
+    kept: np.ndarray  # (K,) int32 flat numbers of the nodes a read at a cell touches, ascending
     whole: np.ndarray  # (K, 4) float32 at those nodes: area, then area times each normal component
     ahead: np.ndarray  # (K, 4) float32: the same with the Gaussian cut to its upstream half
     flat_panel: float  # blurred area read on a flat panel, on average over where it falls between nodes
@@ -290,12 +292,12 @@ class SurfaceContext:
 
     bounds: tuple[float, float, float, float, float, float]
     y_center: float
-    nx: int                    # raster bins along x
-    y_out: np.ndarray          # (2, nx, nh) how far the body reaches from the centre plane at (x, height),
-                               # within HEIGHT_WINDOW of the height: [0] toward -y, [1] toward +y
-    z_top: np.ndarray          # (nx, ny) the highest sample over each (x, y) column, the ground where it holds no body
-    z_bot: np.ndarray          # (nx, ny) the lowest, the ground where the column holds no body
-    slice_area: np.ndarray     # (nx,) the area of the car's slice across x, S(x) in m^2
+    nx: int  # raster bins along x
+    y_out: np.ndarray  # (2, nx, nh) how far the body reaches from the centre plane at (x, height),
+    # within HEIGHT_WINDOW of the height: [0] toward -y, [1] toward +y
+    z_top: np.ndarray  # (nx, ny) the highest sample over each (x, y) column, the ground where it holds no body
+    z_bot: np.ndarray  # (nx, ny) the lowest, the ground where the column holds no body
+    slice_area: np.ndarray  # (nx,) the area of the car's slice across x, S(x) in m^2
     surface_scales: tuple[SurfaceScale, ...]
 
     @classmethod

@@ -24,17 +24,17 @@ class SurfaceMesh:
     depends only on the points and polygons.
     """
 
-    points: np.ndarray        # (N_pts, 3) float32
+    points: np.ndarray  # (N_pts, 3) float32
     polygon_offsets: np.ndarray  # (N_cells + 1,) int64: polygon i's corners are corners[offsets[i]:offsets[i + 1]]
     polygon_corners: np.ndarray  # (N_corners,) int32 point numbers, in each polygon's order
-    centers: np.ndarray       # (N_cells, 3) float32
-    normals: np.ndarray       # (N_cells, 3) float32, guaranteed outward-pointing
-    areas: np.ndarray         # (N_cells,) float64, polygon areas in m^2
+    centers: np.ndarray  # (N_cells, 3) float32
+    normals: np.ndarray  # (N_cells, 3) float32, guaranteed outward-pointing
+    areas: np.ndarray  # (N_cells,) float64, polygon areas in m^2
     bounds: tuple[float, float, float, float, float, float]  # xmin, xmax, ymin, ymax, zmin, zmax
-    frontal_area: float       # projected YZ silhouette area in m^2
-    enclosed_volume: float    # |1/3 sum (c . n) dA| in m^3
-    normals_flipped: bool     # True when raw VTP normals pointed inward
-    cp: np.ndarray | None     # (N_cells,) float32 or None
+    frontal_area: float  # projected YZ silhouette area in m^2
+    enclosed_volume: float  # |1/3 sum (c . n) dA| in m^3
+    normals_flipped: bool  # True when raw VTP normals pointed inward
+    cp: np.ndarray | None  # (N_cells,) float32 or None
 
     @property
     def n_cells(self) -> int:

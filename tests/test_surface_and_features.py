@@ -211,6 +211,7 @@ def test_moving_the_whole_car_changes_none_of_its_inputs(tmp_path: Path) -> None
     binned from a fixed x and z moved the prediction of a car moved whole by 0.03 in Cp, which no flow
     does. A tilted body with a block on its roof, moved by a few millimetres in x, y and z, must give
     the same inputs at every cell, up to the float32 rounding of its moved coordinates."""
+
     def car(offset: tuple[float, float, float]) -> SurfaceMesh:
         body = pv.Box(bounds=(-0.3, 3.3, -0.9, 0.9, 0.0, 0.6)).triangulate().subdivide(5)
         block = pv.Box(bounds=(1.2, 1.4, 0.3, 0.6, 0.6, 0.8)).triangulate().subdivide(3)
@@ -232,6 +233,7 @@ def test_lifting_the_body_against_the_lookups_grids_hardly_moves_its_inputs(tmp_
     that stays put ahead of and below it, and so holds the car's nose and ground and with them every
     grid, as a car's wheels hold its ground when its ride height changes; the inputs of cells on its
     sloping top, which crosses the grids at every phase, must hardly change."""
+
     def car(lift: float) -> SurfaceMesh:
         body = pv.Box(bounds=(-0.3, 3.3, -0.9, 0.9, 0.0, 0.6)).triangulate().subdivide(6)
         body = body.rotate_y(15, point=(1.5, 0.0, 0.3)).translate((lift, 0.0, lift))
