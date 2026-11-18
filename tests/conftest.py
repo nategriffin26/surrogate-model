@@ -36,11 +36,11 @@ def dummy_ensemble() -> SurrogateEnsemble:
             "width": {"min": 1.84, "max": 2.18, "mean": 2.02},
             "height": {"min": 1.29, "max": 1.53, "mean": 1.42},
             "z_min": {"min": -0.32, "max": -0.31, "mean": -0.318},
-            "max_section_area": {"min": 2.0, "max": 3.0, "mean": 2.5},
+            "max_slice_area": {"min": 2.0, "max": 3.0, "mean": 2.5},
             "plan_volume_proxy": {"min": 6.5, "max": 9.5, "mean": 8.0},
         },
-        "section_area_min": [0.0] * 300,
-        "section_area_max": [3.5] * 300,
+        "slice_area_min": [0.0] * 300,
+        "slice_area_max": [3.5] * 300,
         "cv_mean_cp_std": 0.05,
     }
     return SurrogateEnsemble(

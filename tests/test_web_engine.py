@@ -11,7 +11,6 @@ runs them; without either runtime these tests skip. The WebGPU passes run under 
 from __future__ import annotations
 
 import hashlib
-import itertools
 import json
 import shutil
 import subprocess
@@ -250,8 +249,10 @@ def test_engine_geometry_features_and_networks_match_python(car: pv.PolyData, mo
     expected = ensemble.predict_features(features)
     np.testing.assert_allclose(_array(out, "models.f32").reshape(expected.cp_per_fold.shape), expected.cp_per_fold, atol=1e-4)
     np.testing.assert_allclose(_array(out, "sigma.f32"), expected.cp_std, atol=1e-4)
-    # An example pack keeps the lookups exactly, so `explain` on an example sees the same inputs.
-    np.testing.assert_array_equal(_array(out, "features_from_example.f32"), _array(out, "features.f32"))
+    # An example keeps the reads `explain` makes at its vertices of a scale with more kept nodes than
+    # vertices, in float32, and every other lookup exactly: explain on an example sees the analysis's
+    # inputs to within float32 rounding of those reads.
+    np.testing.assert_allclose(_array(out, "features_from_example.f32"), _array(out, "features.f32"), rtol=1e-6, atol=1e-6)
 
     # `explain` gives the same Cp to the bit, and each network's layers as PyTorch computes them.
     browser_models = _array(out, "models.f32").reshape(expected.cp_per_fold.shape)
@@ -619,16 +620,19 @@ def test_written_vtp_reads_back_in_vtk_with_the_same_cells_and_arrays(car: pv.Po
 def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str) -> None:
     """Catches browser features that assume the shipped definition: with two surface scales and two
     stations besides the point's own (43 columns) they must still match Python's column for column,
-    from lookups built on the CPU and on the GPU; and section reads that are not Python's to the bit,
-    from a point binned into a neighbouring cell of the raster or an area summed in another order."""
+    from lookups built on the CPU and on the GPU; and slice reads that are not Python's to the bit,
+    from a sample binned into a neighbouring bin, a reach taken over another height window, a read
+    between other bin centres or an area summed in another order. The reads are the same float64
+    sums as Python's, so they agree exactly. Every polygon of this car is wider than half a raster
+    step, so every lookup is filled from the pieces they are cut into."""
     if device == "cpu" and RUNTIME is None:
         pytest.skip("needs Bun or Deno to run the browser engine's modules")
     if device == "gpu" and DENO is None:
         pytest.skip("needs Deno, whose WebGPU runs the GPU passes")
     monkeypatch.setattr(feature_module, "SURFACE_SCALES", (0.05, 0.25))
     monkeypatch.setattr(feature_module, "SURFACE_STEPS", (0.025, 0.25 / 3.0))
-    monkeypatch.setattr(feature_module, "SECTION_DX", (-0.4, 0.4))
-    monkeypatch.setattr(feature_module, "FEATURE_COLUMNS", FeatureColumns(local=slice(0, 7), surface=slice(7, 31), sections=slice(31, 43)))
+    monkeypatch.setattr(feature_module, "SLICE_DX", (-0.4, 0.4))
+    monkeypatch.setattr(feature_module, "FEATURE_COLUMNS", FeatureColumns(local=slice(0, 7), surface=slice(7, 31), slices=slice(31, 43)))
     definition = tmp_path / "definition.json"
     definition.write_text(json.dumps(feature_definition()))
     path = _write_vtp(car, tmp_path / "car.vtp")
@@ -648,9 +652,9 @@ def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: 
     # float32 grid coordinates leave about 5e-6 of it.
     worst = np.abs(browser - expected).max(axis=0) / np.maximum(np.abs(expected).max(axis=0), 1.0)
     assert worst.max() < 2e-5, f"feature columns {np.flatnonzero(worst >= 2e-5).tolist()} differ by up to {worst.max():.3g} of their size"
-    sections = feature_module.FEATURE_COLUMNS.sections
-    differing = np.flatnonzero((browser[:, sections] != expected[:, sections]).any(axis=1))
-    assert differing.size == 0, f"{differing.size} of {len(browser)} cells read other section values than Python, the first {differing[:5].tolist()}"
+    slices = feature_module.FEATURE_COLUMNS.slices
+    differing = np.flatnonzero((browser[:, slices] != expected[:, slices]).any(axis=1))
+    assert differing.size == 0, f"{differing.size} of {len(browser)} cells read other slice values than Python, the first {differing[:5].tolist()}"
 
 
 GRID_SHAPES = [(12, 10, 8), (15, 6, 10)]
@@ -664,9 +668,10 @@ GRID_TOLERANCES = {
 
 def _grid_case(nodes: tuple[int, int, int], directory: Path) -> dict[str, np.ndarray]:
     """Synthetic inputs for the grid operations, written to `directory` as the runner reads them, and
-    what NumPy and SciPy give for each operation as features.py defines it: points across the grid
-    and a little beyond it (so the edge clamps are used) with random weights, and a smooth field with
-    noise for the 1.2-node Gaussian of the surface scales."""
+    what features.py, NumPy and SciPy give for each operation: points across the grid and a little
+    beyond it (so the nearest node's clamp at the edges is used) with random weights, and a smooth
+    field with noise for the 1.2-node Gaussian of the surface scales. The GPU spreads in three blocks
+    of nodes, the last shorter, as it spreads a car's finest grid."""
     rng = np.random.default_rng(sum(nodes))
     step, sigma = 0.02, 1.2
     origin = np.array([-1.3, -0.7, -0.4])
@@ -676,17 +681,12 @@ def _grid_case(nodes: tuple[int, int, int], directory: Path) -> dict[str, np.nda
     x, y = np.arange(nodes[0])[:, None, None], np.arange(nodes[1])[None, :, None]
     field = (np.sin(0.3 * x) * np.cos(0.2 * y) + 0.1 * rng.standard_normal(nodes)).astype(np.float32)
     directory.mkdir()
-    spec = {"origin": origin.tolist(), "step": step, "nodes": list(nodes), "sigmaNodes": sigma}
+    spec = {"origin": origin.tolist(), "step": step, "nodes": list(nodes), "sigmaNodes": sigma, "sumsBlock": int(np.prod(nodes)) // 3 + 7}
     (directory / "spec.json").write_text(json.dumps(spec))
     for name, array in {"points": points, "weights": weights, "field": field}.items():
         array.astype("<f4").tofile(directory / f"{name}.f32")
 
-    q = (points.astype(np.float64) - origin) / step
-    base = np.clip(np.floor(q).astype(np.int64), 0, size - 2)
-    across = np.clip(q - base, 0.0, 1.0)
-    spread = np.zeros(nodes)
-    for corner in itertools.product((0, 1), repeat=3):
-        np.add.at(spread, tuple((base + corner).T), weights * np.prod(np.where(corner, across, 1.0 - across), axis=1))
+    spread = feature_module.Grid(origin, step, nodes).spread(points, weights.astype(np.float64))
 
     radius = int(3.0 * sigma + 0.5)
     k = np.arange(-radius, radius + 1)
@@ -719,8 +719,9 @@ def test_grid_operations_on_the_cpu_match_numpy(nodes: tuple[int, int, int], tmp
 @pytest.mark.skipif(DENO is None, reason="needs Deno, whose WebGPU runs the GPU passes")
 @pytest.mark.parametrize("nodes", GRID_SHAPES)
 def test_grid_operations_on_the_gpu_match_numpy(nodes: tuple[int, int, int], tmp_path: Path) -> None:
-    """Catches the WebGPU passes (`grid-gpu.js`) departing from NumPy: as the CPU test, and a carry
-    lost between the words of the spread's fixed-point sums."""
+    """Catches the WebGPU passes (`grid-gpu.js`) departing from NumPy: as the CPU test, a carry lost
+    between the words of the spread's fixed-point sums, and a node lost or doubled where one block of
+    sums ends and the next begins."""
     expected = _grid_case(nodes, tmp_path / "inputs")
     out = tmp_path / "out"
     out.mkdir()

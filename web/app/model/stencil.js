@@ -1,7 +1,7 @@
 // The marks of `measures.js` for one group of inputs, drawn on the page's car in the group's colour. Everything is
 // depth-tested against the car: what lies on the surface or in front of it is drawn in full, what the car hides is
 // drawn faintly, so the eye can tell which is which. Nearby surface is a crisp ring on the surface at each size, with
-// each size's mean normal as an arrow; a section's read is a dot where it ends, with a faint hairline from its station
+// each size's mean normal as an arrow; a slice's read is a dot where it ends, with a faint hairline from its station
 // on the point's fore-aft line. The point is a handle the reader drags.
 
 import * as THREE from 'three';
@@ -15,8 +15,8 @@ import { SurfaceCutter } from './cuts.js';
 const NORMAL_LENGTH = 0.2;
 /** Dots are drawn this far towards the camera, in metres, so those on the surface are not lost in it. */
 const DOT_LIFT = 0.012;
-/** Dot diameters in CSS pixels: the handle, a reading, a section's read, and a read of the station shown. */
-const DOT = { handle: 21, reading: 6, section: 8, shown: 11 };
+/** Dot diameters in CSS pixels: the handle, a reading, a slice's read, and a read of the station shown. */
+const DOT = { handle: 21, reading: 6, slice: 8, shown: 11 };
 /**
  * While the rings of nearby surface are drawn, the handle is a small ink dot, so the smallest ring (3 cm, about 7 px
  * across at the page's close view on a phone) is seen around it.
@@ -152,8 +152,8 @@ export class Stencil {
 		const over = (linewidth, opacity) => new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, depthTest: false, linewidth, opacity });
 		this.lines.hair = [over(1, 0.55)];
 		this.lines.shown = [over(2.4, 0.95)];
-		// The shown station's cross-section, fainter where the car hides it.
-		this.lines.section = [
+		// The shown station's slice, fainter where the car hides it.
+		this.lines.slice = [
 			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.6, opacity: 0.85 }),
 			new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, linewidth: 1.2, opacity: 0.22, depthFunc: THREE.GreaterDepth }),
 		];
@@ -197,7 +197,7 @@ export class Stencil {
 	 * @param {{ position: number[], normal: number[] }} point
 	 * @param {import('./measures.js').Mark[]} marks
 	 * @param {string} hex  the group's colour
-	 * @param {number | null} shown  the station of the sections, or the size of nearby surface, drawn as the one shown
+	 * @param {number | null} shown  the station of the slices, or the size of nearby surface, drawn as the one shown
 	 */
 	draw(point, marks, hex, shown) {
 		const group = new THREE.Group();
@@ -216,7 +216,7 @@ export class Stencil {
 		for (const mark of marks) {
 			const isShown = mark.station === shown;
 			if (mark.type === 'reading') {
-				const size = mark.layer !== 'section' ? DOT.reading : isShown ? DOT.shown : DOT.section;
+				const size = mark.layer !== 'slice' ? DOT.reading : isShown ? DOT.shown : DOT.slice;
 				dots.push({ at: mark.at, size, style: mark.hollow ? 1 : 0, color });
 			} else if (mark.type === 'guide') {
 				addLine('minor', mark.from, mark.to, color);
@@ -227,10 +227,10 @@ export class Stencil {
 				addLine('hair', mark.from, mark.to, ink);
 			}
 		}
-		// The shown station's cross-section, the slice its area is read from.
+		// The shown station's slice, the one its area is read from.
 		if (marks.some((m) => m.type === 'stations') && shown !== null) {
 			const { positions } = this.car.cutter.cut(0, point.position[0] + shown);
-			for (let i = 0; i < positions.length; i += 6) addLine('section', positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6), color);
+			for (let i = 0; i < positions.length; i += 6) addLine('slice', positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6), color);
 		}
 		// Nearby surface: a ring at each size's radius, the shown size's strong and the others' faint; under the shown
 		// size, its mean normal as an arrow from the point, and across it the line between the part ahead and the part

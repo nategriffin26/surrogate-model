@@ -5,6 +5,7 @@
 import { h } from '../dom.js';
 import { count } from '../format.js';
 import { bars, chips, countWord, section } from './charts.js';
+import { copied } from './copy.js';
 import { groupsGiven } from './groups.js';
 import { locator } from './overview.js';
 import { trainingCar } from './training.js';
@@ -24,32 +25,31 @@ export function createPointwise({ card, groups, training }) {
 	const same = summary && card.comparison.find((row) => row.learner === 'mlp' && row.inputs.join() === summary.inputs.join());
 	const shipped = card.comparison.find((row) => row.learner === 'ensemble');
 	const rows = [
-		summary && { label: 'A point and a learned summary of the whole car', row: summary },
-		same && { label: 'A point alone', row: same },
-		{ label: 'A point and the shape around it', row: shipped, strong: true },
+		summary && { label: 'point.chart.summary', row: summary },
+		same && { label: 'point.chart.alone', row: same },
+		{ label: 'point.chart.shape', row: shipped, strong: true },
 	].filter(Boolean);
 	const chart = h('figure', { class: 'figure' },
-		h('figcaption', {}, 'Cross-validated accuracy, R²'),
+		copied(h('figcaption'), 'point.chart.caption'),
 		bars(rows.map(({ label, row, strong }) => ({
-			label,
+			label: [label],
 			chips: chips(groups, groupsGiven(groups, row)),
 			value: row.crossValidationR2,
 			text: row.crossValidationR2.toFixed(2),
 			strong,
-		})), 1));
+		})), 1, 'point.chart.inputs'));
 
-	const el = section('point', 'Learn one point at a time, not one car at a time',
-		`${countWord(cars)} cars are ${countWord(cars).toLowerCase()} examples to a model that reads a whole car, and ${count(examples)} to one that reads a point and the shape around it.`,
+	const el = section('point', { cars: count(cars), carsWord: countWord(cars), examples: count(examples) },
 		h('div', { class: 'figure-pair' },
 			h('figure', { class: 'figure' },
-				h('figcaption', {}, 'A car per example'),
+				copied(h('figcaption'), 'point.cars.caption'),
 				wholeCars,
 				h('p', { class: 'big-number num' }, count(cars))),
 			h('figure', { class: 'figure' },
-				h('figcaption', {}, 'A cell per example'),
+				copied(h('figcaption'), 'point.cells.caption'),
 				cells,
 				h('p', { class: 'big-number num' }, count(examples)),
-				h('p', { class: 'small-number num' }, `${count(card.samplesPerCar)} cells from each of ${count(cars)} cars`))),
+				copied(h('p', { class: 'small-number num' }), 'point.cells.note', { cells: count(card.samplesPerCar), cars: count(cars) }))),
 		chart);
 	el.prepend(locator('point'));
 

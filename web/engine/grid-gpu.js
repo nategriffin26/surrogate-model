@@ -15,8 +15,8 @@ const THREADS = 256;
 const ROW_GROUPS = 65535;
 
 /**
- * The grid's origin and step, node counts and the points a pass spreads, with the cube of nodes each
- * point falls in: a point beyond the grid takes the nearest cube at its edge, as `features.py` spreads.
+ * The grid's origin and step, node counts and the points a pass spreads, with the node nearest each
+ * point and the quadratic B-spline weights around it, as `grid.js` `splineAround` takes them.
  */
 const POINTS_ON_GRID = /* wgsl */ `
 struct Grid {
@@ -33,11 +33,12 @@ fn positionOf(point: u32) -> vec3f {
   return vec3f(positions[3u * point], positions[3u * point + 1u], positions[3u * point + 2u]);
 }
 
-// The cube's first node and the point's place across it, per axis.
-fn cubeOf(point: u32) -> array<vec3f, 2> {
-  let q = clamp((positionOf(point) - grid.origin) / grid.step, vec3f(0.0), vec3f(grid.nodes - 1u));
-  let base = min(floor(q), vec3f(grid.nodes - 2u));
-  return array<vec3f, 2>(base, q - base);
+// The nearest node, an exact half step rounding up and never an outer node, and the point's offset
+// from it, per axis.
+fn nearestOf(point: u32) -> array<vec3f, 2> {
+  let q = (positionOf(point) - grid.origin) / grid.step;
+  let nearest = clamp(floor(q + 0.5), vec3f(1.0), vec3f(grid.nodes - 2u));
+  return array<vec3f, 2>(nearest, q - nearest);
 }
 
 fn pointIndex(group: vec3u, thread: u32) -> u32 {
@@ -48,11 +49,18 @@ fn pointIndex(group: vec3u, thread: u32) -> u32 {
 const SPREAD = /* wgsl */ `${POINTS_ON_GRID}
 @group(0) @binding(2) var<storage, read> weights: array<f32>;
 @group(0) @binding(3) var<storage, read_write> sums: array<atomic<u32>>;
+// The nodes these sums hold: the first, and how many.
+@group(0) @binding(4) var<uniform> block: vec2u;
 
 const FIXED = 1099511627776.0;
 
-// value × 2^40 as a two's-complement 64-bit integer, low word then high, added with a carry.
+// value × 2^40 as a two's-complement 64-bit integer, low word then high, added with a carry; nothing
+// for a node outside the block (below it, node − first wraps past the block's length).
 fn add(node: u32, value: f32) {
+  let slot = node - block.x;
+  if (slot >= block.y) {
+    return;
+  }
   let scaled = abs(value) * FIXED;
   let high = floor(scaled / 4294967296.0);
   var low = u32(scaled - high * 4294967296.0);
@@ -61,8 +69,8 @@ fn add(node: u32, value: f32) {
     low = ~low + 1u;
     top = ~top + select(0u, 1u, low == 0u);
   }
-  let before = atomicAdd(&sums[2u * node], low);
-  atomicAdd(&sums[2u * node + 1u], top + select(0u, 1u, before + low < before));
+  let before = atomicAdd(&sums[2u * slot], low);
+  atomicAdd(&sums[2u * slot + 1u], top + select(0u, 1u, before + low < before));
 }
 
 @compute @workgroup_size(${THREADS})
@@ -71,35 +79,39 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
   if (point >= grid.count) {
     return;
   }
-  let cube = cubeOf(point);
-  let at = vec3u(cube[0]);
-  let f = cube[1];
+  let nearest = nearestOf(point);
+  let at = vec3u(nearest[0]) - vec3u(1u);
+  let t = nearest[1];
+  // Weights of the nodes before, at and after the nearest one, per axis; a var, as indexing a let
+  // array at run time is not allowed by every WebGPU implementation.
+  var spline = array<vec3f, 3>(0.5 * (0.5 - t) * (0.5 - t), 0.75 - t * t, 0.5 * (0.5 + t) * (0.5 + t));
   let weight = weights[point];
-  for (var dx = 0u; dx < 2u; dx++) {
-    let wx = weight * select(1.0 - f.x, f.x, dx == 1u);
-    for (var dy = 0u; dy < 2u; dy++) {
-      let wxy = wx * select(1.0 - f.y, f.y, dy == 1u);
+  for (var dx = 0u; dx < 3u; dx++) {
+    for (var dy = 0u; dy < 3u; dy++) {
+      let wxy = spline[dx].x * spline[dy].y;
       let row = ((at.x + dx) * grid.nodes.y + at.y + dy) * grid.nodes.z + at.z;
-      add(row, wxy * (1.0 - f.z));
-      add(row + 1u, wxy * f.z);
+      for (var dz = 0u; dz < 3u; dz++) {
+        add(row + dz, weight * (wxy * spline[dz].z));
+      }
     }
   }
 }
 `;
 
 const FIXED_TO_FLOAT = /* wgsl */ `
-@group(0) @binding(0) var<uniform> count: u32;
+// The nodes the sums hold: the first, and how many.
+@group(0) @binding(0) var<uniform> block: vec2u;
 @group(0) @binding(1) var<storage, read> sums: array<vec2u>;
 @group(0) @binding(2) var<storage, read_write> field: array<f32>;
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let node = (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
-  if (node >= count) {
+  let slot = (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
+  if (slot >= block.y) {
     return;
   }
-  var low = sums[node].x;
-  var top = sums[node].y;
+  var low = sums[slot].x;
+  var top = sums[slot].y;
   let negative = top >= 0x80000000u;
   // The magnitude first, so a small negative sum does not cancel between its two words.
   if (negative) {
@@ -107,13 +119,13 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
     top = ~top + select(0u, 1u, low == 0u);
   }
   let magnitude = (f32(top) * 4294967296.0 + f32(low)) / 1099511627776.0;
-  field[node] = select(magnitude, -magnitude, negative);
+  field[block.x + slot] = select(magnitude, -magnitude, negative);
 }
 `;
 
 /**
- * The nodes around every point within `reach` of a given one: each node of every cube that the box
- * of half-side `reach` about the point overlaps, set in a bitset of the grid's nodes.
+ * The nodes a read anywhere within `reach` of a point touches: the 27 around the node nearest each
+ * place in the box of half-side `reach` about the point, set in a bitset of the grid's nodes.
  */
 const MARK = /* wgsl */ `${POINTS_ON_GRID}
 @group(0) @binding(2) var<storage, read_write> bits: array<atomic<u32>>;
@@ -127,11 +139,11 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
   }
   let q = (positionOf(point) - grid.origin) / grid.step;
   let last = vec3f(grid.nodes - 2u);
-  let low = vec3u(clamp(floor(q - reach / grid.step), vec3f(0.0), last));
-  let high = vec3u(clamp(floor(q + reach / grid.step), vec3f(0.0), last));
-  for (var i = low.x; i <= high.x + 1u; i++) {
-    for (var j = low.y; j <= high.y + 1u; j++) {
-      for (var k = low.z; k <= high.z + 1u; k++) {
+  let low = vec3u(clamp(floor(q - reach / grid.step + 0.5), vec3f(1.0), last)) - vec3u(1u);
+  let high = vec3u(clamp(floor(q + reach / grid.step + 0.5), vec3f(1.0), last)) + vec3u(1u);
+  for (var i = low.x; i <= high.x; i++) {
+    for (var j = low.y; j <= high.y; j++) {
+      for (var k = low.z; k <= high.z; k++) {
         let node = (i * grid.nodes.y + j) * grid.nodes.z + k;
         atomicOr(&bits[node / 32u], 1u << (node % 32u));
       }
@@ -252,27 +264,29 @@ export function createGridOperations(device) {
     device,
 
     /**
-     * Each point's weight shared among the eight nodes around it, added to the fixed-point `sums`
-     * (8 bytes a node), which the caller clears before the first spread into them.
+     * Each point's weight shared among the 27 nodes around it, added to the fixed-point `sums` of
+     * the nodes [first, first + length) (8 bytes a node; cleared by the caller before the first
+     * spread into them). What a point gives the grid's other nodes is left out, so a grid whose sums
+     * are larger than one buffer binding may hold is spread one block of nodes at a time.
      * @param {GPUCommandEncoder} encoder
      * @param {GridOnGpu} grid
-     * @param {{ positions: GPUBuffer, weights: GPUBuffer, count: number, sums: GPUBuffer }} buffers
+     * @param {{ positions: GPUBuffer, weights: GPUBuffer, count: number, sums: GPUBuffer, first: number, length: number }} buffers
      */
-    spread(encoder, grid, { positions, weights, count, sums }) {
-      dispatch(encoder, SPREAD, [gridUniform(grid, count), positions, weights, sums], groupsFor(count));
+    spread(encoder, grid, { positions, weights, count, sums, first, length }) {
+      dispatch(encoder, SPREAD, [gridUniform(grid, count), positions, weights, sums, uniform(new Uint32Array([first, length]))], groupsFor(count));
     },
 
     /**
-     * The fixed-point sums of `count` nodes as a float32 field.
+     * The fixed-point sums of the nodes [first, first + length) into those nodes of a float32 field.
      * @param {GPUCommandEncoder} encoder
-     * @param {{ sums: GPUBuffer, field: GPUBuffer, count: number }} buffers
+     * @param {{ sums: GPUBuffer, field: GPUBuffer, first: number, length: number }} buffers
      */
-    sumsToField(encoder, { sums, field, count }) {
-      dispatch(encoder, FIXED_TO_FLOAT, [uniform(new Uint32Array([count])), sums, field], groupsFor(count));
+    sumsToField(encoder, { sums, field, first, length }) {
+      dispatch(encoder, FIXED_TO_FLOAT, [uniform(new Uint32Array([first, length])), sums, field], groupsFor(length));
     },
 
     /**
-     * The nodes around every point within `reach` (metres) of each of `count` points, set in `bits`
+     * The nodes a read within `reach` (metres) of each of `count` points touches, set in `bits`
      * (one bit a node, 32 to a word; cleared by the caller).
      * @param {GPUCommandEncoder} encoder
      * @param {GridOnGpu} grid

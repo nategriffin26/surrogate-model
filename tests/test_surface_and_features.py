@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -9,8 +10,12 @@ import pytest
 import pyvista as pv
 
 from surrogate import features
-from surrogate.features import FEATURE_COLUMNS, SECTION_DX, SurfaceContext, extract_query_features
+from surrogate.features import FEATURE_COLUMNS, SLICE_DX, SurfaceContext, extract_query_features, surface_samples
+from surrogate.model import SurrogateEnsemble
 from surrogate.surface import SurfaceMesh, compute_pressure_forces, read_vtp_surface, sample_cells_by_area
+
+REPO = Path(__file__).resolve().parents[1]
+RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"
 
 
 def _make_closed_box_vtp(
@@ -125,9 +130,9 @@ def _cell_near(surface: SurfaceMesh, point: tuple[float, float, float], facing: 
     return int(on_face[np.argmin(np.linalg.norm(surface.centers[on_face] - np.array(point), axis=1))])
 
 
-def _section_read(read: str, dx: float) -> int:
+def _slice_read(read: str, dx: float) -> int:
     """The column of one of a slice's four reads, for the slice `dx` from the cell's station."""
-    return FEATURE_COLUMNS.sections.start + 4 * (1 + SECTION_DX.index(dx)) + ("area", "outboard", "above", "below").index(read)
+    return FEATURE_COLUMNS.slices.start + 4 * (1 + SLICE_DX.index(dx)) + ("area", "outboard", "above", "below").index(read)
 
 
 def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path: Path) -> None:
@@ -145,17 +150,16 @@ def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path:
     behind = _cell_near(surface, (1.5, 0.9, 0.87), (0.0, 1.0, 0.0))
     mirrored = _cell_near(surface, (1.5, -0.9, 0.87), (0.0, -1.0, 0.0))
     f = extract_query_features(ctx, surface.centers[[behind, mirrored]], surface.normals[[behind, mirrored]])
-    assert f[0, _section_read("outboard", -0.2)] == pytest.approx(0.25, abs=0.02)
-    assert f[1, _section_read("outboard", -0.2)] < 0.02
+    assert f[0, _slice_read("outboard", -0.2)] == pytest.approx(0.25, abs=0.02)
+    assert f[1, _slice_read("outboard", -0.2)] < 0.02
 
 
 def test_a_roof_block_on_one_side_shows_in_the_slices_through_it(tmp_path: Path) -> None:
     """Catches a slice's reach above or below read from the wrong spanwise column (the other side,
     or the centre plane) or from the body's underside, and its area summed along the wrong axis or
     unscaled: a 20 cm block on the roof's +y half must stand 20 cm above the roof cells 20 cm behind
-    it on that half and not on the -y half, and add its 0.3 x 0.2 m to the area of its slice. The
-    raster is filled from cell centres, so the box is meshed finer than its 2 cm step."""
-    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(8)
+    it on that half and not on the -y half, and add its 0.3 x 0.2 m to the area of its slice."""
+    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate().subdivide(6)
     block = pv.Box(bounds=(1.2, 1.4, 0.3, 0.6, 1.1, 1.3)).triangulate().subdivide(5)
     body.merge(block).save(tmp_path / "roof_block.vtp")
     surface = read_vtp_surface(tmp_path / "roof_block.vtp")
@@ -164,12 +168,107 @@ def test_a_roof_block_on_one_side_shows_in_the_slices_through_it(tmp_path: Path)
     behind = _cell_near(surface, (1.5, 0.45, 1.1), (0.0, 0.0, 1.0))
     mirrored = _cell_near(surface, (1.5, -0.45, 1.1), (0.0, 0.0, 1.0))
     f = extract_query_features(ctx, surface.centers[[behind, mirrored]], surface.normals[[behind, mirrored]])
-    assert f[0, _section_read("above", -0.2)] == pytest.approx(0.2, abs=0.01)
-    assert abs(f[1, _section_read("above", -0.2)]) < 0.01
-    assert f[1, _section_read("below", -0.2)] == pytest.approx(1.4, abs=0.01)  # the body down to its floor
-    own_slice = f[0, FEATURE_COLUMNS.sections.start]
+    assert f[0, _slice_read("above", -0.2)] == pytest.approx(0.2, abs=0.01)
+    assert abs(f[1, _slice_read("above", -0.2)]) < 0.01
+    assert f[1, _slice_read("below", -0.2)] == pytest.approx(1.4, abs=0.01)  # the body down to its floor
+    own_slice = f[0, FEATURE_COLUMNS.slices.start]
     assert own_slice == pytest.approx(1.8 * 1.4, abs=0.05)
-    assert f[0, _section_read("area", -0.2)] - own_slice == pytest.approx(0.3 * 0.2, abs=0.01)
+    assert f[0, _slice_read("area", -0.2)] - own_slice == pytest.approx(0.3 * 0.2, abs=0.01)
+
+
+def test_a_coarse_mesh_fills_the_slices_as_a_fine_one_does(tmp_path: Path) -> None:
+    """Catches lookups filled at polygon centres alone: a box meshed with triangles up to 60 cm long
+    leaves most of the 2 cm raster empty, and its slices then have gaps in them. Meshed coarsely and
+    finely, the box must fill the rasters alike, and its samples must carry its whole area. The side
+    view holds the reach within 1 cm of each height, so where the box's edge lies just at a window's
+    edge the two meshes' samples, a few millimetres apart, can fall either side of it."""
+    box = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate()
+    box.subdivide(3).save(tmp_path / "coarse.vtp")
+    box.subdivide(7).save(tmp_path / "fine.vtp")
+    coarse, fine = read_vtp_surface(tmp_path / "coarse.vtp"), read_vtp_surface(tmp_path / "fine.vtp")
+    assert surface_samples(coarse).areas.sum() == pytest.approx(coarse.total_area, rel=1e-9)
+
+    from_coarse, from_fine = SurfaceContext.from_surface(coarse), SurfaceContext.from_surface(fine)
+    np.testing.assert_allclose(from_coarse.slice_area, from_fine.slice_area, atol=0.03)
+    for raster in ("z_top", "z_bot"):
+        np.testing.assert_allclose(getattr(from_coarse, raster), getattr(from_fine, raster), atol=0.02)
+    assert np.mean(np.abs(from_coarse.y_out - from_fine.y_out) > 0.02) < 1e-4
+
+
+def test_moving_the_whole_car_changes_none_of_its_inputs(tmp_path: Path) -> None:
+    """Catches lookups placed in the file's coordinates rather than the car's own frame: slice rasters
+    binned from a fixed x and z moved the prediction of a car moved whole by 0.03 in Cp, which no flow
+    does. A tilted body with a block on its roof, moved by a few millimetres in x, y and z, must give
+    the same inputs at every cell, up to the float32 rounding of its moved coordinates."""
+    def car(offset: tuple[float, float, float]) -> SurfaceMesh:
+        body = pv.Box(bounds=(-0.3, 3.3, -0.9, 0.9, 0.0, 0.6)).triangulate().subdivide(5)
+        block = pv.Box(bounds=(1.2, 1.4, 0.3, 0.6, 0.6, 0.8)).triangulate().subdivide(3)
+        moved = body.merge(block).rotate_y(15, point=(1.5, 0.0, 0.3)).translate(offset)
+        moved.save(tmp_path / f"car_{offset[0]}.vtp")
+        return read_vtp_surface(tmp_path / f"car_{offset[0]}.vtp")
+
+    before, after = car((0.0, 0.0, 0.0)), car((0.0137, 0.0043, 0.0071))
+    f_before = extract_query_features(SurfaceContext.from_surface(before), before.centers, before.normals)
+    f_after = extract_query_features(SurfaceContext.from_surface(after), after.centers, after.normals)
+    np.testing.assert_allclose(f_after, f_before, atol=1e-4)
+
+
+def test_lifting_the_body_against_the_lookups_grids_hardly_moves_its_inputs(tmp_path: Path) -> None:
+    """Catches lookups that step with where the surface falls between their nodes and bins, which drew
+    contour rings on the difference map of a raised car: the surface spread and read trilinearly,
+    whose amount at 3 cm swings by a third between nodes, and slices read from the nearest bin or
+    from fixed height bands. A body tilted 15 degrees is lifted 7 mm and moved 7 mm back past a stand
+    that stays put ahead of and below it, and so holds the car's nose and ground and with them every
+    grid, as a car's wheels hold its ground when its ride height changes; the inputs of cells on its
+    sloping top, which crosses the grids at every phase, must hardly change."""
+    def car(lift: float) -> SurfaceMesh:
+        body = pv.Box(bounds=(-0.3, 3.3, -0.9, 0.9, 0.0, 0.6)).triangulate().subdivide(6)
+        body = body.rotate_y(15, point=(1.5, 0.0, 0.3)).translate((lift, 0.0, lift))
+        stand = pv.Box(bounds=(-0.6, -0.5, -0.2, 0.2, -0.52, -0.5)).triangulate()
+        body.merge(stand).save(tmp_path / f"car_{lift}.vtp")
+        return read_vtp_surface(tmp_path / f"car_{lift}.vtp")
+
+    before, after = car(0.0), car(0.007)
+    assert before.bounds[0] == after.bounds[0] and before.bounds[4] == after.bounds[4]
+    top = np.flatnonzero((before.normals[:, 2] > 0.95) & (np.abs(before.centers[:, 1]) < 0.6) & (before.centers[:, 0] > 0.2) & (before.centers[:, 0] < 1.5))
+    f_before = extract_query_features(SurfaceContext.from_surface(before), before.centers[top], before.normals[top])
+    f_after = extract_query_features(SurfaceContext.from_surface(after), after.centers[top], after.normals[top])
+    change = np.abs(f_after - f_before)
+
+    per_scale = sum(width for _, width in features.SURFACE_READS)
+    amount = FEATURE_COLUMNS.surface.start + 3
+    assert change[:, amount].max() < 0.08  # 3 cm
+    assert change[:, amount + per_scale].max() < 0.02  # 10 cm
+    own_slice = change[:, FEATURE_COLUMNS.slices.start : FEATURE_COLUMNS.slices.start + 4].max(axis=0)
+    assert own_slice[0] < 0.01  # area, m^2
+    assert own_slice[1:].max() < 0.003  # outboard, above and below, m
+
+
+@pytest.mark.skipif(not RUN_1.is_file(), reason="needs run 1's surface: uv run surrogate fetch holdout")
+def test_a_variant_moved_against_the_lookups_changes_the_prediction_by_less_than_the_stated_bound() -> None:
+    """Catches lookups that step with where a variant's body falls against their grids, which draws
+    contour rings on a variant's difference map; the README states this bound. Run 1's body is moved
+    7 mm up, as by a ride-height change whose wheels hold the ground, and 7 mm along the car, as by a
+    stretch, while every lookup stays where the unmoved car put it. The shipped networks' prediction at
+    20,000 cells drawn by area, from the moved surface and slices inputs, must change by p99 under 0.02
+    and 0.035 in Cp."""
+    surface = read_vtp_surface(RUN_1, include_target=False)
+    ensemble = SurrogateEnsemble.load(REPO / "artifacts/ensemble.pt")
+    cells = sample_cells_by_area(surface.areas, 20_000, seed=0)
+    centers, normals = surface.centers[cells], surface.normals[cells]
+    inputs = extract_query_features(SurfaceContext.from_surface(surface), centers, normals)
+    before = ensemble.predict_features(inputs).cp_mean
+
+    looked_up = slice(FEATURE_COLUMNS.surface.start, FEATURE_COLUMNS.slices.stop)
+    for axis, bound in ((2, 0.02), (0, 0.035)):
+        offset = np.zeros(3, dtype=np.float32)
+        offset[axis] = 0.007
+        # The bounds are kept, and with them the nose, ground and grids of the unmoved car
+        moved = dataclasses.replace(surface, points=surface.points + offset, centers=surface.centers + offset)
+        moved_inputs = inputs.copy()
+        moved_inputs[:, looked_up] = extract_query_features(SurfaceContext.from_surface(moved), centers + offset, normals)[:, looked_up]
+        change = np.abs(ensemble.predict_features(moved_inputs).cp_mean - before)
+        assert np.percentile(change, 99) < bound, f"axis {'xyz'[axis]}"
 
 
 def test_area_weighted_sampling_matches_physical_surface_share() -> None:

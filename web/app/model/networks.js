@@ -4,6 +4,7 @@
 import { h } from '../dom.js';
 import { count, signed } from '../format.js';
 import { bars, chips, countWord, section, shade } from './charts.js';
+import { copied, text } from './copy.js';
 import { groupOf, groupsGiven, learnerName } from './groups.js';
 import { locator } from './overview.js';
 
@@ -80,7 +81,6 @@ function drawNetwork(canvas, { card, groups, layers, cp }) {
 	g.fillStyle = '#58727f';
 	g.textBaseline = 'alphabetic';
 	layers.forEach((values, l) => g.fillText(String(values.length), xs[l] + STRIP / 2, HEIGHT - 6));
-	g.fillText('Cp', node[0], HEIGHT - 6);
 	g.textBaseline = 'top';
 	for (let l = 0; l < xs.length - 1; l++) g.fillText(card.activation, (xs[l + 1] + xs[l] + STRIP) / 2, 2);
 }
@@ -89,7 +89,7 @@ function drawNetwork(canvas, { card, groups, layers, cp }) {
  * @param {{ card: import('../../engine/result.js').ModelCard, groups: import('./groups.js').InputGroup[] }} options
  */
 export function createNetworks({ card, groups }) {
-	const canvas = h('canvas', { class: 'network-canvas', role: 'img', 'aria-label': 'One network working on the point' });
+	const canvas = h('canvas', { class: 'network-canvas', role: 'img', 'aria-label': text('networks.network.caption') });
 	const state = { network: 0, point: null };
 	const runs = card.trainRuns;
 	const cpCells = card.networks.map(() => h('span', { class: 'fold-cp num' }));
@@ -102,33 +102,40 @@ export function createNetworks({ card, groups }) {
 			choose(k);
 		},
 	},
-	h('span', { class: 'fold-name' }, `Network ${k + 1}`),
-	runs.map((run) => h('i', { class: `fold-car${network.validationRuns.includes(run) ? ' held' : ''}`, title: `Run ${run}` })),
+	copied(h('span', { class: 'fold-name' }), 'networks.folds.name', { network: k + 1 }),
+	runs.map((run) => h('i', { class: `fold-car${network.validationRuns.includes(run) ? ' held' : ''}`, title: text('networks.folds.run', { run }) })),
 	cpCells[k]));
 
 	const sameInputs = card.comparison.filter((row) => row.learner !== 'constant' && groupsGiven(groups, row).length === groups.length);
 	const network = card.networks[0];
 	const trainedOn = network.trainRuns.length;
 	const heldOut = network.validationRuns.length;
+	const counts = {
+		networks: card.networks.length, networksWord: countWord(card.networks.length),
+		trainedOn, trainedOnWord: countWord(trainedOn), heldOut, heldOutWord: countWord(heldOut),
+	};
 
-	const el = section('networks', `${countWord(card.networks.length)} small networks, each blind to ${countWord(heldOut).toLowerCase()} whole cars`,
-		`Each is trained on ${countWord(trainedOn).toLowerCase()} cars and graded on the ${countWord(heldOut).toLowerCase()} it never saw. Cells of one car look alike, so a random split of cells would grade the model on cars it has already seen.`,
+	const el = section('networks', counts,
 		h('div', { class: 'networks-layout' },
 			h('figure', { class: 'figure' },
-				h('figcaption', {}, 'One network at the point'),
-				h('div', { class: 'network-holder' }, canvas),
-				h('p', { class: 'small-number num' }, `${network.layers.join(' → ')} · ${card.activation} · ${count(parameters(network.layers))} weights`)),
+				copied(h('figcaption'), 'networks.network.caption'),
+				h('div', { class: 'network-holder' }, canvas, copied(h('span', { class: 'network-output' }), 'networks.network.output')),
+				copied(h('p', { class: 'small-number num' }), 'networks.network.note', {
+					layers: network.layers.join(' → '), activation: card.activation, weights: count(parameters(network.layers)),
+				})),
 			h('figure', { class: 'figure' },
-				h('figcaption', {}, 'Cars each network trained on'),
-				h('div', { class: 'folds', role: 'radiogroup', 'aria-label': 'Networks' },
-					h('div', { class: 'fold-row fold-head' }, h('span'), runs.map((run) => h('span', { class: 'fold-run num' }, run)), h('span', { class: 'fold-cp' }, 'Cp here')),
+				copied(h('figcaption'), 'networks.folds.caption'),
+				h('div', { class: 'folds', role: 'radiogroup', 'aria-label': text('networks.folds.caption') },
+					h('div', { class: 'fold-row fold-head' }, h('span'), runs.map((run) => h('span', { class: 'fold-run num' }, run)), copied(h('span', { class: 'fold-cp' }), 'networks.folds.cp')),
 					foldRows),
-				h('p', { class: 'fold-key' }, h('span', {}, h('i', { class: 'fold-car' }), 'trained on'), h('span', {}, h('i', { class: 'fold-car held' }), 'held out, graded on')),
-				h('figcaption', {}, 'Same inputs, other learners, cross-validated R²'),
+				h('p', { class: 'fold-key copy-block' },
+					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car' }), copied(h('span'), 'networks.folds.trained')),
+					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car held' }), copied(h('span'), 'networks.folds.held'))),
+				copied(h('figcaption'), 'networks.learners.caption'),
 				bars(sameInputs.map((row) => ({
 					label: learnerName(row, groups), chips: chips(groups, groupsGiven(groups, row)), value: row.crossValidationR2,
 					text: row.crossValidationR2.toFixed(3), strong: row.learner === 'ensemble',
-				})), 1))));
+				})), 1, 'networks.learners.inputs'))));
 	el.prepend(locator('networks'));
 
 	function draw() {

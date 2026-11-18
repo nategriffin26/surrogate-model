@@ -37,7 +37,7 @@ def test_ensemble_checkpoint_roundtrip_preserves_mean_and_spread(
 def test_cold_vtp_inference_succeeds_without_cp_and_flags_out_of_domain_geometry(
     tmp_path: Path, dummy_ensemble: SurrogateEnsemble
 ) -> None:
-    """Catches crashes on target-free VTP uploads and verifies OOD escalation on oversized bodies."""
+    """Catches crashes on files without Cp, and an oversized body not being reported as outside the training cars."""
     ens = dummy_ensemble
 
     # Create an oversized 7.0 m long geometry-only VTP with NO solver arrays at all
@@ -53,7 +53,7 @@ def test_cold_vtp_inference_succeeds_without_cp_and_flags_out_of_domain_geometry
     assert res.cp_mean.shape == (res.n_cells,)
     assert res.cp_std.shape == (res.n_cells,)
     assert np.isfinite(res.cp_mean).all()
-    assert res.coverage["status"] in ("caution", "escalate")
+    assert res.coverage["status"] in ("near", "outside")
     oob_features = {d["feature"] for d in res.coverage["out_of_range_dimensions"]}
     assert "length" in oob_features
 

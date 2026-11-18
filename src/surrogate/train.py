@@ -1,4 +1,4 @@
-"""Five-fold training on the ten DrivAerML cases, and the ablations recorded beside it.
+"""Five-fold training on the ten DrivAerML cases, and the ablations and learning curve recorded beside it.
 
 The ablations are a staircase that adds one block of inputs at a time (`features.BLOCKS`, starting
 from a constant), closed by the shipped ensemble on every block, and two other learners: a learned
@@ -162,6 +162,7 @@ def _summarize_predictions(
     mae_vals = [per_car[str(r)]["mae"] for r in runs]
     cd_abs_errs = [per_car[str(r)]["cd_p_abs_err"] for r in runs]
     cd_signed_errs = [per_car[str(r)]["cd_p_err"] for r in runs]
+    cl_signed_errs = [per_car[str(r)]["cl_p_pred"] - per_car[str(r)]["cl_p_true_sample"] for r in runs]
 
     return {
         "mean_r2": round(float(np.mean(r2_vals)), 4),
@@ -171,6 +172,8 @@ def _summarize_predictions(
         "mean_mae": round(float(np.mean(mae_vals)), 4),
         "cd_p_mae": round(float(np.mean(cd_abs_errs)), 4),
         "cd_p_bias": round(float(np.mean(cd_signed_errs)), 4),
+        "cl_p_mae": round(float(np.mean(np.abs(cl_signed_errs))), 4),
+        "cl_p_bias": round(float(np.mean(cl_signed_errs)), 4),
         "per_car": per_car,
     }
 
@@ -256,7 +259,7 @@ def _build_training_envelope(
     arrays_by_run: dict[int, dict[str, np.ndarray]],
     meta_by_run: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
-    """What the 10 allowed training runs span: their shape descriptors, their cross-section curves,
+    """What the 10 allowed training runs span: their shape descriptors, their slice-area curves S(x),
     and each input's 2nd percentile, median and 98th percentile over their sampled cells."""
     desc_keys = list(meta_by_run[ALLOWED_TRAIN_RUNS[0]]["shape_descriptor"].keys())
     descriptor_bounds: dict[str, dict[str, float]] = {}
@@ -268,13 +271,13 @@ def _build_training_envelope(
             "mean": round(float(np.mean(vals)), 4),
         }
 
-    section_curves = np.stack([arrays_by_run[r]["section_area_x"] for r in ALLOWED_TRAIN_RUNS], axis=0)
+    slice_areas = np.stack([arrays_by_run[r]["slice_area"] for r in ALLOWED_TRAIN_RUNS], axis=0)
     training_inputs = np.concatenate([arrays_by_run[r]["features"] for r in ALLOWED_TRAIN_RUNS], axis=0)
     return {
         "train_runs": list(ALLOWED_TRAIN_RUNS),
         "descriptor_bounds": descriptor_bounds,
-        "section_area_min": np.round(section_curves.min(axis=0), 4).tolist(),
-        "section_area_max": np.round(section_curves.max(axis=0), 4).tolist(),
+        "slice_area_min": np.round(slice_areas.min(axis=0), 4).tolist(),
+        "slice_area_max": np.round(slice_areas.max(axis=0), 4).tolist(),
         "input_ranges": np.round(np.percentile(training_inputs, [2, 50, 98], axis=0).T, 4).tolist(),
     }
 
@@ -316,6 +319,54 @@ def _fit_spread_scale(
             abs_err = np.abs(per_model.mean(axis=0) - arrays_by_run[r]["cp"])
             ratios.append(abs_err / np.maximum(per_model.std(axis=0), 1e-9))
     return float(np.quantile(np.concatenate(ratios), 0.68))
+
+
+def _learning_curve(
+    arrays_by_run: dict[int, dict[str, np.ndarray]],
+    meta_by_run: dict[int, dict[str, Any]],
+    *,
+    epochs: int,
+    seed: int,
+    device: torch.device,
+) -> dict[str, dict[str, float]]:
+    """Accuracy on unseen cars against the number of cars trained on, which says whether more CFD
+    runs would still help. For each fold's held-out pair, single networks are trained on 2, 4, 6 and
+    all 8 of the other cars, with as many gradient steps whatever the number of cars, and scored on
+    the held-out pair only."""
+    scores: dict[int, list[dict[str, float]]] = {2: [], 4: [], 6: [], 8: []}
+    for fold_idx, held_pair in enumerate(CAR_FOLDS):
+        others = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_pair)
+        pairs = [others[i : i + 2] for i in range(0, 8, 2)]
+        subsets = {
+            2: pairs,
+            4: [pairs[0] + pairs[1], pairs[2] + pairs[3]],
+            6: [tuple(r for r in others if r not in pair) for pair in pairs],
+            8: [others],
+        }
+        for n_cars, groups in subsets.items():
+            for group_idx, cars in enumerate(groups):
+                model = _fit_mlp_fold(
+                    np.concatenate([arrays_by_run[r]["features"] for r in cars], axis=0),
+                    np.concatenate([arrays_by_run[r]["cp"] for r in cars], axis=0),
+                    fold_index=0,
+                    train_runs=cars,
+                    val_runs=held_pair,
+                    epochs=int(round(epochs * 8 / n_cars)),
+                    seed=seed + 10 * fold_idx + group_idx,
+                    device=device,
+                )
+                preds = {r: _predict_single_fold(model, arrays_by_run[r]["features"], device) for r in held_pair}
+                per_car = _summarize_predictions(held_pair, preds, arrays_by_run, meta_by_run)["per_car"]
+                scores[n_cars].extend(per_car.values())
+    return {
+        str(n_cars): {
+            "r2": round(float(np.mean([s["r2"] for s in rows])), 4),
+            "worst_car_r2": round(float(np.min([s["r2"] for s in rows])), 4),
+            "cd_p_mae": round(float(np.mean([s["cd_p_abs_err"] for s in rows])), 4),
+            "networks": len(rows) // 2,
+        }
+        for n_cars, rows in scores.items()
+    }
 
 
 def train_and_evaluate(
@@ -439,23 +490,28 @@ def train_and_evaluate(
         # 2a. Constant fold-mean baseline (zero learning)
         const_cv_preds: dict[int, np.ndarray] = {}
         const_cd_cv_errs: list[float] = []
-        true_cd_sample = {
+        const_cl_cv_errs: list[float] = []
+        true_forces = {
             r: case_evaluation_summary(
                 arrays_by_run[r]["cp"],
                 arrays_by_run[r]["cp"],
                 arrays_by_run[r]["normals"],
                 total_area=float(meta_by_run[r]["total_area"]),
                 frontal_area=float(meta_by_run[r]["frontal_area"]),
-            )["cd_p_true_sample"]
+            )
             for r in ALLOWED_TRAIN_RUNS + holdout_runs
         }
+        true_cd_sample = {r: forces["cd_p_true_sample"] for r, forces in true_forces.items()}
+        true_cl_sample = {r: forces["cl_p_true_sample"] for r, forces in true_forces.items()}
         for val_pair in CAR_FOLDS:
             tr_runs = tuple(r for r in ALLOWED_TRAIN_RUNS if r not in val_pair)
             mean_cp = float(np.mean([arrays_by_run[r]["cp"].mean() for r in tr_runs]))
             mean_cd = float(np.mean([true_cd_sample[r] for r in tr_runs]))
+            mean_cl = float(np.mean([true_cl_sample[r] for r in tr_runs]))
             for r in val_pair:
                 const_cv_preds[r] = np.full_like(arrays_by_run[r]["cp"], mean_cp)
                 const_cd_cv_errs.append(mean_cd - true_cd_sample[r])
+                const_cl_cv_errs.append(mean_cl - true_cl_sample[r])
 
         const_entry: dict[str, Any] = {
             "label": "Constant fold-mean baseline (no model)",
@@ -474,12 +530,16 @@ def train_and_evaluate(
                 ),
                 "cd_p_mae": round(float(np.mean(np.abs(const_cd_cv_errs))), 4),
                 "cd_p_bias": round(float(np.mean(const_cd_cv_errs)), 4),
+                "cl_p_mae": round(float(np.mean(np.abs(const_cl_cv_errs))), 4),
+                "cl_p_bias": round(float(np.mean(const_cl_cv_errs)), 4),
             },
         }
         if holdout_runs:
             all_mean_cp = float(np.mean([arrays_by_run[r]["cp"].mean() for r in ALLOWED_TRAIN_RUNS]))
             all_mean_cd = float(np.mean([true_cd_sample[r] for r in ALLOWED_TRAIN_RUNS]))
+            all_mean_cl = float(np.mean([true_cl_sample[r] for r in ALLOWED_TRAIN_RUNS]))
             ho_cd_errs = [all_mean_cd - true_cd_sample[r] for r in holdout_runs]
+            ho_cl_errs = [all_mean_cl - true_cl_sample[r] for r in holdout_runs]
             const_entry["holdout"] = {
                 "mean_r2": 0.0,
                 "mean_mae": round(
@@ -488,6 +548,8 @@ def train_and_evaluate(
                 ),
                 "cd_p_mae": round(float(np.mean(np.abs(ho_cd_errs))), 4),
                 "cd_p_bias": round(float(np.mean(ho_cd_errs)), 4),
+                "cl_p_mae": round(float(np.mean(np.abs(ho_cl_errs))), 4),
+                "cl_p_bias": round(float(np.mean(ho_cl_errs)), 4),
             }
         ablations["constant_baseline"] = const_entry
 
@@ -575,6 +637,10 @@ def train_and_evaluate(
         }
         print(f"[Baseline: LightGBM] CV R²={lgb_res['cv']['mean_r2']:.4f} | Cd,p MAE={lgb_res['cv']['cd_p_mae']:.4f}")
 
+        # 2d. The learning curve
+        learning_curve = _learning_curve(arrays_by_run, meta_by_run, epochs=epochs, seed=seed, device=device)
+        print("[Learning curve] unseen-car R² by cars trained on: " + ", ".join(f"{n} {c['r2']:.4f}" for n, c in learning_curve.items()))
+
     report = {
         "device": str(device),
         "allowed_train_runs": list(ALLOWED_TRAIN_RUNS),
@@ -591,6 +657,8 @@ def train_and_evaluate(
         "uncertainty_coverage_holdout": coverage,
         "ablations": ablations,
     }
+    if run_ablations:
+        report["learning_curve"] = learning_curve
     metrics_path = artifacts_dir / "metrics.json"
     metrics_path.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Wrote {metrics_path}")

@@ -2,15 +2,11 @@
 // misses the CFD (by region and cell by cell) and how the misses compare with the spread σ(Cp). Only for a car whose
 // file carried CFD.
 
-/** Regions of the surface, in the order the chart lists them. Wheels first: every other region leaves them out. */
-export const REGIONS = [
-	{ id: 'wheels', name: 'Wheels and arches' },
-	{ id: 'underbody', name: 'Underbody' },
-	{ id: 'base', name: 'Rear faces' },
-	{ id: 'front', name: 'Front faces' },
-	{ id: 'sides', name: 'Sides' },
-	{ id: 'top', name: 'Roof, hood and boot' },
-];
+/**
+ * Regions of the surface, in the order the chart lists them, each named at `accuracy.regions.<id>` in copy.json.
+ * Wheels first: every other region leaves them out.
+ */
+export const REGIONS = [{ id: 'wheels' }, { id: 'underbody' }, { id: 'base' }, { id: 'front' }, { id: 'sides' }, { id: 'top' }];
 /** A face belongs to a facing region when its normal is within about 45° of the axis. */
 const FACING = 0.7;
 /** Wheels and arches: within this distance of an axle in x, this far out from the centre plane, this high off the ground. */

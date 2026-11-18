@@ -46,7 +46,7 @@ function pointMark(at, position, normal, a, b) {
 export function closeUp({ width, explanation, cutter }) {
 	const { position, normal } = explanation;
 	const reach = 0.3;
-	const view = area(width, [position[0] - reach, position[0] + reach], [position[2] - reach, position[2] + reach], 'The surface around the point');
+	const view = area(width, [position[0] - reach, position[0] + reach], [position[2] - reach, position[2] + reach], 'The surface around the cell');
 	const clip = `model-clip-${++clips}`;
 	const middle = width / 2;
 	view.svg.append(

@@ -1,50 +1,34 @@
 // The model's inputs as the page tells them: groups of columns that the models compared in training were given
-// or not given together, each with its colour, its words and the accuracy it added; and the compared models
-// themselves, in those groups' terms. Everything else comes from the model card, so a model trained on other groups
-// brings its own, and a group with no words here stops the page with an error naming it.
+// or not given together, each with its colour and its words; and the compared models themselves, in those groups'
+// terms. Everything else comes from the model card, so a model trained on other groups brings its own, and a group
+// with nothing here stops the page with an error naming it.
 
-/** The learners of this model's own kind: one network on a point's inputs, or the five of them. */
+import { text } from './copy.js';
+
+/** The learners of this model's own kind: one network on a cell's inputs, or the five of them. */
 const OWN = new Set(['mlp', 'ensemble']);
 
 /**
- * Words for each group, by the kind of its first input: its name, its colour and the physical reason it is there; and,
- * for a group that reads the same things over and over, the column field it repeats over (one station of the
- * sections, one size of nearby surface) and, if not the columns' own order, the order its reads are listed in.
+ * Each group, by the kind of its first input (the engine's column kind, the one place the page names it): the stem of
+ * its keys in copy.json (its name at `groups.<words>`) and its colour; and, for a group that reads the same things
+ * over and over, the column field it repeats over, of which the page shows one value at a time (one size of nearby
+ * surface, one station of the slices).
  */
 const WORDS = {
-	position: {
-		name: 'Position and facing',
-		color: '#2f739c',
-		reason: 'Surface facing the wind takes high pressure; surface facing away sits in the low pressure of the wake.',
-	},
-	surface: {
-		name: 'Nearby surface',
-		color: '#a35b1a',
-		reason: 'How the surface curves around the point: flow speeds up over a crest, and pressure falls.',
-		repeat: 'scale',
-	},
-	section: {
-		name: 'Slices across the car',
-		color: '#197b80',
-		reason: 'Air speeds up where the car grows across and slows where it narrows: how big each slice is, and how far it reaches out, up and down from the point.',
-		repeat: 'station',
-		reads: ['outboard', 'above', 'below', 'area'],
-	},
+	position: { words: 'position', color: '#2f739c' },
+	surface: { words: 'surface', color: '#a35b1a', repeat: 'scale' },
+	slice: { words: 'slices', color: '#197b80', repeat: 'station' },
 };
 
 /**
  * @typedef {Object} InputGroup
  * @property {string} id         the kind of its first input
- * @property {string} name
- * @property {string} reason
+ * @property {string} words      the stem of its keys in copy.json; its name is at `groups.<words>`
  * @property {string} color
  * @property {string[]} kinds    the column kinds in it
  * @property {number[]} columns  indices into `ModelCard.columns`
- * @property {{ field: string, values: number[], columns: number[][] } | null} repeat  for a group that reads the same
- *   things at each of several values of a column field: the values, ascending, and the columns read at each, in the
- *   order they are listed
- * @property {{ before: number, after: number } | null} step  cross-validation R² of this model's kind of network
- *   given the groups before it, and given this one too; null when no such pair was compared
+ * @property {string | null} repeat  for a group that reads the same things at each of several values of a column
+ *   field, that field
  */
 
 /**
@@ -67,8 +51,7 @@ export function inputGroups(card) {
 	const groups = [...byPattern.values()].map(({ kinds, columns: indices }) => {
 		const id = columns[indices[0]].kind;
 		if (!(id in WORDS)) throw new Error(`The model has a group of inputs the page has no words for: “${id}”.`);
-		const { repeat: field, reads, ...words } = WORDS[id];
-		return { id, ...words, kinds, columns: indices, repeat: field ? repeatOf(columns, indices, field, reads) : null, step: null };
+		return { repeat: null, ...WORDS[id], id, kinds, columns: indices };
 	});
 
 	const own = comparison.filter((row) => OWN.has(row.learner));
@@ -83,22 +66,10 @@ export function inputGroups(card) {
 			.filter(({ row }) => row)
 			.sort((a, b) => b.row.crossValidationR2 - a.row.crossValidationR2)[0];
 		if (!next) break;
-		next.group.step = { before, after: next.row.crossValidationR2 };
 		ordered.push(next.group);
 		before = next.row.crossValidationR2;
 	}
 	return [...ordered, ...groups.filter((group) => !ordered.includes(group))];
-}
-
-/** A group's columns by the value of `field` they are read at, each in `reads` order when given, else in column order. */
-function repeatOf(columns, indices, field, reads) {
-	const values = [...new Set(indices.map((i) => columns[i][field]))].sort((a, b) => a - b);
-	const place = (i) => (reads ? reads.indexOf(columns[i].read) : i);
-	return {
-		field,
-		values,
-		columns: values.map((value) => indices.filter((i) => columns[i][field] === value).sort((a, b) => place(a) - place(b))),
-	};
 }
 
 /** The group a column belongs to. */
@@ -112,26 +83,17 @@ export function groupsGiven(groups, row) {
 }
 
 /**
- * A compared model in plain words. Single networks differ only in their inputs, so each is named by them: the first
- * group alone, or the groups added to it.
+ * A compared model's words, as [key, values] for `copied`. Single networks differ only in their inputs, so each is
+ * named by them: the first group alone (`{group}`), or the groups added to it (`{added}`), in their names' words.
  */
 export function learnerName(row, groups) {
-	switch (row.learner) {
-		case 'constant':
-			return 'Guess the training average';
-		case 'pointnet':
-			return 'Learned whole-car summary';
-		case 'mlp': {
-			const [first, ...added] = groupsGiven(groups, row);
-			return added.length === 0
-				? `One network, ${first.name.toLowerCase()}`
-				: `One network + ${added.map((g) => g.name.toLowerCase().replace(/^the /, '')).join(' + ')}`;
-		}
-		case 'trees':
-			return 'Boosted trees';
-		case 'ensemble':
-			return 'This model';
-		default:
-			throw new Error(`The model card compares a learner the page does not know: “${row.learner}”.`);
+	if (!['constant', 'pointnet', 'mlp', 'trees', 'ensemble'].includes(row.learner)) {
+		throw new Error(`The model card compares a learner the page does not know: “${row.learner}”.`);
 	}
+	if (row.learner !== 'mlp') return [`learners.${row.learner}`];
+	const [first, ...added] = groupsGiven(groups, row);
+	const name = (group) => text(`groups.${group.words}`).toLowerCase();
+	return added.length === 0
+		? ['learners.mlp.alone', { group: () => name(first) }]
+		: ['learners.mlp.added', { added: () => added.map(name).join(' + ') }];
 }

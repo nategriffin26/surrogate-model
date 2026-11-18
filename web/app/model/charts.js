@@ -5,9 +5,10 @@
 import { h } from '../dom.js';
 import { niceTicks } from '../format.js';
 import { rampCss } from '../ramps.js';
+import { copied, text } from './copy.js';
 
-const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve'];
-/** A count as a word to begin a sentence with, or as digits beyond twelve. */
+const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+/** A count as a word, or as digits beyond twelve; a placeholder written capitalised ({CarsWord}) begins a sentence with it. */
 export const countWord = (n) => WORDS[n] ?? n.toLocaleString('en-US');
 
 /** The DrivAerML run of the open car, read from the dataset's file naming (`boundary_<run>.vtp`), or null. */
@@ -16,47 +17,63 @@ export function runOf(result) {
 	return match ? Number(match[1]) : null;
 }
 
-/** The open car as the page names it: a DrivAerML run by its number and whether training used it, any other file by its name. */
-export function carName(result, card) {
+/** The words that name the open car: a DrivAerML run by its number and whether training used it; null for any other file. */
+function carWords(result, card) {
 	const run = runOf(result);
-	if (card.trainRuns.includes(run)) return `DrivAerML run ${run}, a training car`;
-	if (card.outsideRuns.some((r) => r.run === run)) return `DrivAerML run ${run}, kept out of training`;
-	return result.source.name;
+	if (card.trainRuns.includes(run)) return ['car.training', { run }];
+	if (card.outsideRuns.some((r) => r.run === run)) return ['car.outside', { run }];
+	return null;
 }
 
-/** A section: its takeaway as the title, at most a sentence or two, and its figures. */
-export function section(id, title, sentence, ...figures) {
+/** The open car's name as text: its words, or any other file by its name. */
+export function carName(result, card) {
+	const words = carWords(result, card);
+	return words ? text(...words) : result.source.name;
+}
+
+/** Show the open car's name in `element`: its words, marked as theirs, or the file's name. */
+export function showCarName(element, result, card) {
+	const words = carWords(result, card);
+	if (words) return copied(element, ...words);
+	delete element.dataset.copy;
+	element.hidden = false;
+	element.textContent = result.source.name;
+	return element;
+}
+
+/** A section: its takeaway as the title (`<id>.title`), a sentence or two under it (`<id>.lede`), and its figures. */
+export function section(id, values, ...figures) {
 	return h('section', { class: 'model-section', id: `model-${id}`, 'data-section': id },
-		h('h2', {}, title),
-		sentence ? h('p', { class: 'lede' }, sentence) : null,
+		copied(h('h2'), `${id}.title`, values),
+		copied(h('p', { class: 'lede' }), `${id}.lede`, values),
 		...figures);
 }
 
-/** Which groups of inputs a model was given: a chip per group, empty for those it was not. */
+/** Which groups of inputs a model was given: a chip per group, empty for those it was not, each named by its group. */
 export function chips(groups, given) {
-	return h('span', { class: 'chips', 'aria-label': given.map((g) => g.name).join(', ') || 'No inputs' },
-		groups.map((group) => h('i', { class: `chip${given.includes(group) ? '' : ' off'}`, style: `--group: ${group.color}`, title: group.name })));
+	return h('span', { class: 'chips', 'aria-label': given.map((g) => text(`groups.${g.words}`)).join(', ') || null },
+		groups.map((group) => h('i', { class: `chip${given.includes(group) ? '' : ' off'}`, style: `--group: ${group.color}`, title: text(`groups.${group.words}`) })));
 }
 
 /**
- * Rows of bars on one scale from 0 to `max`: each row a label, optionally the chips of its inputs, the bar and its
- * value. `strong` marks the row of this model.
- * @param {{ label: string, chips?: Element, value: number, text: string, strong?: boolean }[]} rows
+ * Rows of bars on one scale from 0 to `max`: each row its label's words, optionally the chips of its inputs, the bar
+ * and its value. `strong` marks the row of this model. With chips, a head row names them with the words at `inputsKey`.
+ * @param {{ label: [string, object?], chips?: Element, value: number, text: string, strong?: boolean }[]} rows
  */
-export function bars(rows, max) {
-	const head = rows.some((row) => row.chips) ? h('div', { class: 'bar-row bar-head' }, h('span'), h('span', {}, 'Inputs'), h('span'), h('span')) : null;
+export function bars(rows, max, inputsKey = null) {
+	const head = inputsKey ? h('div', { class: 'bar-row bar-head copy-block' }, h('span'), copied(h('span'), inputsKey), h('span'), h('span')) : null;
 	return h('div', { class: 'bars' }, head, rows.map((row) => h('div', { class: `bar-row${row.strong ? ' strong' : ''}` },
-		h('span', { class: 'bar-label' }, row.label),
+		copied(h('span', { class: 'bar-label' }), ...row.label),
 		row.chips ?? h('span'),
 		h('span', { class: 'bar-track' }, h('span', { class: 'bar-fill', style: `width: ${(100 * Math.max(0, row.value)) / max}%` })),
 		h('span', { class: 'bar-value num' }, row.text))));
 }
 
-/** A colour map's ramp with ticks under it. */
-export function colorBar({ ramp, lo, hi }, label) {
+/** A colour map's ramp with ticks under it, named by the words at `labelKey`. */
+export function colorBar({ ramp, lo, hi }, labelKey) {
 	const { ticks, digits } = niceTicks(lo, hi, 4);
 	return h('div', { class: 'color-bar' },
-		h('span', { class: 'color-bar-label' }, label),
+		copied(h('span', { class: 'color-bar-label' }), labelKey),
 		h('span', { class: 'color-bar-ramp', style: `background: ${rampCss(ramp)}` }),
 		h('span', { class: 'color-bar-ticks num' }, ticks.map((t) => h('span', { style: `left: ${(100 * (t - lo)) / (hi - lo)}%` }, t.toFixed(digits).replace('-', '−')))));
 }

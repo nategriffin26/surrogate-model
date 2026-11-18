@@ -87,9 +87,10 @@
  * @property {Float32Array | null} cfd    (C) the reference field, when there is one
  *
  * @typedef {import('./lookups.js').SurfaceLookups & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
- *   The whole-car lookups the features read (`lookups.js`, about 18 MB on a DrivAerML car), built
+ *   The whole-car lookups the features read (`lookups.js`, about 55 MB on a DrivAerML car), built
  *   from every polygon of the file, with the feature definition they were built for. They let
- *   `explain` answer for a result without its file.
+ *   `explain` answer for a result without its file; a bundled example keeps of them what `explain`
+ *   reads at its vertices (`packResult`).
  *
  * @typedef {Object} Coverage  The car measured against the training cars. Facts only.
  * @property {{ name: 'length' | 'width' | 'height', value: number, trainMin: number, trainMax: number }[]} dimensions
@@ -132,9 +133,9 @@
  *   mesh (`workingCells`): no events, nothing drawn first, nothing held afterwards. It waits its turn
  *   behind running analyses like they do, but leaves the car analysed last held. The arrays move to
  *   the worker as for `analyzeSurface`. Aborting `signal` abandons it.
- *   Give it a working mesh or a variant of one, nothing coarser: the lookups are filled from polygon
- *   centres (the sections' 2 cm raster, the surface's 1.5 cm grid), so a coarser mesh leaves gaps in
- *   them and the prediction degrades.
+ *   A mesh coarser than a working mesh still gives whole lookups (`lookups.js` takes a wide polygon
+ *   in pieces), but the networks are asked at its polygons' centres and normals, which follow the
+ *   car less closely, so the prediction loses some accuracy.
  * @property {(result: Result) => CellSet} workingCells  A result's working mesh as polygons, made on
  *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's Cp,
  *   σ and reference field the mean of its corners', so `area × cp` sums the field the viewer draws
@@ -275,29 +276,29 @@
  * @property {ModelColumn[]} columns  what each of the model's inputs is, in order
  *
  * @typedef {Object} ModelColumn
- * @property {'position' | 'surface' | 'section'} kind  its family, a stable id
+ * @property {'position' | 'surface' | 'slice'} kind  its family, a stable id
  * @property {string} group     the family's display label
  * @property {string} name      a short plain name
- * @property {string} unit      'm' for distances, 'm²' for a section's area, '' for the rest
+ * @property {string} unit      'm' for distances, 'm²' for a slice's area, '' for the rest
  * @property {number[]} offset  the place it reads relative to the point asked about, [dx, dy, dz] in
  *   metres along the file's axes: dx downstream, dy toward +y (the car's right as seen from the
  *   driver's seat), dz up
  * @property {number[] | null} along  for a distance, the unit direction (same axes) it runs from that
  *   place, so place + value × along is where it measured to: the body surface, or for the distances
  *   from nose, tail, centre plane and lowest point, that plane; null for every other column. The
- *   reach outboard of a section ('section', read 'outboard') is measured away from the centre plane
+ *   reach outboard of a slice ('slice', read 'outboard') is measured away from the centre plane
  *   on the point's own side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0]
  *   on the −y side
  * @property {number} [scale]  a surface column's size of nearby surface, in metres
  * @property {number} [sigma]  a surface column's Gaussian standard deviation, in metres
  * @property {'whole' | 'ahead' | 'behind'} [part]  a surface column's part of the nearby surface: all
  *   of it, the part ahead of the point (upstream, at smaller x), or the part behind
- * @property {number} [station]  a section column's station, its dx from the point in metres (0 for
- *   the point's own section, negative ahead of it)
- * @property {'area' | 'outboard' | 'above' | 'below'} [read]  what a section column reads: the
- *   section's area, or how far the body in it reaches outboard of the point at the point's height,
+ * @property {number} [station]  a slice column's station, its dx from the point in metres (0 for
+ *   the point's own slice, negative ahead of it)
+ * @property {'area' | 'outboard' | 'above' | 'below'} [read]  what a slice column reads: the
+ *   slice's area, or how far the body in it reaches outboard of the point at the point's height,
  *   above it or below it at the point's distance from the centre plane (to the ground where the
- *   section holds no body there)
+ *   slice holds no body there)
  * @property {number[]} range  the input over the training cells: its 2nd percentile, median and 98th
  *   percentile, from the model file
  *
@@ -313,6 +314,7 @@
 
 import { MeshoptDecoder } from '../vendor/meshoptimizer/meshopt_decoder.mjs';
 import { boundsOf } from './geometry.js';
+import { scaleReadsAt } from './features.js';
 
 /** Fields are stored to within half this step of Cp, far finer than the colour scale can show. */
 const FIELD_STEP = 1 / 1024;
@@ -321,13 +323,15 @@ const NORMAL_BITS = 12;
 const FIELDS = ['cp', 'sigma', 'cfd'];
 
 /** The lookups' arrays by their place in `SurfaceLookups`. */
-function lookupArrays({ yOut, zTop, zBottom, sectionArea, scales }) {
+function lookupArrays({ yOut, zTop, zBottom, sliceArea, scales }) {
   return [
     ['yOut', yOut],
     ['zTop', zTop],
     ['zBottom', zBottom],
-    ['sectionArea', sectionArea],
-    ...scales.flatMap(({ kept, whole, ahead }, k) => [[`scales.${k}.kept`, kept], [`scales.${k}.whole`, whole], [`scales.${k}.ahead`, ahead]]),
+    ['sliceArea', sliceArea],
+    ...scales.flatMap(({ kept, whole, ahead, readsAtVertices }, k) => (readsAtVertices
+      ? [[`scales.${k}.readsAtVertices`, readsAtVertices]]
+      : [[`scales.${k}.kept`, kept], [`scales.${k}.whole`, whole], [`scales.${k}.ahead`, ahead]])),
   ];
 }
 
@@ -359,7 +363,10 @@ function ungroupedBytes(grouped) {
  * Turn a result into the two files of a bundled example: `json` holds everything but the arrays,
  * `block` the mesh and the lookups, compressed. The mesh's vertices are reordered for compression,
  * and positions and fields are quantized: positions to 1/65535 of the bounding box (0.07 mm on a
- * car), fields to `FIELD_STEP`. The lookups are kept exact.
+ * car), fields to `FIELD_STEP`. The lookups are kept exact, but a scale kept at more nodes than the
+ * mesh has vertices (the 3 cm scale on a DrivAerML car: 1.3M nodes against 0.3M vertices) is stored
+ * as its reads at the vertices, all that `explain` asks of it on a bundled example, so the example
+ * stays under the host's 25 MB a file.
  *
  * @param {Result} result
  * @returns {Promise<{ json: string, block: Uint8Array }>}
@@ -406,16 +413,26 @@ export async function packResult(result) {
       MeshoptEncoder.encodeVertexBufferLevel(field.bytes, vertexCount, field.size, 3));
   }
 
+  // A scale with more kept nodes than the mesh has vertices goes as its reads at the vertices: eight
+  // floats a vertex against nine numbers a node.
+  const { definition, bounds, yCenter, scales } = result.lookups;
+  const stored = {
+    ...result.lookups,
+    scales: scales.map((scale, k) => {
+      if (8 * vertexCount >= 9 * scale.kept.length) return scale;
+      const grid = { origin: scale.origin, nodes: scale.nodes, step: definition.surfaceSteps[k] };
+      return { readsAtVertices: reordered(scaleReadsAt(grid, scale, mesh.positions), 8) };
+    }),
+  };
   // Kept nodes ascend, so their differences are small and pack to almost nothing.
   const lookupStreams = [];
-  for (const [name, array] of lookupArrays(result.lookups)) {
+  for (const [name, array] of lookupArrays(stored)) {
     const ascending = array instanceof Int32Array;
     const bytes = groupedBytes(ascending ? array.map((node, i) => (i ? node - array[i - 1] : node)) : array);
     lookupStreams.push({ name, encoding: ascending ? 'int32 differences' : 'float32', bytes: bytes.length });
     parts.push(bytes);
   }
 
-  const { definition, bounds, yCenter, scales } = result.lookups;
   const summary = {
     ...result,
     mesh: { vertices: vertexCount, triangles: indices.length / 3, streams },

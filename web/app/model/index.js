@@ -10,6 +10,8 @@ import { EXAMPLES } from '../examples.js';
 import { defaultMaps } from '../fields.js';
 import { Surface } from '../../viewer/surface.js';
 import { createAccuracy } from './accuracy.js';
+import { countWord } from './charts.js';
+import { copied, loadCopy, shareValues } from './copy.js';
 import { createDrag } from './drag.js';
 import { arrowDefinition } from './drawings.js';
 import { inputGroups } from './groups.js';
@@ -73,18 +75,22 @@ function caseState(c) {
 
 export function mountModelView(host, { engine, session }) {
 	const notice = h('div', { class: 'case-notice', role: 'status' });
+	const title = h('h1');
 	const page = h('div', { class: 'model-page', 'data-case': 'none' },
 		arrowDefinition(),
-		h('header', { class: 'model-top' }, h('h1', {}, 'How the model predicts pressure')),
+		h('header', { class: 'model-top' }, title),
 		notice);
 	host.append(page);
 
-	Promise.all([engine.model, loadTrainingCars()]).then(
+	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(
 		([card, training]) => build(card, training),
 		(error) => page.append(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
 	);
 
 	function build(card, training) {
+		// Counts any words may name: {inputs}, {networks}, {networksWord}.
+		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length) });
+		copied(title, 'page.title');
 		const groups = inputGroups(card);
 		/** Per case: the point shown on it, and the numbers of the latest point asked about and of the latest shown. */
 		const points = new WeakMap();
@@ -114,7 +120,7 @@ export function mountModelView(host, { engine, session }) {
 			if (c === view.case && view.caseView) for (const part of parts) part.setPoint(point);
 		}
 
-		const inputs = createInputs({ card, groups, ask });
+		const inputs = createInputs({ card, groups, engine, ask });
 		const parts = [
 			createOverview({ card, groups, training }),
 			createPointwise({ card, groups, training }),
@@ -198,11 +204,11 @@ export function mountModelView(host, { engine, session }) {
 	function showNotice(c, state) {
 		switch (state) {
 			case 'none':
-				notice.replaceChildren(h('p', {}, 'The figures are drawn on an open car.'),
-					h('div', { class: 'notice-actions' }, EXAMPLES.map((example) => h('button', { type: 'button', class: 'button', onclick: () => session.openExample(example.id, example.label) }, `Open ${example.label}`))));
+				notice.replaceChildren(copied(h('p'), 'page.notice.none'),
+					h('div', { class: 'notice-actions' }, EXAMPLES.map((example) => copied(h('button', { type: 'button', class: 'button', onclick: () => session.openExample(example.id, example.label) }), 'page.notice.open', { example: example.label }))));
 				return;
 			case 'waiting':
-				notice.replaceChildren(h('p', {}, `${c.name} is being read. The figures follow once it is ready.`));
+				notice.replaceChildren(copied(h('p'), 'page.notice.waiting', { car: c.name }));
 				return;
 			case 'failed':
 				notice.replaceChildren(h('p', { class: 'point-failure', role: 'alert' }, c.error));

@@ -4,6 +4,7 @@
 import { h, s } from '../dom.js';
 import { count, signed } from '../format.js';
 import { carName, colorBar, pictureFrame, runOf, section } from './charts.js';
+import { copied } from './copy.js';
 import { locator } from './overview.js';
 
 const SCATTER = 260;
@@ -37,8 +38,8 @@ function scatterFigure({ lo, hi, bins, density }) {
 			s('text', { x: x(v), y: SCATTER + 14, 'text-anchor': 'middle' }, signed(v, 1)),
 			s('text', { x: AXIS - 5, y: y(v) + 4, 'text-anchor': 'end' }, signed(v, 1)),
 		]),
-		s('text', { x: AXIS + SCATTER / 2, y: SCATTER + AXIS - 2, 'text-anchor': 'middle', class: 'axis-name' }, 'CFD Cp'),
-		s('text', { x: 8, y: SCATTER / 2, transform: `rotate(-90 8 ${SCATTER / 2})`, 'text-anchor': 'middle', class: 'axis-name' }, 'Predicted Cp'));
+		copied(s('text', { x: AXIS + SCATTER / 2, y: SCATTER + AXIS - 2, 'text-anchor': 'middle', class: 'axis-name' }), 'accuracy.scatter.x'),
+		copied(s('text', { x: 8, y: SCATTER / 2, transform: `rotate(-90 8 ${SCATTER / 2})`, 'text-anchor': 'middle', class: 'axis-name' }), 'accuracy.scatter.y'));
 	return h('div', { class: 'scatter', style: `width: ${SCATTER + AXIS}px` }, axes, canvas);
 }
 
@@ -46,7 +47,7 @@ function scatterFigure({ lo, hi, bins, density }) {
 function regionFigure(regions) {
 	const max = Math.max(...regions.map((r) => r.error));
 	return h('div', { class: 'bars' }, [...regions].sort((a, b) => b.error - a.error).map((region) => h('div', { class: 'bar-row' },
-		h('span', { class: 'bar-label' }, region.name),
+		copied(h('span', { class: 'bar-label' }), `accuracy.regions.${region.id}`),
 		h('span', { class: 'bar-share num' }, `${Math.round(100 * region.share)} %`),
 		h('span', { class: 'bar-track' }, h('span', { class: 'bar-fill', style: `width: ${(100 * region.error) / max}%` })),
 		h('span', { class: 'bar-value num' }, region.error.toFixed(3)))));
@@ -57,22 +58,26 @@ export function createAccuracy({ card }) {
 	const frames = Object.fromEntries(['cfdSide', 'cpSide', 'errorSide', 'cfdBelow', 'cpBelow', 'errorBelow'].map((id) => [id, pictureFrame(id)]));
 	const scales = h('div', { class: 'picture-scales' });
 	const outsideNumber = h('div', { class: 'headline' });
-	const carNumber = h('div', { class: 'headline' });
+	// A copy block: the car's R² hides with its label when the label is hidden, as an unnamed number would be read as another.
+	const carNumber = h('div', { class: 'headline copy-block' });
 	const charts = h('div', { class: 'accuracy-charts' });
 	const body = h('div', { class: 'accuracy-body' });
-	const missing = h('p', { class: 'missing', hidden: true });
+	const missing = h('div', { class: 'missing', hidden: true });
 
-	const el = section('accuracy', 'On cars it never saw', null,
+	const el = section('accuracy', {},
 		h('div', { class: 'headlines' },
 			h('div', { class: 'headline' }, h('span', { class: 'big-number num' }, card.crossValidation.meanR2.toFixed(3)),
-				h('span', { class: 'headline-label' }, `R², each of the ${count(card.trainRuns.length)} training cars predicted by the network that never saw it`)),
+				copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.crossValidation', { trainingCars: count(card.trainRuns.length) })),
 			outsideNumber,
 			carNumber),
 		missing,
 		body);
 	body.append(
 		h('div', { class: 'picture-grid three' },
-			h('span', { class: 'picture-head' }, 'CFD'), h('span', { class: 'picture-head' }, 'Predicted'), h('span', { class: 'picture-head' }, 'Predicted − CFD'),
+			h('div', { class: 'picture-heads copy-block' },
+				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.cfd'),
+				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.predicted'),
+				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.error')),
 			frames.cfdSide.el, frames.cpSide.el, frames.errorSide.el,
 			frames.cfdBelow.el, frames.cpBelow.el, frames.errorBelow.el),
 		scales,
@@ -87,24 +92,26 @@ export function createAccuracy({ card }) {
 			outsideNumber.hidden = outside.length === 0;
 			outsideNumber.replaceChildren(
 				h('span', { class: 'big-number num' }, outside.map((r) => r.r2.toFixed(3)).join(' · ')),
-				h('span', { class: 'headline-label' }, `R², DrivAerML run${outside.length > 1 ? 's' : ''} ${outside.map((r) => r.run).join(' and ')}, kept out of training`));
+				copied(h('span', { class: 'headline-label' }), `accuracy.headlines.outside.${new Intl.PluralRules('en').select(outside.length)}`, {
+					runs: new Intl.ListFormat('en').format(outside.map((r) => String(r.run))),
+				}));
 			carNumber.hidden = result.accuracy === null;
 			if (result.accuracy) {
 				carNumber.replaceChildren(
 					h('span', { class: 'big-number num' }, result.accuracy.r2.toFixed(3)),
-					h('span', { class: 'headline-label' }, `R², this car: ${carName(result, card)}`));
+					copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.car', { car: () => carName(result, card) }));
 			}
 			missing.hidden = stats !== null;
 			body.hidden = stats === null;
 			if (!stats) {
-				missing.textContent = `${result.source.name} carries no CFD pressure, so its error cannot be shown.`;
+				missing.replaceChildren(copied(h('p'), 'accuracy.missing', { car: result.source.name }));
 				return;
 			}
 			for (const [id, frame] of Object.entries(frames)) frame.show(pictures[id]);
-			scales.replaceChildren(colorBar(maps.cp, 'Cp'), colorBar(maps.error, 'Predicted − CFD'));
+			scales.replaceChildren(colorBar(maps.cp, 'accuracy.scales.cp'), colorBar(maps.error, 'accuracy.scales.error'));
 			charts.replaceChildren(
-				h('figure', { class: 'figure' }, h('figcaption', {}, 'Every cell, predicted against CFD, weighted by area'), scatterFigure(stats.scatter)),
-				h('figure', { class: 'figure' }, h('figcaption', {}, 'Mean error by region, with its share of the surface'), regionFigure(stats.regions)));
+				h('figure', { class: 'figure' }, copied(h('figcaption'), 'accuracy.scatter.caption'), scatterFigure(stats.scatter)),
+				h('figure', { class: 'figure' }, copied(h('figcaption'), 'accuracy.regions.caption'), regionFigure(stats.regions)));
 		},
 		setPoint() {},
 	};

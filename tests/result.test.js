@@ -1,6 +1,7 @@
 // Round trip of web/engine/result.js's pack format on a synthetic mesh, and `loadResult` on a bundled
 // example. Run with: deno test --allow-read tests/result.test.js
 import { loadResult, packResult, unpackResult } from '../web/engine/result.js';
+import { scaleReadsAt } from '../web/engine/features.js';
 
 /** A wavy 3 m x 1 m sheet on a 1 cm grid, with smooth pressure-like fields on its vertices. */
 function wavySheet(withCfd) {
@@ -33,7 +34,7 @@ function wavySheet(withCfd) {
   return { source: { name: 'sheet.vtp', cells: rows * columns }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
 }
 
-/** `SurfaceLookups` with small section rasters and a surface scale of irregular values. */
+/** `SurfaceLookups` with small slice rasters and a surface scale of irregular values. */
 function lookups() {
   const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
   return {
@@ -43,14 +44,15 @@ function lookups() {
     yOut: values(60, 1),
     zTop: values(40, 2),
     zBottom: values(40, 5),
-    sectionArea: values(10, 6),
+    sliceArea: values(10, 6),
     scales: [{ origin: [-1, -1, -0.5], nodes: [3, 4, 5], kept: Int32Array.of(0, 1, 7, 8, 59), whole: values(20, 3), ahead: values(20, 4) }],
   };
 }
 
 /** Every array of `SurfaceLookups`, by name, for comparing two of them value for value. */
-function lookupArrays({ yOut, zTop, zBottom, sectionArea, scales }) {
-  return { yOut, zTop, zBottom, sectionArea, ...Object.fromEntries(scales.flatMap((scale, k) => ['kept', 'whole', 'ahead'].map((name) => [`${name}${k}`, scale[name]]))) };
+function lookupArrays({ yOut, zTop, zBottom, sliceArea, scales }) {
+  const names = (scale) => (scale.readsAtVertices ? ['readsAtVertices'] : ['kept', 'whole', 'ahead']);
+  return { yOut, zTop, zBottom, sliceArea, ...Object.fromEntries(scales.flatMap((scale, k) => names(scale).map((name) => [`${name}${k}`, scale[name]]))) };
 }
 
 function sameValues(a, b) {
@@ -119,6 +121,25 @@ Deno.test('a packed result comes back within the stated precision', async () => 
 Deno.test('a result without CFD comes back without CFD', async () => {
   const { back } = await roundTrip(wavySheet(false));
   assert(!('cfd' in back.mesh) && back.mesh.cp && back.mesh.sigma, 'fields changed');
+});
+
+Deno.test('a scale kept at more nodes than the mesh has vertices comes back as its reads at the vertices', async () => {
+  // Every node of a 2 cm grid around the sheet: 138,000 nodes against 30,401 vertices.
+  const nodes = [154, 56, 16];
+  const count = nodes[0] * nodes[1] * nodes[2];
+  const field = (seed) => Float32Array.from({ length: 4 * count }, (_, i) => Math.sin(seed + 0.001 * i) + 0.1 * Math.cos(0.37 * i));
+  const scale = { origin: [-0.76, -0.56, -0.16], nodes, kept: Int32Array.from({ length: count }, (_, i) => i), whole: field(1), ahead: field(2) };
+  const result = wavySheet(true);
+  result.lookups = { ...result.lookups, definition: { count: 122, surfaceSteps: [0.02] }, scales: [scale] };
+  const { back, match } = await roundTrip(result);
+  const stored = back.lookups.scales[0];
+  assert(stored.readsAtVertices && !stored.kept, 'the scale came back as its nodes');
+  assert(JSON.stringify(stored.origin) === JSON.stringify(scale.origin), 'scale origin changed');
+  const expected = scaleReadsAt({ origin: scale.origin, nodes, step: 0.02 }, scale, result.mesh.positions);
+  for (let v = 0; v < match.length; v++) {
+    const read = stored.readsAtVertices.subarray(8 * v, 8 * v + 8);
+    assert(sameValues(read, expected.subarray(8 * match[v], 8 * match[v] + 8)), `vertex ${v} reads another vertex's values`);
+  }
 });
 
 Deno.test('loadResult decodes a bundled example in a worker to what unpackResult gives', async () => {

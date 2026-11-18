@@ -26,7 +26,7 @@
 
 import { addCellArrays, CFD_ARRAY, cellArrayNames, readSurface, writeVtp } from './vtp.js';
 import { boundsOf, checkSurface, measureCells, frontalArea } from './geometry.js';
-import { computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
+import { computeFeatures, describeColumns, featureLayout, kindsWithin, lookupsAtVertex } from './features.js';
 import { buildLookups } from './lookups.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
@@ -420,7 +420,7 @@ async function measure(surface, layout, grids, progress) {
   progress(0.5);
   const frontal = frontalArea(surface);
   progress(0.6);
-  const context = { layout, ...(await buildLookups(cells, surface.points, layout, grids)) };
+  const context = { layout, ...(await buildLookups(surface, cells, layout, grids)) };
   progress(0.8);
   const average = cellToPoint(surface, cells.areas);
   progress(0.95);
@@ -762,7 +762,7 @@ async function explain({ id, point, normal, analysis, model, lookups, vertex }) 
       context = car.context;
     } else {
       site = { at: 'vertex', index: vertex.index, position: Float32Array.from(vertex.position), normal: Float32Array.from(vertex.normal), cfd: vertex.cfd };
-      context = explainedLookups;
+      context = lookupsAtVertex(explainedLookups, vertex.index);
     }
     const features = new Float32Array(layout.count);
     computeFeatures(context, site.position, site.normal, 0, 1, features);

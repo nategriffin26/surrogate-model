@@ -5,19 +5,20 @@
 
 import { h, s } from '../dom.js';
 import { count, signed } from '../format.js';
-import { carName, pictureFrame } from './charts.js';
+import { countWord, pictureFrame, showCarName } from './charts.js';
+import { copied } from './copy.js';
 import { closeUp } from './drawings.js';
 import { trainingCar } from './training.js';
 
-/** The steps of the line, in order: what each is called, and the section that opens it up. */
+/** The steps of the line, in order, each named at `overview.steps.<id>`, and the section that opens it up. */
 export const STEPS = [
-	{ id: 'car', name: 'A new car', section: 'accuracy' },
-	{ id: 'cell', name: 'One cell', section: 'point' },
-	{ id: 'inputs', name: 'What it is told', section: 'inputs' },
-	{ id: 'networks', name: 'Five networks', section: 'networks' },
-	{ id: 'answer', name: 'Cp and spread', section: 'spread' },
-	{ id: 'field', name: 'Cp on every cell', section: 'accuracy' },
-	{ id: 'drag', name: 'Pressure drag', section: 'drag' },
+	{ id: 'car', section: 'accuracy' },
+	{ id: 'cell', section: 'point' },
+	{ id: 'inputs', section: 'inputs' },
+	{ id: 'networks', section: 'networks' },
+	{ id: 'answer', section: 'spread' },
+	{ id: 'field', section: 'accuracy' },
+	{ id: 'drag', section: 'drag' },
 ];
 
 /** The line in small, with the steps a section opens up filled in. */
@@ -72,30 +73,33 @@ function networksGlyph(networks) {
 export function createOverview({ card, groups, training }) {
 	const parts = Object.fromEntries(STEPS.map((step) => [step.id, h('div', { class: 'step-figure' })]));
 	const numbers = Object.fromEntries(STEPS.map((step) => [step.id, h('span', { class: 'step-number num' })]));
+	const networks = { networks: card.networks.length, networksWord: countWord(card.networks.length) };
 	const steps = STEPS.map((step) => h('a', { class: `step step-${step.id}`, href: `#model-${step.section}` },
-		parts[step.id], h('span', { class: 'step-name' }, step.name), numbers[step.id]));
+		parts[step.id], copied(h('span', { class: 'step-name' }), `overview.steps.${step.id}`, networks), numbers[step.id]));
 	const line = h('div', { class: 'overview-line' }, steps.flatMap((step, i) => (i ? [h('span', { class: 'step-arrow', 'aria-hidden': 'true' }), step] : [step])));
 
 	// The training cars the networks are fitted to.
 	const grid = h('div', { class: 'training-grid' });
 	const fitted = h('a', { class: 'overview-training', href: '#model-networks' },
 		grid,
-		h('span', { class: 'step-name' }, `${training.cars.length} training cars with CFD`),
-		h('span', { class: 'step-number num' }, `${count(card.samplesPerCar)} cells sampled from each`));
+		copied(h('span', { class: 'step-name' }), 'overview.training.name', { cars: training.cars.length }),
+		copied(h('span', { class: 'step-number num' }), 'overview.training.sampled', { cells: count(card.samplesPerCar) }));
 	const loopLabel = h('span', { class: 'loop-label num' });
 	const loop = h('div', { class: 'overview-loop' }, loopLabel);
 
 	// What the cell is told: a bar per group, as long as its count of inputs.
 	parts.inputs.append(
 		h('div', { class: 'input-bar' }, groups.map((group) => h('span', { class: 'input-part', style: `--group: ${group.color}; flex: ${group.columns.length}` }))),
-		h('div', { class: 'input-legend' }, groups.map((group) => h('span', { style: `--group: ${group.color}` }, h('i'), h('span', { class: 'num' }, group.columns.length), ` ${group.name.toLowerCase()}`))));
-	numbers.inputs.textContent = `${card.columns.length} numbers`;
+		h('div', { class: 'input-legend copy-block' }, groups.map((group) => h('span', { class: 'copy-block', style: `--group: ${group.color}` },
+			h('i'), copied(h('span'), `overview.legend.${group.words}`, { count: h('span', { class: 'num' }, group.columns.length) })))));
+	copied(numbers.inputs, 'overview.steps.inputs.number', { count: card.columns.length });
 	parts.networks.append(networksGlyph(card.networks));
 	numbers.networks.textContent = card.networks[0].layers.join('-');
 	const carFrame = pictureFrame('overview-car');
 	const fieldFrame = pictureFrame('overview-field');
 	parts.car.append(carFrame.el);
 	parts.field.append(fieldFrame.el);
+	copied(numbers.drag, 'overview.steps.drag.number');
 
 	const view = { case: null, point: null };
 	const overview = {
@@ -105,12 +109,11 @@ export function createOverview({ card, groups, training }) {
 			view.case = caseView;
 			const { result, pictures, maps } = caseView;
 			grid.replaceChildren(...training.cars.map((car) => trainingCar(car, maps.cp, 'solid')));
-			numbers.car.textContent = carName(result, card);
+			showCarName(numbers.car, result, card);
 			fieldFrame.show(pictures.fieldSide);
-			numbers.field.textContent = `${count(result.source.cells)} cells`;
-			loopLabel.textContent = `For each of ${count(result.source.cells)} cells`;
+			copied(numbers.field, 'overview.steps.field.number', { cells: count(result.source.cells) });
+			copied(loopLabel, 'overview.loop', { cells: count(result.source.cells) });
 			parts.drag.replaceChildren(h('span', { class: 'drag-value num' }, h('span', { class: 'symbol' }, 'C', h('sub', {}, 'D,p')), ` ${result.forces.cdP.toFixed(3)}`));
-			numbers.drag.textContent = 'sum over the cells';
 			overview.setPoint(view.point);
 		},
 		/** The point the page explains: what the engine said there, or why it could not. */
@@ -123,7 +126,7 @@ export function createOverview({ card, groups, training }) {
 			carFrame.show(pictures.claySide, h('i', { class: 'picture-point', style: `left: ${100 * u}%; top: ${100 * v}%` }));
 			parts.cell.replaceChildren(closeUp({ width: 96, explanation, cutter }));
 			parts.answer.replaceChildren(answerGlyph(explanation));
-			numbers.answer.textContent = `Cp ${signed(explanation.cp, 2)} · spread ${explanation.sigma.toFixed(2)}`;
+			copied(numbers.answer, 'overview.steps.answer.number', { cp: signed(explanation.cp, 2), spread: explanation.sigma.toFixed(2) });
 		},
 	};
 	return overview;

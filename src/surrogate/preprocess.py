@@ -65,7 +65,7 @@ def preprocess_case(
         normals=sampled_normals,
         cp=sampled_cp,
         features=features,
-        section_area_x=context.section_area_x,
+        slice_area=context.slice_area,
     )
 
     elapsed = time.perf_counter() - t0

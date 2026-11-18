@@ -39,8 +39,9 @@
 // turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
 // analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example. `grid-cpu` and
 // `grid-gpu` run the grid operations (`grid.js`, `grid-gpu.js`) on synthetic inputs (spec.json with
-// points, weights and field as float32) and write each result; `grid-gpu` needs a runtime with
-// WebGPU (Deno) and writes outcome.json { "gpu": false } where there is no adapter.
+// points, weights and field as float32) and write each result; `grid-gpu` spreads in blocks of
+// spec.sumsBlock nodes, as a car's finest grid is spread, and needs a runtime with WebGPU (Deno); it
+// writes outcome.json { "gpu": false } where there is no adapter.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -48,7 +49,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { readSurface, writeVtp } from '../web/engine/vtp.js';
 import { frontalArea, measureCells } from '../web/engine/geometry.js';
-import { computeFeatures, featureLayout } from '../web/engine/features.js';
+import { computeFeatures, featureLayout, lookupsAtVertex } from '../web/engine/features.js';
 import { buildLookups } from '../web/engine/lookups.js';
 import { ensembleStatistics, loadEnsemble, networkActivations, predictOnCpu } from '../web/engine/network.js';
 import { packResult, unpackResult } from '../web/engine/result.js';
@@ -164,7 +165,7 @@ if (mode === 'pick') {
   const surface = await readSurface(new File([readFileSync(path)], basename(path)));
   const cells = measureCells(surface);
   const layout = featureLayout(ensemble.features);
-  const context = { layout, ...(await buildLookups(cells, surface.points, layout, null)) };
+  const context = { layout, ...(await buildLookups(surface, cells, layout, null)) };
   const started = performance.now();
   const index = indexPolygons(surface, cells);
   const indexSeconds = (performance.now() - started) / 1000;
@@ -332,7 +333,9 @@ if (mode === 'grid-cpu' || mode === 'grid-gpu') {
   const gauss = gaussianWeights(spec.sigmaNodes, 3);
   const ahead = upstreamHalf(gauss);
   if (mode === 'grid-cpu') {
-    write('spread.f32', Float32Array.from(spreadOnGrid(grid, points, weights)));
+    const sums = new Float64Array(grid.nodes[0] * grid.nodes[1] * grid.nodes[2]);
+    spreadOnGrid(grid, points, weights, sums);
+    write('spread.f32', Float32Array.from(sums));
     for (const axis of [0, 1, 2]) write(`blur${axis}.f32`, correlateAlong(field, grid.nodes, axis, gauss));
     write('ahead.f32', correlateAlong(field, grid.nodes, 0, ahead));
     process.exit(0);
@@ -361,9 +364,14 @@ if (mode === 'grid-cpu' || mode === 'grid-gpu') {
     blur0: [buffer(nodes), nodes], blur1: [buffer(nodes), nodes], blur2: [buffer(nodes), nodes], ahead: [buffer(nodes), nodes],
   };
   const encoder = device.createCommandEncoder();
-  const sums = buffer(2 * nodes);
-  operations.spread(encoder, grid, { positions, weights: upload(weights), count, sums });
-  operations.sumsToField(encoder, { sums, field: outputs.spread[0], count: nodes });
+  const sums = buffer(2 * spec.sumsBlock);
+  const weightBuffer = upload(weights);
+  for (let first = 0; first < nodes; first += spec.sumsBlock) {
+    const length = Math.min(spec.sumsBlock, nodes - first);
+    encoder.clearBuffer(sums);
+    operations.spread(encoder, grid, { positions, weights: weightBuffer, count, sums, first, length });
+    operations.sumsToField(encoder, { sums, field: outputs.spread[0], first, length });
+  }
   const radius = (gauss.length - 1) / 2;
   for (const axis of [0, 1, 2]) operations.correlate(encoder, grid.nodes, axis, { weights: upload(gauss), radius, field: fieldBuffer, out: outputs[`blur${axis}`][0] });
   operations.correlate(encoder, grid.nodes, 0, { weights: upload(ahead), radius, field: fieldBuffer, out: outputs.ahead[0] });
@@ -408,7 +416,7 @@ if (mode === 'engine' || mode === 'features' || mode === 'features-gpu') {
     }
     grids = createGridOperations(await adapter.requestDevice());
   }
-  const context = { layout, ...(await buildLookups(cells, surface.points, layout, grids)) };
+  const context = { layout, ...(await buildLookups(surface, cells, layout, grids)) };
   outcome.gpu = Boolean(grids);
   const count = cells.areas.length;
   const features = new Float32Array(count * layout.count);
@@ -430,11 +438,26 @@ if (mode === 'engine' || mode === 'features' || mode === 'features-gpu') {
     write('explained_models.f32', cpModels);
     write('activations.f32', Float32Array.from(activations.flat().flatMap((layer) => Array.from(layer))));
 
-    const triangle = { positions: cells.centers.slice(0, 9), normals: cells.normals.slice(0, 9), indices: Uint32Array.of(0, 1, 2) };
-    const { json, block } = await packResult({ mesh: triangle, lookups: { definition: ensemble.features, ...context } });
+    // A bundled example of this car whose mesh's vertices are its polygon centres: `explain` at each
+    // vertex, given its polygon's own centre and normal, reads what the analysis read.
+    const corners = Uint32Array.from({ length: 3 * Math.ceil(count / 3) }, (_, i) => i % count);
+    const mesh = { positions: cells.centers, normals: cells.normals, indices: corners };
+    const { json, block } = await packResult({ mesh, lookups: { definition: ensemble.features, ...context } });
     const example = await unpackResult(JSON.parse(json), block.buffer);
+    /** The polygon whose centre vertex `v` of the example sits on, moved by the pack's rounding. */
+    const polygonOf = (v) => {
+      let best = -1, closest = Infinity;
+      for (let c = 0; c < count; c++) {
+        const distance = [0, 1, 2].reduce((sum, axis) => sum + (example.mesh.positions[3 * v + axis] - cells.centers[3 * c + axis]) ** 2, 0);
+        if (distance < closest) [best, closest] = [c, distance];
+      }
+      return best;
+    };
     const fromExample = new Float32Array(count * layout.count);
-    computeFeatures({ ...example.lookups, layout }, cells.centers, cells.normals, 0, count, fromExample);
+    for (let v = 0; v < count; v++) {
+      const c = polygonOf(v);
+      computeFeatures({ ...lookupsAtVertex(example.lookups, v), layout }, cells.centers, cells.normals, c, 1, fromExample.subarray(c * layout.count));
+    }
     write('features_from_example.f32', fromExample);
   }
 }

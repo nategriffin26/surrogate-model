@@ -226,7 +226,7 @@ class SurrogateEnsemble:
     ) -> dict[str, Any]:
         """Evaluate geometric coverage and ensemble spread against the 10-car domain.
 
-        Separates input-space extrapolation (vehicle dimensions & cross-section envelope S(x))
+        Separates input-space extrapolation (vehicle dimensions & slice-area envelope S(x))
         from epistemic disagreement across the 5 cross-validation fold models. `weights` are
         the cells' areas when `cp_std` covers every cell; omit them for an area-weighted sample.
         """
@@ -248,10 +248,10 @@ class SurrogateEnsemble:
                 max_norm_excursion = max(max_norm_excursion, exc)
                 out_of_range_dims.append({"feature": key, "value": round(val, 4), "min": lo, "max": hi, "side": "above"})
 
-        # Compare streamwise cross-sectional area curve S(x) against 10-car min/max band
-        s_curve = context.section_area_x
-        s_min = np.asarray(self.training_envelope["section_area_min"], dtype=np.float32)
-        s_max = np.asarray(self.training_envelope["section_area_max"], dtype=np.float32)
+        # Compare the streamwise slice-area curve S(x) against the 10-car min/max band
+        s_curve = context.slice_area
+        s_min = np.asarray(self.training_envelope["slice_area_min"], dtype=np.float32)
+        s_max = np.asarray(self.training_envelope["slice_area_max"], dtype=np.float32)
         active = (s_curve > 0.05) | (s_max > 0.05)
         if int(active.sum()) > 0:
             outside_band = (s_curve[active] < s_min[active] - 0.03) | (s_curve[active] > s_max[active] + 0.03)
@@ -269,32 +269,32 @@ class SurrogateEnsemble:
 
         reasons: list[str] = []
         if max_norm_excursion > 0.25 or len(out_of_range_dims) >= 3:
-            reasons.append(f"{len(out_of_range_dims)} vehicle dimension(s) outside 10-car training range")
+            reasons.append(f"{len(out_of_range_dims)} of length, width and height outside the training cars' range")
         if silhouette_out_frac > 0.25:
-            reasons.append(f"{silhouette_out_frac * 100:.0f}% of streamwise S(x) profile outside 10-car envelope")
+            reasons.append(f"{silhouette_out_frac * 100:.0f}% of the slice-area curve outside the training cars' band")
         if spread_ratio > 1.6:
-            reasons.append(f"Ensemble spread {spread_ratio:.2f}x above 10-car CV baseline")
+            reasons.append(f"spread {spread_ratio:.2f} times the cross-validation mean")
 
         if reasons:
-            status = "escalate"
-            recommendation = "Outside 10-car training coverage — run full CFD verification before design sign-off."
+            status = "outside"
+            summary = "outside the training cars"
         elif out_of_range_dims or silhouette_out_frac > 0.08 or spread_ratio > 1.25:
-            status = "caution"
+            status = "near"
             if out_of_range_dims:
                 names = ", ".join(d["feature"] for d in out_of_range_dims)
-                reasons.append(f"Near/outside 10-car range on: {names}")
+                reasons.append(f"outside the training cars' range in {names}")
             if silhouette_out_frac > 0.08:
-                reasons.append(f"{silhouette_out_frac * 100:.0f}% of S(x) stations outside 10-car band")
+                reasons.append(f"{silhouette_out_frac * 100:.0f}% of the slice-area curve outside the training cars' band")
             if spread_ratio > 1.25:
-                reasons.append(f"Moderate fold disagreement ({spread_ratio:.2f}x CV mean)")
-            recommendation = "Directional pressure trends usable for screening; confirm top candidates in CFD."
+                reasons.append(f"spread {spread_ratio:.2f} times the cross-validation mean")
+            summary = "at the edge of the training cars"
         else:
-            status = "pass"
-            recommendation = "Within 10-car geometric range and ensemble spread baseline — suitable for rapid screening."
+            status = "inside"
+            summary = "size, slice-area curve and spread within the training cars'"
 
         return {
             "status": status,
-            "recommendation": recommendation,
+            "summary": summary,
             "reasons": reasons,
             "out_of_range_dimensions": out_of_range_dims,
             "silhouette_outside_fraction": round(silhouette_out_frac, 4),

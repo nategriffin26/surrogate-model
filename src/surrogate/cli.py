@@ -66,12 +66,13 @@ DEFAULT_SAMPLES = 120_000
 DEFAULT_EPOCHS = 30
 DEFAULT_SEED = 42
 
-# Measured on an Apple M5 Pro (18 cores, 48 GB) with 99 inputs, 120,000 cells a car and 30 epochs: one car
+# Measured on an Apple M5 Pro (18 cores, 48 GB) with 107 inputs, 120,000 cells a car and 30 epochs: one car
 # preprocessed; a training run by (device, with the ablations), its networks being the five folds and the
-# twenty that fit the spread; the two examples written in Chrome.
+# twenty that fit the spread, and with the ablations also the learning curve's 55, whose CPU time is its
+# networks' count times one network's measured 58 s; the two examples written in Chrome.
 MEASURED_ON = "an Apple M5 Pro"
-PREPROCESS_SECONDS_PER_CAR = 21
-TRAIN_SECONDS = {("mps", True): 465, ("mps", False): 150, ("cpu", True): 2052, ("cpu", False): 1066}
+PREPROCESS_SECONDS_PER_CAR = 40
+TRAIN_SECONDS = {("mps", True): 957, ("mps", False): 150, ("cpu", True): 5242, ("cpu", False): 1066}
 EXAMPLES_SECONDS = 40
 
 
@@ -404,7 +405,7 @@ def print_prediction(result: InferenceResult, ensemble: SurrogateEnsemble) -> No
     lines = [
         ("Cells", f"{result.n_cells:,}, {result.total_area:.2f} m², frontal area {result.frontal_area:.3f} m²"),
         ("Size", ", ".join(sizes)),
-        ("Coverage", f"{coverage['status']}: {coverage['recommendation']}"),
+        ("Coverage", coverage["summary"]),
         *[("", reason) for reason in coverage["reasons"]],
         ("Drag Cd,p", force("cd_p")),
         ("Lift Cl,p", force("cl_p")),

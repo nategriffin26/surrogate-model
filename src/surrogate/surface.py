@@ -21,6 +21,8 @@ class SurfaceMesh:
     """
 
     points: np.ndarray        # (N_pts, 3) float32
+    polygon_offsets: np.ndarray  # (N_cells + 1,) int64: polygon i's corners are polygon_corners[offsets[i]:offsets[i + 1]]
+    polygon_corners: np.ndarray  # (N_corners,) int32 point numbers, in each polygon's order
     centers: np.ndarray       # (N_cells, 3) float32
     normals: np.ndarray       # (N_cells, 3) float32, guaranteed outward-pointing
     areas: np.ndarray         # (N_cells,) float64, polygon areas in m^2
@@ -115,6 +117,10 @@ def read_vtp_surface(path: str | Path, *, include_target: bool = True) -> Surfac
     mesh.field_data.clear()
 
     points = np.asarray(mesh.points, dtype=np.float32)
+    polygon_offsets = np.asarray(mesh.face_offsets, dtype=np.int64)
+    if len(polygon_offsets) != mesh.n_cells + 1:
+        raise ValueError(f"{vtp_path} holds cells that are not polygons (lines or points); a surface is polygons only")
+    polygon_corners = np.asarray(mesh.face_connectivity, dtype=np.int32)
     centers = np.asarray(mesh.cell_centers().points, dtype=np.float32)
     mesh_normals = mesh.compute_normals(
         cell_normals=True,
@@ -148,6 +154,8 @@ def read_vtp_surface(path: str | Path, *, include_target: bool = True) -> Surfac
 
     return SurfaceMesh(
         points=points,
+        polygon_offsets=polygon_offsets,
+        polygon_corners=polygon_corners,
         centers=centers,
         normals=normals,
         areas=areas,

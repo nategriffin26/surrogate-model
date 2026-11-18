@@ -2,10 +2,10 @@
  * The numbers the networks are told about a surface point, as `features.py` defines them, read from
  * a car's lookups (`lookups.js`): where the point is on the car and which way it faces; the surface
  * around the point at four scales, whole and split into the part ahead and the part behind; and
- * sections across the car at the point's station and ahead and behind it, each read for its area,
- * how far it reaches outboard of the point at the point's height, and how far it reaches above and
- * below the point at the point's distance from the centre plane. Nothing is folded across the centre
- * plane: a point is read on its own side.
+ * slices across the car at the point's station and ahead and behind it, each read for its area,
+ * how far it reaches outboard of the point within a centimetre of the point's height, and how far it
+ * reaches above and below the point at the point's distance from the centre plane. Nothing is folded
+ * across the centre plane: a point is read on its own side.
  *
  * Axes are the file's: x downstream, z up, and so (right-handed) +y toward the car's right as seen
  * from the driver's seat.
@@ -16,7 +16,7 @@
  * bins are chosen as in training and values agree to float32.
  */
 
-import { gaussianWeights, locate, upstreamHalf } from './grid.js';
+import { gaussianWeights, splineAround, upstreamHalf } from './grid.js';
 
 const f32 = Math.fround;
 
@@ -26,12 +26,12 @@ const f32 = Math.fround;
  * with (`surfaceReads`), the same for every scale.
  */
 const SURFACE_READS = {
-  meanNormal: [['Mean facing rearward', 'whole'], ['Mean facing +y', 'whole'], ['Mean facing up', 'whole']],
+  meanNormal: [['Mean facing rearward', 'whole'], ['Mean facing sideways', 'whole'], ['Mean facing up', 'whole']],
   amount: [['Surface density', 'whole']],
-  ownMinusMean: [['Bend, rearward', 'whole'], ['Bend, +y', 'whole'], ['Bend, up', 'whole']],
-  aheadNormal: [['Mean facing rearward, ahead', 'ahead'], ['Mean facing +y, ahead', 'ahead'], ['Mean facing up, ahead', 'ahead']],
+  ownMinusMean: [['Bend, rearward', 'whole'], ['Bend, sideways', 'whole'], ['Bend, up', 'whole']],
+  aheadNormal: [['Mean facing rearward, ahead', 'ahead'], ['Mean facing sideways, ahead', 'ahead'], ['Mean facing up, ahead', 'ahead']],
   aheadAmount: [['Surface density, ahead', 'ahead']],
-  behindNormal: [['Mean facing rearward, behind', 'behind'], ['Mean facing +y, behind', 'behind'], ['Mean facing up, behind', 'behind']],
+  behindNormal: [['Mean facing rearward, behind', 'behind'], ['Mean facing sideways, behind', 'behind'], ['Mean facing up, behind', 'behind']],
   behindAmount: [['Surface density, behind', 'behind']],
 };
 
@@ -39,10 +39,14 @@ const SURFACE_READS = {
  * @typedef {Object} FeatureDefinition  as `export_web.py` writes it
  * @property {number} count
  * @property {number} rasterStep
- * @property {number[]} domainX
+ * @property {number[]} domainXFromNose   the raster spans x − xmin over this range, xmin the nose (the
+ *   lowest polygon-centre x)
  * @property {number} domainYHalf      the raster spans y from the centre plane over [−domainYHalf, domainYHalf)
- * @property {number[]} domainZ
- * @property {number[]} sectionDx      the stations ahead of (negative) and behind the point's own
+ * @property {number[]} domainZFromGround the side view spans z − zmin over this range, zmin the lowest
+ *   polygon-centre z
+ * @property {number} heightStep       the side view's height bins, finer than the raster step
+ * @property {number} heightWindow     how far from a height the side view's reach at it looks
+ * @property {number[]} sliceDx        the stations ahead of (negative) and behind the point's own
  * @property {number[]} surfaceScales
  * @property {number[]} surfaceSteps
  * @property {number} surfaceSigma     the Gaussian's standard deviation, as a share of the scale
@@ -59,10 +63,12 @@ const SURFACE_READS = {
  * @property {number} flatPanel       the blurred area a flat panel through the point reads, on average over
  *   where it falls between nodes
  *
- * @typedef {FeatureDefinition & { h: number, x0: number, yHalf: number, z0: number, nx: number, ny: number,
- *   nz: number, scales: ScaleLayout[], surfaceColumns: number[] }} FeatureLayout
- *   The raster's origin (x0, −yHalf, z0) and step h in float32, as the raster is built, and its size
- *   (nx, ny, nz); each scale's grid; and which of a scale's fifteen values go to the model, in order.
+ * @typedef {FeatureDefinition & { h: number, x0: number, yHalf: number, z0: number, heightBin: number,
+ *   nx: number, ny: number, nh: number, heightReach: number, scales: ScaleLayout[], surfaceColumns: number[] }} FeatureLayout
+ *   The raster's origin in the car's frame (x0 from the nose, −yHalf from the centre plane, z0 from the
+ *   ground), step h and the side view's height bin in float32, as the raster is built; its size
+ *   (nx, ny) and the side view's height bins nh; `heightWindow` in height bins; each scale's grid; and
+ *   which of a scale's fifteen values go to the model, in order.
  */
 
 /**
@@ -71,24 +77,27 @@ const SURFACE_READS = {
  * @returns {FeatureLayout}
  */
 export function featureLayout(definition) {
-  const { rasterStep, domainX, domainYHalf, domainZ, surfaceSigma, gaussianTruncate } = definition;
+  const { rasterStep, domainXFromNose, domainYHalf, domainZFromGround, heightStep, heightWindow, surfaceSigma, gaussianTruncate } = definition;
   const layout = {
     ...definition,
     h: f32(rasterStep),
-    x0: f32(domainX[0]),
+    x0: f32(domainXFromNose[0]),
     yHalf: f32(domainYHalf),
-    z0: f32(domainZ[0]),
-    nx: Math.round((domainX[1] - domainX[0]) / rasterStep),
+    z0: f32(domainZFromGround[0]),
+    heightBin: f32(heightStep),
+    nx: Math.round((domainXFromNose[1] - domainXFromNose[0]) / rasterStep),
     ny: 2 * Math.round(domainYHalf / rasterStep),
-    nz: Math.round((domainZ[1] - domainZ[0]) / rasterStep),
+    nh: Math.round((domainZFromGround[1] - domainZFromGround[0]) / heightStep),
+    heightReach: Math.round(heightWindow / heightStep),
     scales: definition.surfaceScales.map((scale, s) => {
       const step = definition.surfaceSteps[s];
       const weights = gaussianWeights((surfaceSigma * scale) / step, gaussianTruncate);
       const radius = (weights.length - 1) / 2;
       // A flat panel lays step² of area per column of nodes. Across the panel the spread and the read
-      // each share it between the two nodes either side; averaged over where the panel falls between
-      // them, the node itself counts 2/3 and each neighbour 1/6.
-      const flatPanel = step * step * ((2.0 / 3.0) * weights[radius] + (1.0 / 3.0) * weights[radius + 1]);
+      // each share it among the three nodes around it; averaged over where the panel falls between
+      // nodes, the node itself counts 11/20, each neighbour 13/60 and each second neighbour 1/120 (the
+      // quintic B-spline at whole steps).
+      const flatPanel = step * step * ((11.0 / 20.0) * weights[radius] + (13.0 / 30.0) * weights[radius + 1] + (1.0 / 60.0) * weights[radius + 2]);
       return { scale, step, radius, weights, upstream: upstreamHalf(weights), flatPanel };
     }),
     surfaceColumns: surfaceColumns(definition.surfaceReads),
@@ -122,16 +131,16 @@ function surfaceColumns(reads) {
  * [dx, dy, dz] in metres along the file's axes (dx downstream, dy toward +y, dz up); and `along`, for
  * a distance in metres, the unit direction it runs from that place, so place + value × along is where
  * it measured to (a body surface, or for the distances from nose, tail, centre plane and lowest point
- * that plane), null for every other column. A section's reach outboard is measured away from the
+ * that plane), null for every other column. A slice's reach outboard is measured away from the
  * centre plane on the point's own side: its `along` is [0, 1, 0] for a point on the +y side and is
  * turned to [0, −1, 0] for a point on the −y side. A surface column also has `scale`, the size it is
  * named by, `sigma`, its Gaussian's standard deviation (both in metres), and `part`: the whole surface
- * about the point, the part ahead of it, or the part behind. A section column also has `station`,
- * its dx, and `read`: 'area', 'outboard', 'above' or 'below'.
+ * about the point, the part ahead of it, or the part behind. A slice column also has `station`, its
+ * dx, and `read`: 'area', 'outboard', 'above' or 'below'.
  * @param {FeatureDefinition} definition
  * @returns {import('./result.js').ModelColumn[]}
  */
-export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sectionDx }) {
+export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sliceDx }) {
   const columns = [];
   const add = (kind, group, name, { offset = [0, 0, 0], along = null, ...more } = {}) => {
     columns.push({ kind, group, name, unit: along ? 'm' : '', offset, along, ...more });
@@ -152,10 +161,10 @@ export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sec
   add('position', position, 'Distance from nose', { along: forward });
   add('position', position, 'Distance to tail', { along: rearward });
   // Signed, so a point at y below the centre plane reads a negative value and still reaches the plane.
-  add('position', position, 'y from centre plane', { along: towardMinusY });
+  add('position', position, 'Distance from the centre plane', { along: towardMinusY });
   add('position', position, 'Height above lowest point', { along: down });
   add('position', position, 'Facing rearward');
-  add('position', position, 'Facing +y');
+  add('position', position, 'Facing sideways');
   add('position', position, 'Facing up');
 
   for (const scale of surfaceScales) {
@@ -165,20 +174,20 @@ export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sec
     }
   }
 
-  const sections = 'Sections across the car';
-  for (const station of [0, ...sectionDx]) {
+  const slices = 'Slices across the car';
+  for (const station of [0, ...sliceDx]) {
     const place = where([station, 0, 0]);
     const at = { offset: [station, 0, 0], station };
-    add('section', sections, `Section area${place}`, { ...at, read: 'area', unit: 'm²' });
-    add('section', sections, `Reach outboard${place}`, { ...at, read: 'outboard', along: outboard });
-    add('section', sections, `Reach above${place}`, { ...at, read: 'above', along: up });
-    add('section', sections, `Reach below${place}`, { ...at, read: 'below', along: down });
+    add('slice', slices, `Slice area${place}`, { ...at, read: 'area', unit: 'm²' });
+    add('slice', slices, `Reach outboard${place}`, { ...at, read: 'outboard', along: outboard });
+    add('slice', slices, `Reach above${place}`, { ...at, read: 'above', along: up });
+    add('slice', slices, `Reach below${place}`, { ...at, read: 'below', along: down });
   }
   return columns;
 }
 
 /** Column kinds in the order the model view lists them. */
-const COLUMN_KINDS = ['position', 'surface', 'section'];
+const COLUMN_KINDS = ['position', 'surface', 'slice'];
 
 /**
  * The kinds of the columns inside [start, stop) ranges, in `COLUMN_KINDS` order: what a model given
@@ -197,7 +206,11 @@ export function kindsWithin(columns, ranges) {
  *   A car's lookups with the layout of the definition they were built for.
  */
 
-const CUBE = new Float64Array(6);
+const SPLINE = new Float64Array(12);
+/** Where a point falls among a raster's bin centres, per axis: [bin, fraction] for the station, height and row. */
+const STATION = new Float64Array(2);
+const HEIGHT = new Float64Array(2);
+const ROW = new Float64Array(2);
 const WHOLE = new Float64Array(4);
 const AHEAD = new Float64Array(4);
 /** A scale's fifteen values at a point, in `SURFACE_READS` order. */
@@ -212,12 +225,11 @@ const SURFACE = new Float64Array(15);
  * @param {Float32Array} out       (count, stride)
  */
 export function computeFeatures(context, positions, normals, first, count, out, stride = context.layout.count) {
-  const { layout, yOut, zTop, zBottom, sectionArea, scales } = context;
-  const { rasterStep, domainX, domainYHalf, domainZ, nx, ny, nz, sectionDx, surfaceColumns: chosen } = layout;
+  const { layout, yOut, zTop, zBottom, sliceArea, scales } = context;
+  const { rasterStep, domainXFromNose, domainYHalf, domainZFromGround, heightStep, nx, ny, nh, sliceDx, surfaceColumns: chosen } = layout;
   const [xmin, xmax, , , zmin] = context.bounds;
   const yCenter = context.yCenter;
   const scaleGrids = scales.map(({ origin, nodes }, s) => ({ origin, nodes, step: layout.scales[s].step }));
-  const bin = (value, low, size) => clamp(Math.trunc((value - low) / rasterStep), size);
 
   for (let p = 0; p < count; p++) {
     const q = 3 * (first + p);
@@ -264,48 +276,106 @@ export function computeFeatures(context, positions, normals, first, count, out, 
       for (const column of chosen) out[k++] = SURFACE[column];
     }
 
-    // Sections across the car at the point's station and at each of `sectionDx`: the area, how far the
-    // body reaches outboard of the point on its own side at its height, and how far above and below the
-    // point at its distance from the centre plane. Bins are found in float64, as the reference finds them
-    // for a point it asks about; a station beyond the raster reads its edge.
-    const side = sy >= 0 ? nx : 0;
+    // Slices across the car at the point's station and at each of `sliceDx`: the area, how far the
+    // body reaches outboard of the point on its own side within `heightWindow` of its height, and how
+    // far above and below the point at its distance from the centre plane. Each is read between bin
+    // centres, so that it moves smoothly with the point instead of stepping where the point crosses a
+    // bin edge, which drew contours along sloping panels; a bin with no body takes part with its empty
+    // value. Stations and heights are measured from the nose and the ground, as the raster is binned,
+    // so moving the whole car moves nothing it reads. In float64, as the reference reads them.
+    const fromNose = sx - xmin;
+    const side = sy >= 0 ? nx * nh : 0;
     const fromCentre = Math.abs(sy);
-    const height = bin(sz, domainZ[0], nz);
-    const row = bin(sy, -domainYHalf, ny);
-    for (let s = -1; s < sectionDx.length; s++) {
-      const i = bin(s < 0 ? sx : sx + sectionDx[s], domainX[0], nx);
-      out[k++] = sectionArea[i];
-      out[k++] = yOut[(side + i) * nz + height] - fromCentre;
-      out[k++] = zTop[i * ny + row] - sz;
-      out[k++] = sz - zBottom[i * ny + row];
+    betweenBins(HEIGHT, sz - zmin, domainZFromGround[0], heightStep, nh);
+    betweenBins(ROW, sy, -domainYHalf, rasterStep, ny);
+    for (let s = -1; s < sliceDx.length; s++) {
+      betweenBins(STATION, s < 0 ? fromNose : fromNose + sliceDx[s], domainXFromNose[0], rasterStep, nx);
+      const i = STATION[0], f = STATION[1];
+      out[k++] = (1.0 - f) * sliceArea[i] + f * sliceArea[i + 1];
+      out[k++] = bilinear(yOut, side, nh, STATION, HEIGHT) - fromCentre;
+      out[k++] = bilinear(zTop, 0, ny, STATION, ROW) - sz;
+      out[k++] = sz - bilinear(zBottom, 0, ny, STATION, ROW);
     }
   }
 }
 
-function clamp(index, size) {
-  return index < 0 ? 0 : index >= size ? size - 1 : index;
+/**
+ * Where `q` falls among the centres lo + (i + ½) step of `n` bins along one axis, into `at` as the
+ * bin whose centre is at or below it and the fraction of the way to the next centre. Beyond the outer
+ * centres, the outer bin's value.
+ */
+function betweenBins(at, q, lo, step, n) {
+  const t = (q - lo) / step - 0.5;
+  const i = Math.min(Math.max(Math.floor(t), 0), n - 2);
+  at[0] = i;
+  at[1] = Math.min(Math.max(t - i, 0.0), 1.0);
+}
+
+/** A raster of rows of `columns` bins, starting at `start` in `field`, read between its bin centres. */
+function bilinear(field, start, columns, along, across) {
+  const fi = along[1], fj = across[1];
+  const a = start + along[0] * columns + across[0], b = a + columns;
+  return (1.0 - fi) * ((1.0 - fj) * field[a] + fj * field[a + 1]) + fi * ((1.0 - fj) * field[b] + fj * field[b + 1]);
 }
 
 /**
- * A scale's whole and ahead fields at (x, y, z) into `WHOLE` and `AHEAD`: trilinear over the eight
- * nodes around the point, each found among the kept nodes, summed corner by corner as the reference sums.
+ * A scale's whole and ahead fields at each of `positions`, eight floats a point (whole, then ahead),
+ * as `computeFeatures` reads them: what a bundled example keeps of a scale whose kept nodes outnumber
+ * its mesh's vertices (`packResult`).
+ * @param {{ origin: number[], nodes: number[], step: number }} grid
+ * @param {import('./lookups.js').ScaleLookup} lookup
+ * @param {Float32Array} positions (P, 3)
+ * @returns {Float32Array} (P, 8)
  */
-function readScale(grid, { kept, whole, ahead }, x, y, z) {
+export function scaleReadsAt(grid, lookup, positions) {
+  const reads = new Float32Array((8 * positions.length) / 3);
+  for (let p = 0; p < positions.length / 3; p++) {
+    readScale(grid, lookup, positions[3 * p], positions[3 * p + 1], positions[3 * p + 2]);
+    reads.set(WHOLE, 8 * p);
+    reads.set(AHEAD, 8 * p + 4);
+  }
+  return reads;
+}
+
+/**
+ * A bundled example's lookups as `computeFeatures` takes them at vertex `vertex` of its mesh: each
+ * scale stored as its reads at the vertices hands over that vertex's read.
+ * @param {import('./lookups.js').SurfaceLookups} lookups
+ * @param {number} vertex
+ */
+export function lookupsAtVertex(lookups, vertex) {
+  const at = 8 * vertex;
+  const scales = lookups.scales.map((scale) => (scale.readsAtVertices ? { ...scale, read: scale.readsAtVertices.subarray(at, at + 8) } : scale));
+  return { ...lookups, scales };
+}
+
+/**
+ * A scale's whole and ahead fields at (x, y, z) into `WHOLE` and `AHEAD`: quadratic B-spline weights
+ * over the 27 nodes around the point, each found among the kept nodes, summed node by node in the
+ * reference's order. A scale handed over as its stored `read` at the one point asked about (a bundled
+ * example's vertex, in `explain`) gives that read.
+ */
+function readScale(grid, { kept, whole, ahead, read }, x, y, z) {
+  if (read) {
+    for (let c = 0; c < 4; c++) {
+      WHOLE[c] = read[c];
+      AHEAD[c] = read[4 + c];
+    }
+    return;
+  }
   const [, ny, nz] = grid.nodes;
-  locate(CUBE, grid, x, y, z);
-  const ix = CUBE[0], fx = CUBE[1], iy = CUBE[2], fy = CUBE[3], iz = CUBE[4], fz = CUBE[5];
+  splineAround(SPLINE, grid, x, y, z);
   WHOLE.fill(0);
   AHEAD.fill(0);
-  for (let dx = 0; dx < 2; dx++) {
-    const wx = dx ? fx : 1 - fx;
-    for (let dy = 0; dy < 2; dy++) {
-      const wxy = wx * (dy ? fy : 1 - fy);
-      // The two nodes along z are neighbours in the kept list, as they are in the grid.
-      const node = ((ix + dx) * ny + iy + dy) * nz + iz;
+  for (let dx = 0; dx < 3; dx++) {
+    for (let dy = 0; dy < 3; dy++) {
+      const wxy = SPLINE[3 + dx] * SPLINE[6 + dy];
+      // The three nodes along z are neighbours in the kept list, as they are in the grid.
+      const node = ((SPLINE[0] + dx - 1) * ny + SPLINE[1] + dy - 1) * nz + SPLINE[2] - 1;
       const slot = keptSlot(kept, node, x, y, z);
-      if (kept[slot + 1] !== node + 1) throw notKept(x, y, z);
-      for (let dz = 0; dz < 2; dz++) {
-        const w = wxy * (dz ? fz : 1 - fz);
+      if (kept[slot + 2] !== node + 2) throw notKept(x, y, z);
+      for (let dz = 0; dz < 3; dz++) {
+        const w = wxy * SPLINE[9 + dz];
         const row = 4 * (slot + dz);
         for (let c = 0; c < 4; c++) {
           WHOLE[c] += w * whole[row + c];

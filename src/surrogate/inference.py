@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pyvista as pv
 
-from surrogate.features import DOMAIN_X, RASTER_STEP, SurfaceContext
+from surrogate.features import DOMAIN_X_FROM_NOSE, RASTER_STEP, SurfaceContext
 from surrogate.metrics import regional_r2_breakdown, surface_field_metrics
 from surrogate.model import SurrogateEnsemble
 from surrogate.surface import compute_pressure_forces, read_vtp_surface
@@ -38,13 +38,13 @@ class InferenceResult:
     ground_truth_forces: dict[str, float] | None
     ground_truth_metrics: dict[str, Any] | None
     coverage: dict[str, Any]
-    slices: dict[str, Any]
+    sections: dict[str, Any]
     drag_buildup: list[dict[str, float]]
-    section_profile: list[dict[str, float]]
+    slice_area_profile: list[dict[str, float]]
     timings_sec: dict[str, float]
 
 
-def _extract_spanwise_slices(
+def _extract_spanwise_sections(
     centers: np.ndarray,
     normals: np.ndarray,
     areas: np.ndarray,
@@ -168,7 +168,7 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
             "regions": regional_r2_breakdown(surf.cp, pred.cp_mean, surf.centers, surf.normals, surf.areas),
         }
 
-    slices = _extract_spanwise_slices(
+    sections = _extract_spanwise_sections(
         surf.centers, surf.normals, surf.areas, pred.cp_mean, pred.cp_std, surf.cp, surf.bounds
     )
     drag_buildup = _compute_drag_buildup(
@@ -181,15 +181,15 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
         bounds=surf.bounds,
     )
 
-    # Cross-sectional area S(x) along the vehicle length vs. 10-car training band
-    xs_grid = DOMAIN_X[0] + RASTER_STEP * np.arange(context.nx, dtype=np.float32)
+    # The area of the car's slice across x, S(x), along the car against the 10-car training band
+    xs_grid = surf.bounds[0] + DOMAIN_X_FROM_NOSE[0] + RASTER_STEP * np.arange(context.nx, dtype=np.float32)
     in_body = (xs_grid >= surf.bounds[0] - 0.05) & (xs_grid <= surf.bounds[1] + 0.05)
-    s_min_env = np.asarray(ensemble.training_envelope["section_area_min"], dtype=np.float32)
-    s_max_env = np.asarray(ensemble.training_envelope["section_area_max"], dtype=np.float32)
-    section_profile = [
+    s_min_env = np.asarray(ensemble.training_envelope["slice_area_min"], dtype=np.float32)
+    s_max_env = np.asarray(ensemble.training_envelope["slice_area_max"], dtype=np.float32)
+    slice_area_profile = [
         {
             "x": round(float(xs_grid[i]), 3),
-            "area": round(float(context.section_area_x[i]), 4),
+            "area": round(float(context.slice_area[i]), 4),
             "train_min": round(float(s_min_env[i]), 4),
             "train_max": round(float(s_max_env[i]), 4),
         }
@@ -210,9 +210,9 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
         ground_truth_forces={k: round(v, 5) for k, v in gt_forces.items()} if gt_forces else None,
         ground_truth_metrics=gt_metrics,
         coverage=coverage,
-        slices=slices,
+        sections=sections,
         drag_buildup=drag_buildup,
-        section_profile=section_profile,
+        slice_area_profile=slice_area_profile,
         timings_sec={
             "read": round(t_read, 2),
             "context": round(t_context, 2),
