@@ -6,7 +6,7 @@
 import { h } from '../dom.js';
 import { signed } from '../format.js';
 import { Viewer } from '../../viewer/viewer.js';
-import { section, shade } from './charts.js';
+import { colorBar, section, shade } from './charts.js';
 import { drawGroup } from './drawings.js';
 import { locator } from './overview.js';
 import { Stencil } from './stencil.js';
@@ -33,6 +33,8 @@ export function createInputs({ card, groups, ask }) {
 	viewer.controls.enablePan = false;
 	const stencil = new Stencil(viewer);
 	const answer = h('div', { class: 'point-answer' });
+	const fieldKey = h('div', { class: 'field-key', hidden: true });
+	carHost.append(fieldKey);
 	const state = { group: groups[0], network: 0, case: null, point: null, width: DRAWING };
 
 	const rows = groups.map((group) => {
@@ -61,7 +63,7 @@ export function createInputs({ card, groups, ask }) {
 		return { group, el, drawings, values };
 	});
 	const list = h('div', { class: 'group-list', role: 'radiogroup', 'aria-label': 'Groups of inputs' },
-		h('div', { class: 'group-list-head' }, h('span'), h('span', { class: 'step-head' }, 'Accuracy as each group is added, R² on held-out cars')),
+		h('div', { class: 'group-list-head' }, h('span'), h('span', { class: 'step-head' }, 'Cross-validated R² as each group is added')),
 		rows.map((row) => row.el));
 
 	const el = section('inputs', 'What a point is told', null,
@@ -73,7 +75,18 @@ export function createInputs({ card, groups, ask }) {
 	function choose(group) {
 		state.group = group;
 		for (const row of rows) row.el.setAttribute('aria-checked', String(row.group === group));
+		showField();
 		drawMarks();
+	}
+
+	/** The car in clay, or coloured by the potential flow's pressure while that group is chosen. */
+	function showField() {
+		const c = state.case;
+		const flow = c?.flow && state.group.id === 'flow' ? c.flow : null;
+		if (c?.flow) c.surface.working.setFields({ cp: flow ? flow.pressure : c.result.mesh.cp });
+		viewer.setPanes([flow ? { field: 'cp', map: flow.map } : { field: 'none', map: null }]);
+		fieldKey.hidden = !flow;
+		if (flow) fieldKey.replaceChildren(colorBar(flow.map, 'Cp of the ideal flow'));
 	}
 
 	function drawMarks() {
@@ -95,7 +108,7 @@ export function createInputs({ card, groups, ask }) {
 			const own = marks.filter((m) => row.group.kinds.includes(m.layer));
 			row.drawings.replaceChildren(...drawGroup(row.group, {
 				width: state.width, explanation, marks: own, outlines, cutter, columns: card.columns,
-				bounds: result.geometry.bounds, yCenter: result.lookups.yCenter,
+				bounds: result.geometry.bounds, yCenter: result.lookups.yCenter, flow: state.case.flow,
 			}));
 			row.group.columns.forEach((column, i) => (row.values.children[i].style.background = shade(read[column], 1.5)));
 		}
@@ -190,6 +203,7 @@ export function createInputs({ card, groups, ask }) {
 		stencil,
 		setCase(caseView) {
 			state.case = caseView;
+			showField();
 			drawRows();
 		},
 		setPoint(point) {

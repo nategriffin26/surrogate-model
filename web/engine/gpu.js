@@ -130,6 +130,7 @@ fn last(@builtin(global_invocation_id) id: vec3u) {
  * @property {(features: Float32Array, count: number, out: Float32Array) => Promise<void>} predict
  *   Each network's Cp at `count` points from their features (count, stride), into `out` (networks, count).
  * @property {boolean} lost  the browser took the device away; new networks are needed to go on
+ * @property {GPUDevice} device  the device they run on, which builds the car's lookups too
  */
 
 /**
@@ -147,7 +148,11 @@ export async function createGpuNetworks(ensemble) {
   const networks = ensemble.folds.length;
   // A chunk's activations stay within 64 MiB, inside WebGPU's default binding limit.
   const chunk = Math.max(TILE, Math.floor((64 << 20) / (4 * Math.max(width, stride)) / TILE) * TILE);
-  const device = await adapter.requestDevice();
+  // The car's lookups (`lookups.js`) are built on this device too, from buffers holding every polygon
+  // centre and file point, 106 MB each on a DrivAerML car: past WebGPU's default binding limit for a
+  // larger file, so the device takes the most the adapter allows.
+  const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
+  const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize, maxStorageBufferBindingSize } });
   // The browser can reset the GPU under it (a driver reset, its graphics process restarting); the
   // device is then gone for good and the engine makes a new one for the next file.
   let lost = false;
@@ -267,6 +272,7 @@ export async function createGpuNetworks(ensemble) {
 
   const info = adapter.info;
   return {
+    device,
     name: info.description || vendorName(info.vendor),
     stride,
     predict,

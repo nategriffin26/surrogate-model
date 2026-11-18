@@ -4,6 +4,7 @@
 //   bun tests/web_engine_outputs.mjs parse    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs engine   <surface.vtp> <out dir> <model dir>
 //   bun tests/web_engine_outputs.mjs features <surface.vtp> <out dir> <feature definition.json>
+//   deno run --allow-read --allow-write tests/web_engine_outputs.mjs features-gpu <surface.vtp> <out dir> <feature definition.json>
 //   bun tests/web_engine_outputs.mjs sequence <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs analysis <surface.vtp> <out dir>
@@ -13,18 +14,23 @@
 //   bun tests/web_engine_outputs.mjs write    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs reference <surface.vtp> <out dir> <cfd.vtp>,<remeshed cfd.vtp>,<bare.vtp>,<other car.vtp>
 //   bun tests/web_engine_outputs.mjs example  <example base>  <out dir>
+//   bun tests/web_engine_outputs.mjs grid-cpu <inputs dir>    <out dir>
+//   deno run --allow-read --allow-write tests/web_engine_outputs.mjs grid-gpu <inputs dir> <out dir>
 //
 // `parse` writes the parsed surface and its frontal area; `engine` adds the polygon geometry, the
 // features at every polygon centre, each network's Cp there, and the features again from the lookups
 // as an example pack stores and reads them back; `features` writes the features of the given
-// definition at every polygon centre. A file the reader rejects gives outcome.json { "error": message }
+// definition at every polygon centre, from lookups built on the CPU, and `features-gpu` from lookups
+// built on the GPU (it needs a runtime with WebGPU, Deno, and writes outcome.json { "gpu": false }
+// where there is no adapter). A file the reader rejects gives outcome.json { "error": message }
 // and nothing else.
 // `sequence` runs the whole engine (`createEngine`, with `web/model`) on the file twice, asking for
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
 // `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
 // predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
-// forces, the `exact` numbers, and what `polygonAt` and `explain` give at points just outside two
-// dozen polygons. `pick` times `polygonAt`'s lookup at points outside two hundred polygons, the
+// forces, the `exact` numbers, what `polygonAt` and `explain` give at points just outside two
+// dozen polygons, and the result mesh with what `flowOnMesh` gives at its vertices. `pick` times
+// `polygonAt`'s lookup at points outside two hundred polygons, the
 // networks asked at each on demand, without the rest of the engine. `stretch` stretches the car
 // lengthwise by `factor` and analyses it from arrays (`analyzeSurface`), writing what `analysis` does
 // and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
@@ -32,7 +38,12 @@
 // anew with `writeVtp`, with cell and point arrays of several types and widths. `reference` analyses
 // `cfd.vtp` alone, then the surface, attaches a reference to it from each of the four other files in
 // turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
-// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
+// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example, and `flowOnMesh` for
+// it. `grid-cpu` and
+// `grid-gpu` run the grid operations (`grid.js`, `grid-gpu.js`) on synthetic inputs (spec.json with
+// sources, points, weights, normals, areas, densities and field as float32) and write each result;
+// `grid-gpu` needs a runtime with WebGPU (Deno) and writes outcome.json { "gpu": false } where there
+// is no adapter.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -40,11 +51,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { readSurface, writeVtp } from '../web/engine/vtp.js';
 import { frontalArea, measureCells } from '../web/engine/geometry.js';
-import { buildContext, computeFeatures, featureLayout } from '../web/engine/features.js';
+import { computeFeatures, featureLayout } from '../web/engine/features.js';
+import { buildLookups } from '../web/engine/lookups.js';
 import { ensembleStatistics, loadEnsemble, networkActivations, predictOnCpu } from '../web/engine/network.js';
 import { packResult, unpackResult } from '../web/engine/result.js';
 import { createEngine } from '../web/engine/engine.js';
 import { describePolygon, indexPolygons, polygonAt } from '../web/engine/polygon-lookup.js';
+import { correlateAlong, gaussianWeights, potential, potentialSpectrum, readGradient, spreadOnGrid, upstreamHalf } from '../web/engine/grid.js';
+import { createGridOperations } from '../web/engine/grid-gpu.js';
 
 const [mode, path, outDir, modelSource] = process.argv.slice(2);
 const write = (name, array) => writeFileSync(join(outDir, name), new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
@@ -75,7 +89,9 @@ if (mode === 'example') {
   const normal = Array.from(example.mesh.normals.subarray(3 * v, 3 * v + 3));
   const { at, index, cfd } = await engine.explain(example, point, normal);
   const polygon = await engine.polygonAt(example, point, normal);
-  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ explained: { at, index, cfd }, vertexCfd: example.mesh.cfd[index], polygon }));
+  const { induced, speedSquared } = await engine.flowOnMesh(example);
+  const flow = { vertices: speedSquared.length, inducedValues: induced.length, finite: [...induced, ...speedSquared].every(Number.isFinite) };
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ explained: { at, index, cfd }, vertexCfd: example.mesh.cfd[index], polygon, flow }));
   process.exit(0);
 }
 
@@ -137,6 +153,11 @@ if (mode === 'analysis') {
   const numbers = await everyPolygon;
   const late = await ask(engine.polygonAt);
   const explained = await ask(engine.explain);
+  const { induced, speedSquared } = await engine.flowOnMesh(result);
+  write('mesh_positions.f32', result.mesh.positions);
+  write('mesh_normals.f32', result.mesh.normals);
+  write('flow_induced.f32', induced);
+  write('flow_speed_squared.f32', speedSquared);
   writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
     geometry: result.geometry,
     sampled: { forces: result.forces },
@@ -152,7 +173,8 @@ if (mode === 'pick') {
   const ensemble = await loadEnsemble(pathToFileURL(`${modelSource}/`));
   const surface = await readSurface(new File([readFileSync(path)], basename(path)));
   const cells = measureCells(surface);
-  const context = buildContext(cells, featureLayout(ensemble.features));
+  const layout = featureLayout(ensemble.features);
+  const context = { layout, ...(await buildLookups(cells, surface.points, layout, null)) };
   const started = performance.now();
   const index = indexPolygons(surface, cells);
   const indexSeconds = (performance.now() - started) / 1000;
@@ -310,6 +332,78 @@ if (mode === 'write') {
   process.exit(0);
 }
 
+if (mode === 'grid-cpu' || mode === 'grid-gpu') {
+  // `path` is a directory of synthetic inputs: spec.json, and as float32 sources on the grid, points
+  // with weights, normals, areas and source densities, and a field on the grid.
+  const spec = JSON.parse(readFileSync(join(path, 'spec.json'), 'utf8'));
+  const input = (name) => new Float32Array(readFileSync(join(path, `${name}.f32`)).buffer.slice(0));
+  const [sources, points, weights, normals, areas, densities, field] = ['sources', 'points', 'weights', 'normals', 'areas', 'densities', 'field'].map(input);
+  const grid = { origin: spec.origin, step: spec.step, nodes: spec.nodes };
+  const gauss = gaussianWeights(spec.sigmaNodes, 3);
+  const ahead = upstreamHalf(gauss);
+  if (mode === 'grid-cpu') {
+    const spectrum = potentialSpectrum(grid.nodes, grid.step, spec.cubeMeanInverseDistance);
+    write('spectrum.f32', spectrum);
+    write('potential.f32', potential(grid.nodes, spectrum, sources));
+    write('spread.f32', Float32Array.from(spreadOnGrid(grid, points, weights)));
+    write('gradient.f32', readGradient(grid, field, points));
+    for (const axis of [0, 1, 2]) write(`blur${axis}.f32`, correlateAlong(field, grid.nodes, axis, gauss));
+    write('ahead.f32', correlateAlong(field, grid.nodes, 0, ahead));
+    process.exit(0);
+  }
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) {
+    writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ gpu: false }));
+    process.exit(0);
+  }
+  const device = await adapter.requestDevice();
+  device.pushErrorScope('validation');
+  const operations = createGridOperations(device);
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+  const buffer = (floats) => device.createBuffer({ size: 4 * floats, usage });
+  const upload = (array) => {
+    const created = buffer(array.length);
+    device.queue.writeBuffer(created, 0, Float32Array.from(array));
+    return created;
+  };
+  const nodes = grid.nodes[0] * grid.nodes[1] * grid.nodes[2];
+  const count = weights.length;
+  const positions = upload(points);
+  const fieldBuffer = upload(field);
+  const outputs = {
+    potential: [buffer(nodes), nodes], spread: [buffer(nodes), nodes], wall: [upload(densities), count],
+    blur0: [buffer(nodes), nodes], blur1: [buffer(nodes), nodes], blur2: [buffer(nodes), nodes], ahead: [buffer(nodes), nodes],
+  };
+  const encoder = device.createCommandEncoder();
+  const flow = operations.potential(grid.nodes, grid.step, spec.cubeMeanInverseDistance);
+  flow.encode(encoder, upload(sources), outputs.potential[0]);
+  const sums = buffer(2 * nodes);
+  operations.spread(encoder, grid, { positions, weights: upload(weights), count, sums });
+  operations.sumsToField(encoder, { sums, field: outputs.spread[0], count: nodes });
+  operations.wall(encoder, grid, {
+    positions, normals: upload(normals), areas: upload(areas), count, potential: fieldBuffer,
+    densities: outputs.wall[0], strengths: buffer(count), relaxation: 0.5,
+  });
+  const radius = (gauss.length - 1) / 2;
+  for (const axis of [0, 1, 2]) operations.correlate(encoder, grid.nodes, axis, { weights: upload(gauss), radius, field: fieldBuffer, out: outputs[`blur${axis}`][0] });
+  operations.correlate(encoder, grid.nodes, 0, { weights: upload(ahead), radius, field: fieldBuffer, out: outputs.ahead[0] });
+  device.queue.submit([encoder.finish()]);
+  const [a, b, c] = grid.nodes.map((n) => n + 1);
+  outputs.spectrum = [flow.kernel, a * b * c];
+  for (const [name, [source, floats]] of Object.entries(outputs)) {
+    const staging = device.createBuffer({ size: 4 * floats, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const copy = device.createCommandEncoder();
+    copy.copyBufferToBuffer(source, 0, staging, 0, 4 * floats);
+    device.queue.submit([copy.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    write(`${name}.f32`, new Float32Array(staging.getMappedRange()).slice());
+  }
+  const invalid = await device.popErrorScope();
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ gpu: true, error: invalid?.message ?? null }));
+  device.destroy();
+  process.exit(0);
+}
+
 let surface;
 try {
   surface = await readSurface(new File([readFileSync(path)], basename(path)));
@@ -323,11 +417,21 @@ write('offsets.u32', surface.offsets);
 if (surface.cfd) write('cfd.f32', surface.cfd);
 
 let outcome = { cells: surface.offsets.length - 1, hasCfd: Boolean(surface.cfd), frontalArea: frontalArea(surface) };
-if (mode === 'engine' || mode === 'features') {
+if (mode === 'engine' || mode === 'features' || mode === 'features-gpu') {
   const ensemble = mode === 'engine' ? await loadEnsemble(pathToFileURL(`${modelSource}/`)) : null;
   const layout = featureLayout(ensemble ? ensemble.features : JSON.parse(readFileSync(modelSource, 'utf8')));
   const cells = measureCells(surface);
-  const context = buildContext(cells, layout);
+  let grids = null;
+  if (mode === 'features-gpu') {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (!adapter) {
+      writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ gpu: false }));
+      process.exit(0);
+    }
+    grids = createGridOperations(await adapter.requestDevice());
+  }
+  const context = { layout, ...(await buildLookups(cells, surface.points, layout, grids)) };
+  outcome.gpu = Boolean(grids);
   const count = cells.areas.length;
   const features = new Float32Array(count * layout.count);
   computeFeatures(context, cells.centers, cells.normals, 0, count, features);

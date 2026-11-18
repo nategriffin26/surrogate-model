@@ -79,10 +79,10 @@
  * @property {Float32Array} sigma         (C) spread σ(Cp)
  * @property {Float32Array | null} cfd    (C) the reference field, when there is one
  *
- * @typedef {Omit<import('./features.js').SurfaceContext, 'layout'> & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
- *   The whole-car lookups the features read (`SurfaceContext` in `features.js`, a few MB), built from
- *   every polygon of the file, with the feature definition they were built for. They let `explain`
- *   answer for a result without its file.
+ * @typedef {import('./lookups.js').SurfaceLookups & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
+ *   The whole-car lookups the features read (`lookups.js`, about 15 MB on a DrivAerML car), built
+ *   from every polygon of the file, with the feature definition they were built for. They let
+ *   `explain` and `flowOnMesh` answer for a result without its file.
  *
  * @typedef {Object} Coverage  The car measured against the training cars. Facts only.
  * @property {{ name: 'length' | 'width' | 'height', value: number, trainMin: number, trainMax: number }[]} dimensions
@@ -125,9 +125,9 @@
  *   mesh (`workingCells`): no events, nothing drawn first, nothing held afterwards. It waits its turn
  *   behind running analyses like they do, but leaves the car analysed last held. The arrays move to
  *   the worker as for `analyzeSurface`. Aborting `signal` abandons it.
- *   Give it a working mesh or a variant of one, nothing coarser: the lookups' 2 cm rasters are filled
- *   from polygon centres, so a coarser mesh leaves some of their columns empty and the prediction
- *   degrades.
+ *   Give it a working mesh or a variant of one, nothing coarser: the lookups are filled from polygon
+ *   centres (the outline's 2 cm raster, the surface's 1.5 cm grid), so a coarser mesh leaves gaps in
+ *   them and the prediction degrades.
  * @property {(result: Result) => CellSet} workingCells  A result's working mesh as polygons, made on
  *   the page from `result.mesh` (positions and indices shared, not copied), with each triangle's Cp,
  *   σ and reference field the mean of its corners', so `area × cp` sums the field the viewer draws
@@ -149,6 +149,13 @@
  *   For the file analysed last, from its result until the next analysis starts or its `signal` is
  *   aborted; null at once for any other result (a bundled example, an earlier file). A few
  *   milliseconds, also while the rest of the surface is being predicted.
+ * @property {(result: Result) => Promise<{ induced: Float32Array, speedSquared: Float32Array }>} flowOnMesh
+ *   The model's flow inputs at the vertices of `result.mesh`, with their normals: `induced` (V, 3),
+ *   the velocity the car adds to a unit stream along +x (the potential flow of a sheet of sources on
+ *   its surface, standing on the ground), and `speedSquared` (V), the squared speed of the whole flow
+ *   along the surface, so 1 − speedSquared is potential flow's pressure coefficient. Computed in the
+ *   worker from `result.lookups`, for every result, the bundled examples too. Rejects for a result
+ *   computed with other model inputs than the engine runs.
  * @property {(result: Result) => boolean} canExportVtp  Whether `exportVtp` can run for `result`: true
  *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
  *   engine holds the last car's prediction only); never for a bundled example or a quick Result, nor
@@ -268,7 +275,7 @@
  * @property {ModelColumn[]} columns  what each of the model's inputs is, in order
  *
  * @typedef {Object} ModelColumn
- * @property {'position' | 'bend' | 'slice' | 'neighbour' | 'outline' | 'flag'} kind  its family, a stable id
+ * @property {'position' | 'flow' | 'surface' | 'outline'} kind  its family, a stable id
  * @property {string} group     the family's display label
  * @property {string} name      a short plain name
  * @property {string} unit      'm' for distances, '' for the rest
@@ -280,6 +287,10 @@
  *   from nose, tail, centre plane and lowest point, that plane; null for every other column. The
  *   plan-view outline ('outline') is measured outboard, away from the centre plane on the point's own
  *   side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0] on the −y side
+ * @property {number} [scale]  a surface column's size of nearby surface, in metres
+ * @property {number} [sigma]  a surface column's Gaussian standard deviation, in metres
+ * @property {'whole' | 'ahead' | 'behind'} [part]  a surface column's part of the nearby surface: all
+ *   of it, the part ahead of the point (upstream, at smaller x), or the part behind
  *
  * @typedef {Object} ParsedSurface  A surface as the parser hands it to the rest of the engine, or as
  *   the page gives it to `analyzeSurface` and `predictQuick`, where `cfd` may be left out.
@@ -299,9 +310,39 @@ const FIELD_STEP = 1 / 1024;
 /** Bits per normal component in octahedral form. */
 const NORMAL_BITS = 12;
 const FIELDS = ['cp', 'sigma', 'cfd'];
-/** The lookups' arrays, stored as they are: float32 rasters, float64 voxel sums. */
-const LOOKUP_RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak'];
-const VOXEL_SUMS = ['area', 'normalX', 'normalY', 'normalZ'];
+
+/** The lookups' arrays by their place in `SurfaceLookups`. */
+function lookupArrays({ yOut, flow, scales }) {
+  return [
+    ['yOut', yOut],
+    ['flow.potential', flow.potential],
+    ...scales.flatMap(({ kept, whole, ahead }, k) => [[`scales.${k}.kept`, kept], [`scales.${k}.whole`, whole], [`scales.${k}.ahead`, ahead]]),
+  ];
+}
+
+/**
+ * The bytes of an array of 4-byte values grouped by their place in the value: every value's lowest
+ * byte, then every value's next byte, and so on. Neighbouring values share their high bytes, so the
+ * groups give gzip long runs: a car's lookups pack 17% smaller.
+ */
+function groupedBytes(array) {
+  const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+  const count = array.length;
+  const grouped = new Uint8Array(bytes.length);
+  for (let place = 0; place < 4; place++) {
+    for (let i = 0; i < count; i++) grouped[place * count + i] = bytes[4 * i + place];
+  }
+  return grouped;
+}
+
+function ungroupedBytes(grouped) {
+  const count = grouped.length / 4;
+  const bytes = new Uint8Array(grouped.length);
+  for (let place = 0; place < 4; place++) {
+    for (let i = 0; i < count; i++) bytes[4 * i + place] = grouped[place * count + i];
+  }
+  return bytes;
+}
 
 /**
  * Turn a result into the two files of a bundled example: `json` holds everything but the arrays,
@@ -354,24 +395,23 @@ export async function packResult(result) {
       MeshoptEncoder.encodeVertexBufferLevel(field.bytes, vertexCount, field.size, 3));
   }
 
-  const { voxels, ...lookups } = result.lookups;
+  // Kept nodes ascend, so their differences are small and pack to almost nothing.
   const lookupStreams = [];
-  const addRaw = (name, array) => {
-    const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-    lookupStreams.push({ name, encoding: array instanceof Float64Array ? 'float64' : 'float32', bytes: bytes.length });
+  for (const [name, array] of lookupArrays(result.lookups)) {
+    const ascending = array instanceof Int32Array;
+    const bytes = groupedBytes(ascending ? array.map((node, i) => (i ? node - array[i - 1] : node)) : array);
+    lookupStreams.push({ name, encoding: ascending ? 'int32 differences' : 'float32', bytes: bytes.length });
     parts.push(bytes);
-  };
-  for (const name of LOOKUP_RASTERS) addRaw(name, lookups[name]);
-  voxels.forEach((grid, k) => VOXEL_SUMS.forEach((name) => addRaw(`voxels.${k}.${name}`, grid[name])));
+  }
 
+  const { definition, bounds, yCenter, flow, scales } = result.lookups;
   const summary = {
     ...result,
     mesh: { vertices: vertexCount, triangles: indices.length / 3, streams },
     lookups: {
-      definition: lookups.definition,
-      bounds: lookups.bounds,
-      yCenter: lookups.yCenter,
-      voxels: voxels.map(({ scale, origin, shape }) => ({ scale, origin, shape })),
+      definition, bounds, yCenter,
+      flow: { origin: flow.origin },
+      scales: scales.map(({ origin, nodes }) => ({ origin, nodes })),
       streams: lookupStreams,
     },
   };
@@ -463,18 +503,66 @@ export async function unpackResult(summary, buffer) {
   }
   mesh.bounds = boundsOf(mesh.positions);
 
-  const { streams: lookupStreams, voxels, ...lookups } = summary.lookups;
-  lookups.voxels = voxels.map((grid) => ({ ...grid }));
+  const { streams: lookupStreams, ...lookups } = summary.lookups;
+  lookups.flow = { ...lookups.flow };
+  lookups.scales = lookups.scales.map((scale) => ({ ...scale }));
   for (const stream of lookupStreams) {
-    // Copied out of the block, whose offsets need not suit the array's alignment.
-    const bytes = block.slice(offset, offset + stream.bytes);
+    const { buffer: bytes } = ungroupedBytes(block.subarray(offset, offset + stream.bytes));
     offset += stream.bytes;
-    const values = stream.encoding === 'float64' ? new Float64Array(bytes.buffer) : new Float32Array(bytes.buffer);
-    const [first, k, name] = stream.name.split('.');
-    if (first === 'voxels') lookups.voxels[Number(k)][name] = values;
-    else lookups[first] = values;
+    let values;
+    if (stream.encoding === 'int32 differences') {
+      values = new Int32Array(bytes);
+      for (let i = 1; i < values.length; i++) values[i] += values[i - 1];
+    } else {
+      values = new Float32Array(bytes);
+    }
+    const path = stream.name.split('.');
+    let owner = lookups;
+    for (const key of path.slice(0, -1)) owner = owner[key];
+    owner[path.at(-1)] = values;
   }
   return { ...summary, mesh, lookups };
+}
+
+/**
+ * The `CellSet` of a result's working mesh, made on the page: its triangles as polygons, with each
+ * triangle's Cp and σ the mean of its corners', so area × Cp sums the field the viewer draws exactly.
+ * A quick result's own polygons, with the values the networks gave them, when it has them.
+ * @param {Result} result
+ * @returns {CellSet}
+ */
+export function workingCells(result) {
+  if (result.cells) return result.cells;
+  const { positions, indices, cp, sigma, cfd } = result.mesh;
+  const count = indices.length / 3;
+  const offsets = new Uint32Array(count + 1);
+  const centers = new Float32Array(3 * count);
+  const normals = new Float32Array(3 * count);
+  const areas = new Float64Array(count);
+  const cells = { cp: new Float32Array(count), sigma: new Float32Array(count), cfd: cfd ? new Float32Array(count) : null };
+  // One pass with plain loops: the page calls this on its own thread, where it must stay well under a frame budget.
+  for (let t = 0; t < count; t++) {
+    const i = indices[3 * t], j = indices[3 * t + 1], k = indices[3 * t + 2];
+    const a = 3 * i, b = 3 * j, c = 3 * k;
+    const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    areas[t] = length / 2;
+    if (length > 0) {
+      normals[3 * t] = nx / length;
+      normals[3 * t + 1] = ny / length;
+      normals[3 * t + 2] = nz / length;
+    }
+    centers[3 * t] = (positions[a] + positions[b] + positions[c]) / 3;
+    centers[3 * t + 1] = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3;
+    centers[3 * t + 2] = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3;
+    cells.cp[t] = (cp[i] + cp[j] + cp[k]) / 3;
+    cells.sigma[t] = (sigma[i] + sigma[j] + sigma[k]) / 3;
+    if (cfd) cells.cfd[t] = (cfd[i] + cfd[j] + cfd[k]) / 3;
+    offsets[t + 1] = 3 * (t + 1);
+  }
+  return { points: positions, connectivity: indices, offsets, centers, normals, areas, ...cells };
 }
 
 /**

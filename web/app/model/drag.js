@@ -1,9 +1,9 @@
-// What ten cars cannot do yet: drag. The training cars' CFD drag spans a narrow range, the model's drag error on
-// held-out cars is about as large as that range, and no compared model beats guessing the training average by much.
+// Drag, the pressure summed over the car: the training cars' CFD drag beside this car's, this car's drag split by the
+// way its surface faces, and every compared model's cross-validated drag error against guessing the training average.
 
 import { h, s } from '../dom.js';
 import { DRAG_COUNT, signed } from '../format.js';
-import { bars, chips, countWord, section } from './charts.js';
+import { bars, chips, section } from './charts.js';
 import { groupsGiven, learnerName } from './groups.js';
 import { locator } from './overview.js';
 
@@ -42,7 +42,7 @@ function facingSplit({ cdP, byFacing }) {
 	const rows = [
 		{ name: 'Rearward-facing surfaces', value: byFacing.rearward },
 		{ name: 'Forward-facing surfaces', value: byFacing.forward },
-		{ name: 'Drag, their sum', value: cdP, sum: true },
+		{ name: 'Pressure drag, their sum', value: cdP, sum: true },
 	];
 	const lo = Math.min(0, ...rows.map((r) => r.value));
 	const hi = Math.max(0, ...rows.map((r) => r.value));
@@ -71,19 +71,20 @@ export function createDrag({ card, groups, training }) {
 		strong: row.learner === 'ensemble' || row.learner === 'constant',
 	}));
 	const max = Math.max(...rows.map((r) => r.value));
+	const counts = (learner) => Math.round(card.comparison.find((row) => row.learner === learner).dragMae / DRAG_COUNT);
 
-	const el = section('drag', `What ${countWord(training.cars.length).toLowerCase()} cars cannot do yet`,
-		'The pressure field carries over to a new car; its sum, drag, is no better than guessing the training average. Drag is a small difference of two larger sums, so small pressure errors add up to as much as the training cars differ.',
+	const el = section('drag', 'Pressure drag, the pressure summed over the car',
+		`Cross-validated, the summed pressure misses pressure drag by ${counts('ensemble')} counts, against ${counts('constant')} for guessing the training average. Pressure drag is a small difference of two larger sums, so small pressure errors add up.`,
 		h('div', { class: 'drag-layout' },
 			h('figure', { class: 'figure' },
 				h('figcaption', {}, 'Pressure drag C', h('sub', {}, 'D,p')),
 				line,
 				h('p', { class: 'drag-key' }, h('span', {}, h('i', { class: 'key-network' }), 'each network'), h('span', {}, h('i', { class: 'key-mean' }), 'their mean'), h('span', {}, h('i', { class: 'key-cfd' }), 'CFD')),
 				thisCar,
-				h('figcaption', {}, 'This car\u2019s predicted drag, by the way its surface faces'),
+				h('figcaption', {}, 'This car\u2019s predicted pressure drag, by the way its surface faces'),
 				split),
 			h('figure', { class: 'figure' },
-				h('figcaption', {}, 'Drag error on held-out cars, in counts of 0.001'),
+				h('figcaption', {}, `Cross-validated drag error, in counts of ${DRAG_COUNT}`),
 				bars(rows, max))));
 	el.prepend(locator('drag'));
 

@@ -1,7 +1,7 @@
 """Write the tool's bundled examples with the browser engine itself.
 
-    uv run python -m surrogate.write_examples                # web/examples/run_1, run_500
-    uv run python -m surrogate.write_examples --development  # also local/dev/examples/run_1_no_cfd, run_1_stretched
+    uv run surrogate examples                # web/examples/run_1, run_500
+    uv run surrogate examples --development  # also local/dev/examples/run_1_no_cfd, run_1_stretched
 
 Each surface file is analysed by the tool's engine in headless Chrome, exactly as a visitor's browser
 does it, and its example is written once every polygon is predicted, with the numbers summed over all
@@ -9,7 +9,7 @@ of them (the engine's `exact` event), the working mesh with its fields, and the 
 
 Needs Google Chrome with WebGPU (set CHROME to its executable when it is not at the macOS default
 path), the DrivAerML files `data/raw/holdout/run_1/boundary_1.vtp` and `run_500/boundary_500.vtp`, and
-`web/model/` exported from the current checkpoint (`uv run python -m surrogate.export_web`). Run it again
+`web/model/` exported from the current checkpoint (`uv run surrogate export`). Run it again
 after every retraining: the tests fail while an example was computed with other weights.
 
 `--development` also writes the surfaces behind the two development examples, run 1 without its CFD
@@ -19,7 +19,6 @@ pressure and run 1 stretched 25% in x (both with every solver array removed), to
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
@@ -157,16 +156,10 @@ def write_examples(jobs: dict[str, tuple[Path, Path]]) -> None:
         raise SystemExit(f"The engine failed: {outcome['failed']}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Write the tool's examples with the browser engine.")
-    parser.add_argument("--development", action="store_true", help="also write the development examples into local/dev/examples")
-    args = parser.parse_args()
+def write_all_examples(development: bool) -> None:
+    """The bundled examples, and with `development` the two development examples too."""
     jobs = {name: (source, WEB_ROOT / "examples") for name, source in BUNDLED.items()}
-    if args.development:
+    if development:
         write_development_surfaces()
         jobs |= {name: (source, REPO / "local/dev/examples") for name, source in DEVELOPMENT.items()}
     write_examples(jobs)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,13 +1,18 @@
 // Flat drawings of what one group of inputs reads at the point, made from the car's own geometry: its outline seen
-// from the side and from above, and the cut through the point that the slice inputs read. Distances are drawn where
-// they were measured, from the marks of `measures.js`, so each drawing shows the group's inputs and where they come
-// from. Metres keep one scale across both axes of a drawing.
+// from the side and from above, the cuts through the point that the surface and outline inputs read, and pictures of
+// the potential flow over the car. Distances are drawn where they were measured, from the marks of `measures.js`, so
+// each drawing shows the group's inputs and where they come from. Metres keep one scale across both axes of a drawing.
 
-import { s } from '../dom.js';
+import { h, s } from '../dom.js';
 import { signed } from '../format.js';
+import { colorBar } from './charts.js';
 
 /** Length of the drawn facing arrow, in metres. */
 const ARROW = 0.32;
+/** Length of a drawn mean normal of nearby surface, in metres: longer than the facing arrow, so both are seen. */
+const MEAN_NORMAL = 0.42;
+/** Length of a drawn flow velocity in the flow pictures, in metres per unit of the stream's speed. */
+const FLOW_ARROW = 0.2;
 /** Margin around a drawing's content, in pixels. */
 const PAD = 10;
 /** Half the size of the close-up around the point, in metres along x. */
@@ -117,107 +122,127 @@ function positionDrawing({ width, explanation, marks, outlines, columns, bounds,
 	return [side.svg, plan.svg];
 }
 
+/** A picture of the car with an SVG over it in the same pixels, and where a world point falls on both. */
+function overlaid(picture, width, label) {
+	const height = Math.round((width * picture.canvas.height) / picture.canvas.width);
+	Object.assign(picture.canvas.style, { width: `${width}px`, height: `${height}px` });
+	const svg = s('svg', { class: 'drawing', viewBox: `0 0 ${width} ${height}`, width, height, role: 'img', 'aria-label': label });
+	const at = (point) => {
+		const [u, v] = picture.place(point);
+		return [u * width, v * height];
+	};
+	return { el: h('div', { class: 'overlaid' }, picture.canvas, svg), svg, at };
+}
+
 /**
- * Nearby surface: the cut through the point close up, and the boxes each size of input averages the surface in, the
- * one at the point drawn solid and those up- and downstream dashed. Sizes are named in a column at the right.
+ * Potential flow: the ideal flow over the car from the side, coloured by the pressure it would put on the surface and
+ * with arrows of its velocity along the surface, the point's own arrow and speed among them; beneath it, CFD's
+ * pressure on the same scale when the file has it, so what the ideal flow misses is seen.
  */
-function boxesDrawing({ width, explanation, marks, cutter }) {
-	const { position, normal } = explanation;
-	const xs = [position[0] - CLOSE, position[0] + CLOSE];
-	const view = area(width, xs, [position[2] - CLOSE * 0.55, position[2] + CLOSE * 0.55], 'Boxes of nearby surface around the point');
-	const clip = `model-clip-${++clips}`;
-	view.svg.append(s('clipPath', { id: clip }, s('rect', { x: 0, y: 0, width, height: view.height })));
-	const content = s('g', { 'clip-path': `url(#${clip})` });
-	content.append(s('path', { class: 'cut', d: segmentsPath(cutter.cut(1, position[1]), view.at, 0, 2) }));
-	const blocks = marks.filter((m) => m.type === 'block').sort((a, b) => b.scale - a.scale);
-	const labels = s('g', { class: 'box-labels' });
-	const here = blocks.filter((block) => block.sample === 'here');
-	const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-	for (const block of blocks) {
-		const [left, top] = view.at(block.min[0], block.max[2]);
-		const [right, bottom] = view.at(block.max[0], block.min[2]);
-		content.append(s('rect', { class: `box ${block.sample}`, x: left, y: top, width: right - left, height: bottom - top }));
-		if (block.sample !== 'here') continue;
-		const y = PAD + 8 + here.indexOf(block) * 15;
-		const corner = [clamp(right, PAD, width - PAD - 44), clamp(top, PAD, view.height - PAD)];
-		labels.append(
-			s('polyline', { class: 'box-leader', points: `${corner.join(',')} ${width - PAD - 40},${y - 4}` }),
-			s('text', { class: 'box-size', x: width - PAD, y, 'text-anchor': 'end' }, `${Math.round(block.scale * 100)} cm`));
+function flowDrawing({ width, marks, flow }) {
+	if (!flow) return [];
+	const ideal = overlaid(flow.picture, width, 'The potential flow over the car from the side: its pressure and its velocity along the surface');
+	const arrow = (at, velocity, attributes) => {
+		const [x1, y1] = ideal.at(at);
+		const [x2, y2] = ideal.at(at.map((p, k) => p + velocity[k] * FLOW_ARROW));
+		return s('line', { x1, y1, x2, y2, 'marker-end': 'url(#model-arrow)', ...attributes });
+	};
+	for (const { at, velocity } of flow.arrows) ideal.svg.append(arrow(at, velocity, { class: 'flow-arrow', 'marker-end': 'url(#model-flow-arrow)' }));
+	const point = marks.find((m) => m.type === 'velocity');
+	if (point) {
+		const [x, y] = ideal.at(point.at);
+		ideal.svg.append(s('g', { class: 'flow-point' },
+			arrow(point.at, point.velocity, {}),
+			s('circle', { cx: x, cy: y, r: 4.5, class: 'point-dot' }),
+			s('text', { x: x + 8, y: y - 8 }, `${Math.hypot(...point.velocity).toFixed(2)} × the stream`)));
 	}
-	view.svg.append(content, labels, pointMark(view.at, position, normal, 0, 2));
+	const views = [h('div', { class: 'flow-view' }, h('span', { class: 'drawing-label' }, 'Ideal flow'), ideal.el)];
+	if (flow.cfdPicture) {
+		const cfd = overlaid(flow.cfdPicture, width, 'CFD pressure over the car from the side');
+		views.push(h('div', { class: 'flow-view' }, h('span', { class: 'drawing-label' }, 'CFD'), cfd.el));
+	}
+	return [...views, colorBar(flow.map, 'Cp')];
+}
+
+/**
+ * Nearby surface: the cut through the point close up, under the Gaussians that weight the surface at each size, with
+ * the mean normal each size finds there. Seen from the side, or from above when the point faces sideways.
+ */
+function surfaceDrawing({ width, explanation, marks, cutter }) {
+	const { position, normal } = explanation;
+	const sideways = Math.abs(normal[1]) > Math.max(Math.abs(normal[0]), Math.abs(normal[2]));
+	const b = sideways ? 1 : 2;
+	const cutAxis = sideways ? 2 : 1;
+	const view = area(width, [position[0] - CLOSE, position[0] + CLOSE], [position[b] - CLOSE * 0.55, position[b] + CLOSE * 0.55],
+		`Nearby surface around the point, weighted less the farther it lies, ${sideways ? 'from above' : 'from the side'}`);
+	const clip = `model-clip-${++clips}`;
+	const soft = `model-soft-${clips}`;
+	const [px, py] = view.at(position[0], position[b]);
+	const perMetre = view.at(position[0] + 1, position[b])[0] - px;
+	// A Gaussian's opacity at 0, 1, 2 and 3 standard deviations, where the blur stops.
+	view.svg.append(s('defs', {},
+		s('clipPath', { id: clip }, s('rect', { x: 0, y: 0, width, height: view.height })),
+		s('radialGradient', { id: soft }, [0, 1, 2, 3].map((k) => s('stop', { class: 'soft-stop', offset: k / 3, 'stop-opacity': (0.3 * Math.exp(-0.5 * k * k)).toFixed(3) })))));
+	const sizes = marks.filter((m) => m.type === 'neighbourhood').sort((p, q) => p.sigma - q.sigma);
+	const content = s('g', { 'clip-path': `url(#${clip})` },
+		sizes.toReversed().map((size) => s('circle', { cx: px, cy: py, r: 3 * size.sigma * perMetre, fill: `url(#${soft})` })),
+		s('path', { class: 'cut', d: segmentsPath(cutter.cut(cutAxis, position[cutAxis]), view.at, 0, b) }));
+	const labels = s('g', {});
+	sizes.forEach((size, i) => {
+		const length = Math.hypot(...size.normal);
+		if (length === 0) return;
+		const [tx, ty] = view.at(position[0] + (size.normal[0] / length) * MEAN_NORMAL, position[b] + (size.normal[b] / length) * MEAN_NORMAL);
+		content.append(s('line', { class: 'mean-normal', x1: px, y1: py, x2: tx, y2: ty }), s('circle', { class: 'mean-normal-tip', cx: tx, cy: ty, r: 2.5 }));
+		const y = PAD + 8 + i * 15;
+		labels.append(
+			s('polyline', { class: 'size-leader', points: `${tx},${ty} ${width - PAD - 40},${y - 4}` }),
+			s('text', { class: 'size-label', x: width - PAD, y, 'text-anchor': 'end' }, `${Math.round(size.scale * 100)} cm`));
+	});
+	view.svg.append(content, labels, pointMark(view.at, position, normal, 0, b));
 	return [view.svg];
 }
 
 /**
- * The car ahead and behind: the cut through the point from the side, with the body's top and bottom read at each
- * station along it, and from above, the slices beside the point and the outline's distance outboard.
+ * Plan-view outline: from above, the car cut at the point's height, and at each station ahead and behind how far the
+ * body reaches outboard of the point; an open dot where no body stands at that height. The readings a little above
+ * and below are the small dots.
  */
-function slicesDrawing({ width, explanation, marks, outlines, cutter, bounds }) {
+function outlineDrawing({ width, explanation, marks, outlines, cutter, bounds }) {
 	const { position, normal } = explanation;
-	const [x0, x1, y0, y1, z0, z1] = bounds;
-	const readings = marks.filter((m) => m.type === 'reading');
+	const [x0, x1, y0, y1] = bounds;
+	const readings = marks.filter((m) => m.type === 'reading' && m.layer === 'outline');
 	const stationXs = readings.map((m) => m.at[0]);
-	const xs = [Math.min(x0, ...stationXs) - 0.05, Math.max(x1, ...stationXs) + 0.05];
-	const side = area(width, xs, [z0 - 0.08, z1 + 0.08], 'The body ahead of and behind the point, in its own slice');
-	const ownCut = marks.find((m) => m.type === 'cut' && m.layer === 'slice');
-	side.svg.append(s('path', { class: 'cut', d: segmentsPath(cutter.cut(1, ownCut.value), side.at, 0, 2) }));
-	// Each station's readings of the body above and below, joined; a station with no body there is an open dot.
-	const stations = new Map();
-	for (const reading of readings.filter((m) => m.layer === 'slice')) {
-		const key = reading.at[0].toFixed(4);
-		if (!stations.has(key)) stations.set(key, []);
-		stations.get(key).push(reading);
-	}
-	const empty = new Set();
-	for (const [key, found] of stations) {
-		if (found.some((m) => m.hollow)) {
-			empty.add(key);
-			const [x, y] = side.at(found[0].at[0], position[2]);
-			side.svg.append(s('circle', { class: 'station empty', cx: x, cy: y, r: 3 }));
-			continue;
-		}
-		const zs = found.map((m) => m.at[2]);
-		const [x, top] = side.at(found[0].at[0], Math.max(...zs));
-		const [, bottom] = side.at(found[0].at[0], Math.min(...zs));
-		side.svg.append(s('g', { class: 'station' },
-			s('line', { x1: x, y1: top, x2: x, y2: bottom }),
-			s('circle', { cx: x, cy: top, r: 2.5 }),
-			s('circle', { cx: x, cy: bottom, r: 2.5 })));
-	}
-	// Distances from the point along its own slice: to the slice's front and rear, and up to its peak.
-	for (const guide of marks.filter((m) => m.type === 'guide' && m.layer === 'slice')) {
-		const [x1, y1] = side.at(guide.from[0], guide.from[2]);
-		const [x2, y2] = side.at(guide.to[0], guide.to[2]);
-		side.svg.append(s('line', { class: 'guide', x1, y1, x2, y2 }));
-	}
-	side.svg.append(pointMark(side.at, position, normal, 0, 2));
-
-	const plan = area(width, xs, [y0 - 0.05, y1 + 0.05], 'Slices beside the point and the outline outboard, from above');
+	const plan = area(width, [Math.min(x0, ...stationXs) - 0.05, Math.max(x1, ...stationXs) + 0.05], [y0 - 0.05, y1 + 0.05],
+		'The car cut at the point\u2019s height, from above, and how far it reaches outboard ahead of and behind the point');
 	plan.svg.append(s('path', { class: 'silhouette', d: pathOf(outlines.plan, plan.at, true) }));
-	for (const cut of marks.filter((m) => m.type === 'cut' && m.axis === 1)) {
-		const [ax, ay] = plan.at(cut.span[0], cut.value);
-		const [bx] = plan.at(cut.span[1], cut.value);
-		plan.svg.append(s('line', { class: `slice-line${cut.own ? ' own' : ''}`, x1: ax, y1: ay, x2: bx, y2: ay }));
-	}
-	for (const reading of readings.filter((m) => m.layer === 'outline' && !empty.has(m.at[0].toFixed(4)))) {
-		const [ax, ay] = plan.at(reading.at[0], position[1]);
-		const [, by] = plan.at(reading.at[0], reading.at[1]);
-		plan.svg.append(s('g', { class: 'station' }, s('line', { x1: ax, y1: ay, x2: ax, y2: by }), s('circle', { cx: ax, cy: by, r: 2.5 })));
+	const own = marks.find((m) => m.type === 'cut' && m.layer === 'outline' && m.own);
+	if (own) plan.svg.append(s('path', { class: 'cut', d: segmentsPath(cutter.cut(2, own.value), plan.at, 0, 1) }));
+	for (const reading of readings) {
+		const [x, from] = plan.at(reading.at[0], position[1]);
+		if (Math.abs(reading.at[2] - position[2]) > 1e-6) {
+			if (!reading.hollow) plan.svg.append(s('circle', { class: 'station other', cx: x, cy: plan.at(reading.at[0], reading.at[1])[1], r: 1.6 }));
+		} else if (reading.hollow) {
+			plan.svg.append(s('circle', { class: 'station empty', cx: x, cy: from, r: 3 }));
+		} else {
+			const [, to] = plan.at(reading.at[0], reading.at[1]);
+			plan.svg.append(s('g', { class: 'station' }, s('line', { x1: x, y1: from, x2: x, y2: to }), s('circle', { cx: x, cy: to, r: 2.5 })));
+		}
 	}
 	plan.svg.append(pointMark(plan.at, position, normal, 0, 1));
-	return [side.svg, plan.svg];
+	return [plan.svg];
 }
 
 /** Each group's drawing, by its id. */
-const DRAWINGS = { position: positionDrawing, bend: boxesDrawing, slice: slicesDrawing };
+const DRAWINGS = { position: positionDrawing, flow: flowDrawing, surface: surfaceDrawing, outline: outlineDrawing };
 
 /**
  * A group's drawing at the point.
  * @param {import('./groups.js').InputGroup} group
  * @param {{ width: number, explanation: object, marks: object[], outlines: object, cutter: object, bounds: number[],
- *   yCenter: number, columns: object[] }} at  `marks` are the group's own; `columns` the model's, indexed as the
- *   marks' are; `bounds` the car's and `yCenter` its centre plane's y
- * @returns {SVGSVGElement[]}
+ *   yCenter: number, columns: object[], flow: object | null }} at  `marks` are the group's own; `columns` the
+ *   model's, indexed as the marks' are; `bounds` the car's and `yCenter` its centre plane's y; `flow` the potential
+ *   flow's pictures of the car and arrows, when the model reads it
+ * @returns {Element[]}
  */
 export function drawGroup(group, at) {
 	if (!(group.id in DRAWINGS)) throw new Error(`The page has no drawing for the inputs “${group.name}”.`);
@@ -238,9 +263,10 @@ export function closeUp({ width, explanation, cutter }) {
 	return view.svg;
 }
 
-/** The arrowhead the facing arrows use; put once on the page. */
+/** The arrowheads the drawings use, put once on the page: the facing arrows', and the smaller one of the flow field. */
 export function arrowDefinition() {
+	const head = (id, size) => s('marker', { id, viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: size, markerHeight: size, orient: 'auto-start-reverse' },
+		s('path', { d: 'M0 1 L9 5 L0 9 z' }));
 	return s('svg', { class: 'definitions', width: 0, height: 0, 'aria-hidden': 'true' },
-		s('defs', {}, s('marker', { id: 'model-arrow', viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' },
-			s('path', { d: 'M0 1 L9 5 L0 9 z' }))));
+		s('defs', {}, head('model-arrow', 7), head('model-flow-arrow', 4)));
 }

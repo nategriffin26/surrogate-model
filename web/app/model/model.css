@@ -2,7 +2,7 @@
 
 .model-page { --page-width: 1180px; max-width: var(--page-width); margin: 0 auto; padding: 36px 48px 120px; color: var(--ink); font-size: 13.5px; }
 .model-page .definitions { position: absolute; }
-.model-page #model-arrow path { fill: var(--heading); }
+.model-page :is(#model-arrow, #model-flow-arrow) path { fill: var(--heading); }
 .model-page h1 { margin: 0; font: 600 28px/1.2 var(--head); color: var(--heading); letter-spacing: -0.01em; }
 .model-page h2 { margin: 0 0 6px; font: 600 22px/1.25 var(--head); color: var(--heading); letter-spacing: -0.005em; }
 .model-page h3 { display: flex; align-items: center; gap: 8px; margin: 0; font: 600 15px/1.3 var(--head); color: var(--heading); }
@@ -150,15 +150,23 @@
 .model-page .dimension line { stroke: var(--group, var(--steel)); stroke-width: 1.3; }
 .model-page .dimension circle { fill: var(--group, var(--steel)); }
 .model-page .drawing .dimension text { fill: var(--heading); }
-.model-page .box { fill: none; stroke: var(--group); stroke-width: 1.3; }
-.model-page .box:not(.here) { stroke-dasharray: 3 3; stroke-opacity: 0.5; }
-.model-page .drawing .box-size { fill: var(--group); font-weight: 600; }
+.model-page .drawing .size-label { fill: var(--group); font-weight: 600; }
 .model-page .station line { stroke: var(--group); stroke-width: 1.6; }
 .model-page .station circle { fill: var(--group); }
 .model-page .station.empty { fill: #fff; stroke: var(--group); stroke-width: 1.3; }
-.model-page .slice-line { stroke: var(--group); stroke-width: 1.4; opacity: 0.55; }
-.model-page .slice-line.own { stroke-width: 2.4; opacity: 1; }
-.model-page .drawing .guide { stroke: var(--group); stroke-width: 1; stroke-dasharray: 4 3; }
+.model-page .station.other { fill: var(--group); opacity: 0.6; }
+.model-page .soft-stop { stop-color: var(--group); }
+.model-page .mean-normal { stroke: var(--group); stroke-width: 1.4; }
+.model-page .mean-normal-tip { fill: var(--group); }
+.model-page .flow-view { display: flex; flex-direction: column; gap: 4px; }
+.model-page .drawing-label { color: var(--muted); font-size: 11.5px; }
+.model-page .overlaid { position: relative; }
+.model-page .overlaid canvas { display: block; }
+.model-page .overlaid svg { position: absolute; inset: 0; }
+.model-page .flow-arrow { stroke: var(--heading); stroke-width: 1; opacity: 0.4; }
+.model-page .flow-point line { stroke: var(--group); stroke-width: 2.4; }
+.model-page .flow-point text { fill: var(--heading); font: 600 11px var(--body); paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.model-page .field-key { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.86); pointer-events: none; }
 .model-page .spread-charts .headline { max-width: 190px; }
 
 /* ---- the networks ---- */
@@ -209,7 +217,7 @@
 .model-page :is(.scatter-axes, .calibration) .diagonal { stroke: var(--heading); stroke-dasharray: 4 3; opacity: 0.45; }
 .model-page .spread-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 56px; }
 .model-page .spread-charts { display: flex; flex-direction: column; gap: 26px; }
-.model-page .box-leader { fill: none; stroke: var(--group); stroke-width: 0.8; opacity: 0.6; }
+.model-page .size-leader { fill: none; stroke: var(--group); stroke-width: 0.8; opacity: 0.6; }
 .model-page .calibration { display: block; overflow: visible; }
 .model-page .calibration-line { fill: none; stroke: var(--violet); stroke-width: 2; }
 .model-page .calibration-dot { fill: var(--violet); stroke: #fff; stroke-width: 1.5; }

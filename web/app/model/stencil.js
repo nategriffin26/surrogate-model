@@ -1,8 +1,8 @@
 // The marks of `measures.js` for one group of inputs, drawn on the page's car in the group's colour. Everything is
 // depth-tested against the car: what lies on the surface or in front of it is drawn in full, what the car hides is
 // drawn faintly, so the eye can tell which is which. Cuts are the car's own outlines, lifted a hair off the surface;
-// boxes are shaded volumes, and the surface inside them is tinted by the weight each voxel has in the input. The
-// point is a handle the reader drags.
+// nearby surface is tinted by its Gaussians about the point, with each size's mean normal; the potential flow is an
+// arrow of its velocity along the surface. The point is a handle the reader drags.
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -19,11 +19,13 @@ const SPAN_MARGIN = 0.06;
 /** Dots are drawn this far towards the camera, in metres, so those on the surface are not lost in it. */
 const DOT_LIFT = 0.012;
 /** Dot diameters in CSS pixels. */
-const DOT = { handle: 21, reading: 6, flag: 8 };
+const DOT = { handle: 21, reading: 6 };
 /** How near the pointer, in CSS pixels, the handle must be to be under it. */
 const REACH = 14;
-/** At most this many boxes are tinted on the surface at once (four sizes, three places each). */
-const BLOCKS = 12;
+/** At most this many sizes of nearby surface are tinted at once. */
+const GAUSSIANS = 4;
+/** Length of the drawn flow velocity, in metres per unit of the stream's speed. */
+const FLOW_LENGTH = 0.3;
 const INK = '#0d2233';
 
 const DOT_VERTEX = /* glsl */ `
@@ -78,24 +80,6 @@ void main() {
 	#include <colorspace_fragment>
 }`;
 
-const BOX_VERTEX = /* glsl */ `
-varying vec3 vNormal;
-void main() {
-	vNormal = normalize(mat3(modelMatrix) * normal);
-	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}`;
-
-// Each face lit by the viewer's key light, so a box reads as a solid.
-const BOX_FRAGMENT = /* glsl */ `
-uniform vec3 uColor;
-uniform float uOpacity;
-varying vec3 vNormal;
-void main() {
-	float light = 0.55 + 0.45 * max(dot(normalize(vNormal), normalize(vec3(-0.45, -0.55, 0.7))), 0.0);
-	gl_FragColor = vec4(uColor * light, uOpacity * (gl_FrontFacing ? 1.0 : 0.55));
-	#include <colorspace_fragment>
-}`;
-
 const TINT_VERTEX = /* glsl */ `
 uniform float uLift;
 varying vec3 vWorld;
@@ -105,37 +89,28 @@ void main() {
 	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
-// The weight a surface element has in a regional input: the trilinear weight of the voxel it lies in.
-const TINT_FRAGMENT = /* glsl */ `
-uniform vec3 uMin[${BLOCKS}];
-uniform vec3 uWeights[${BLOCKS}];
-uniform float uCell[${BLOCKS}];
-uniform float uStrength[${BLOCKS}];
+// The weight a surface element has in a size of nearby surface: its Gaussian about the point, averaged over the sizes.
+const SOFT_FRAGMENT = /* glsl */ `
+uniform vec3 uCentre;
+uniform float uSigma[${GAUSSIANS}];
 uniform float uSizes;
 uniform vec3 uColor;
 varying vec3 vWorld;
-float blockWeight(vec3 q, int b) {
-	vec3 cell = floor((q - uMin[b]) / uCell[b]);
-	if (any(lessThan(cell, vec3(0.0))) || any(greaterThan(cell, vec3(1.0)))) return 0.0;
-	vec3 w = mix(vec3(1.0) - uWeights[b], uWeights[b], cell);
-	return w.x * w.y * w.z;
-}
 void main() {
+	vec3 d = vWorld - uCentre;
+	float r2 = dot(d, d);
 	float total = 0.0;
-	for (int b = 0; b < ${BLOCKS}; b++) {
-		if (uStrength[b] > 0.0) total += uStrength[b] * blockWeight(vWorld, b);
+	for (int s = 0; s < ${GAUSSIANS}; s++) {
+		if (uSigma[s] > 0.0) total += exp(-0.5 * r2 / (uSigma[s] * uSigma[s]));
 	}
-	float alpha = 0.75 * clamp(total / max(uSizes, 1.0), 0.0, 1.0);
+	float alpha = 0.75 * total / max(uSizes, 1.0);
 	if (alpha < 0.01) discard;
 	gl_FragColor = vec4(uColor, alpha);
 	#include <colorspace_fragment>
 }`;
 
-/** Draw order: the surface tint, box backs, lines, box fronts, dots, the handle. */
-const ORDER = { tint: 3, back: 4, line: 5, front: 6, dot: 7, handle: 8 };
-
-const BOX_EDGES = [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
-const corner = ({ min, max }, k) => [k & 4 ? max[0] : min[0], k & 2 ? max[1] : min[1], k & 1 ? max[2] : min[2]];
+/** Draw order: the surface tint, lines, dots, the handle. */
+const ORDER = { tint: 3, line: 5, dot: 7, handle: 8 };
 
 export class Stencil {
 	constructor(viewer) {
@@ -156,47 +131,41 @@ export class Stencil {
 			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
 		});
 		this.dots = [dots(1, THREE.LessEqualDepth), dots(0.3, THREE.GreaterDepth)];
-		const box = (side, opacity) => new THREE.ShaderMaterial({
-			uniforms: { uColor: { value: new THREE.Color() }, uOpacity: { value: opacity } },
-			vertexShader: BOX_VERTEX, fragmentShader: BOX_FRAGMENT, transparent: true, depthWrite: false, side,
-		});
-		this.boxes = { back: box(THREE.BackSide, 0.045), front: box(THREE.FrontSide, 0.07) };
-		this.boxGeometry = new THREE.BoxGeometry(1, 1, 1);
 		this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.04, 20), new THREE.MeshBasicMaterial({ color: INK }));
 		this.cone.renderOrder = ORDER.handle;
-		this.tintMaterial = new THREE.ShaderMaterial({
+		this.flowCone = new THREE.Mesh(this.cone.geometry, new THREE.MeshBasicMaterial());
+		this.flowCone.renderOrder = ORDER.handle;
+		this.softMaterial = new THREE.ShaderMaterial({
 			uniforms: {
-				uMin: { value: Array.from({ length: BLOCKS }, () => new THREE.Vector3()) },
-				uWeights: { value: Array.from({ length: BLOCKS }, () => new THREE.Vector3()) },
-				uCell: { value: new Array(BLOCKS).fill(1) },
-				uStrength: { value: new Array(BLOCKS).fill(0) },
+				uCentre: { value: new THREE.Vector3() },
+				uSigma: { value: new Array(GAUSSIANS).fill(0) },
 				uSizes: { value: 1 },
 				uColor: { value: new THREE.Color() },
 				uLift: { value: 0.002 },
 			},
-			vertexShader: TINT_VERTEX, fragmentShader: TINT_FRAGMENT, transparent: true, depthWrite: false,
+			vertexShader: TINT_VERTEX, fragmentShader: SOFT_FRAGMENT, transparent: true, depthWrite: false,
 			polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
 		});
 	}
 
-	/** The car the marks are drawn on; its working mesh is cut for the slices and tinted inside the boxes. */
+	/** The car the marks are drawn on; its working mesh is cut for the outline and tinted under the Gaussians. */
 	setCar(result) {
 		if (this.car?.result === result) return;
-		this.car?.tint.geometry.dispose();
+		this.car?.soft.geometry.dispose();
 		const { mesh, lookups } = result;
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
 		geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
 		geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-		const tint = new THREE.Mesh(geometry, this.tintMaterial);
-		tint.renderOrder = ORDER.tint;
-		tint.frustumCulled = false;
-		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), tint, segments: new WeakMap() };
+		const soft = new THREE.Mesh(geometry, this.softMaterial);
+		soft.renderOrder = ORDER.tint;
+		soft.frustumCulled = false;
+		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), soft, segments: new WeakMap() };
 	}
 
 	/**
 	 * The part of a cut its inputs are read along: within its span of x (and a little beyond, so its ends are
-	 * seen to be ends), and for a plan-view outline on the point's side of the centre plane.
+	 * seen to be ends), on the point's side of the centre plane.
 	 */
 	segments(mark) {
 		const kept = this.car.segments.get(mark);
@@ -209,7 +178,7 @@ export class Stencil {
 		for (let i = 0; i < positions.length; i += 6) {
 			const x = (positions[i] + positions[i + 3]) / 2;
 			const y = (positions[i + 1] + positions[i + 4]) / 2;
-			if (x < lo || x > hi || (mark.axis === 2 && (y - yCenter) * mark.side < 0)) continue;
+			if (x < lo || x > hi || (y - yCenter) * mark.side < 0) continue;
 			for (let k = 0; k < 6; k++) {
 				p.push(positions[i + k]);
 				n.push(normals[i + k]);
@@ -237,16 +206,15 @@ export class Stencil {
 		const dots = [];
 		const color = new THREE.Color(hex);
 		const ink = new THREE.Color(INK);
-		const tint = this.tintMaterial.uniforms;
-		tint.uStrength.value.fill(0);
-		tint.uColor.value.copy(color);
-		for (const box of Object.values(this.boxes)) box.uniforms.uColor.value.copy(color);
-		let blocks = 0;
-		const tinted = new Set();
+		const soft = this.softMaterial.uniforms;
+		soft.uSigma.value.fill(0);
+		soft.uColor.value.copy(color);
+		soft.uCentre.value.fromArray(point.position);
+		let sizes = 0;
 
 		for (const mark of marks) {
 			if (mark.type === 'reading') {
-				dots.push({ at: mark.at, size: mark.kind === 'flag' ? DOT.flag : DOT.reading, style: mark.hollow ? 1 : 0, color });
+				dots.push({ at: mark.at, size: DOT.reading, style: mark.hollow ? 1 : 0, color });
 			} else if (mark.type === 'guide') {
 				addLine('minor', mark.from, mark.to, color);
 			} else if (mark.type === 'cut') {
@@ -256,30 +224,26 @@ export class Stencil {
 					const lift = (k) => positions[i + k] + normals[i + k] * CUT_LIFT;
 					addLine(style, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], color);
 				}
-			} else if (mark.type === 'block') {
-				for (const [a, b] of BOX_EDGES) addLine(mark.sample === 'here' ? 'major' : 'minor', corner(mark, a), corner(mark, b), color);
-				if (mark.sample === 'here') {
-					for (const side of ['back', 'front']) {
-						const box = new THREE.Mesh(this.boxGeometry, this.boxes[side]);
-						box.position.set(...mark.min.map((v, k) => (v + mark.max[k]) / 2));
-						box.scale.set(...mark.max.map((v, k) => v - mark.min[k]));
-						box.renderOrder = ORDER[side];
-						group.add(box);
-					}
-				}
-				if (blocks < BLOCKS) {
-					tint.uMin.value[blocks].fromArray(mark.min);
-					tint.uWeights.value[blocks].fromArray(mark.weights);
-					tint.uCell.value[blocks] = mark.cell;
-					tint.uStrength.value[blocks] = 1;
-					tinted.add(mark.scale);
-					blocks++;
-				}
+			} else if (mark.type === 'neighbourhood') {
+				// The Gaussian on the surface, and the mean normal under it as a line from the point.
+				if (sizes < GAUSSIANS) soft.uSigma.value[sizes++] = mark.sigma;
+				const length = Math.hypot(...mark.normal);
+				if (length > 0) addLine('minor', mark.at, mark.at.map((p, k) => p + (mark.normal[k] / length) * NORMAL_LENGTH), color);
+			} else if (mark.type === 'velocity') {
+				// At a stagnation point the flow has no velocity along the surface, and nothing is drawn.
+				const speed = Math.hypot(...mark.velocity);
+				if (speed === 0) continue;
+				const tip = mark.at.map((p, k) => p + mark.velocity[k] * FLOW_LENGTH);
+				addLine('major', mark.at, tip, color);
+				this.flowCone.material.color.copy(color);
+				this.flowCone.position.fromArray(tip);
+				this.flowCone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...mark.velocity.map((v) => v / speed)));
+				group.add(this.flowCone);
 			}
 		}
 		// Each size's weights are averaged, so surface near the point, counted at every size, is tinted the most.
-		tint.uSizes.value = tinted.size;
-		if (blocks) group.add(this.car.tint);
+		soft.uSizes.value = sizes;
+		if (sizes) group.add(this.car.soft);
 
 		// The point: its facing as an arrow, and the handle.
 		const tip = point.position.map((p, k) => p + point.normal[k] * NORMAL_LENGTH);
@@ -325,12 +289,13 @@ export class Stencil {
 		this.viewer.setMarkers(null);
 	}
 
-	/** Free what the last drawing made; materials, the box, the cone and the car's tint mesh are kept. */
+	/** Free what the last drawing made; materials, the cones and the car's tinted surface are kept. */
 	release() {
 		if (!this.object) return;
 		const freed = new Set();
+		const kept = new Set([this.cone.geometry, this.car?.soft.geometry]);
 		this.object.traverse((o) => {
-			if (!o.geometry || o === this.cone || o === this.car?.tint || o.geometry === this.boxGeometry || freed.has(o.geometry)) return;
+			if (!o.geometry || kept.has(o.geometry) || freed.has(o.geometry)) return;
 			freed.add(o.geometry);
 			o.geometry.dispose();
 		});

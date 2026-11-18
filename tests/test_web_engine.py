@@ -1,15 +1,17 @@
 """The browser engine (`web/engine`) against the Python pipeline it reimplements, on a small synthetic
 car: the reader across the ways VTK writes a .vtp and the files it must refuse, the polygon geometry
 and frontal area, the features at every polygon and each network's Cp there, analysis of a surface
-given as arrays, the quick prediction, the export and the .vtp writer; and the exporter of `web/model/`.
+given as arrays, the quick prediction, the export and the .vtp writer; the grid operations of the flow
+and surface inputs, on the CPU and on WebGPU, against NumPy; and the exporter of `web/model/`.
 
 The engine's modules run under Bun or Deno through `tests/web_engine_outputs.mjs`, as the browser
-runs them; without either runtime these tests skip.
+runs them; without either runtime these tests skip. The WebGPU passes run under Deno, which has WebGPU.
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import shutil
 import subprocess
@@ -19,6 +21,8 @@ import numpy as np
 import pytest
 import pyvista as pv
 import torch
+from scipy import fft
+from scipy.ndimage import correlate1d, gaussian_filter1d, map_coordinates
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkFiltersCore import vtkAppendPolyData, vtkStripper
 from vtkmodules.vtkIOXML import vtkXMLPolyDataReader, vtkXMLPolyDataWriter
@@ -46,6 +50,7 @@ def _javascript_runtime() -> list[str] | None:
 
 RUNTIME = _javascript_runtime()
 requires_runtime = pytest.mark.skipif(RUNTIME is None, reason="needs Bun or Deno to run the browser engine's modules")
+DENO = shutil.which("deno")
 
 
 def _synthetic_car() -> pv.PolyData:
@@ -325,6 +330,23 @@ def test_drag_split_and_totals_follow_their_definitions(car: pv.PolyData, tmp_pa
     _assert_totals(outcome["exact"], surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
 
 
+@requires_runtime
+def test_flow_on_the_mesh_matches_the_model_s_flow_inputs(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `flowOnMesh` giving other flow than the networks' flow inputs at the same places: the
+    car's induced velocity and the squared speed along the surface, at each vertex with its normal."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    out = tmp_path / "out"
+    _run_engine("analysis", path, out)
+    positions = _array(out, "mesh_positions.f32").reshape(-1, 3)
+    normals = _array(out, "mesh_normals.f32").reshape(-1, 3).astype(np.float64)
+    context = SurfaceContext.from_surface(read_vtp_surface(path))
+    induced = np.stack([context.flow_grid.read(c, positions) for c in context.induced_velocity], axis=1)
+    velocity = induced + np.array([1.0, 0.0, 0.0])
+    along = velocity - np.einsum("ij,ij->i", velocity, normals)[:, None] * normals
+    np.testing.assert_allclose(_array(out, "flow_induced.f32").reshape(-1, 3), induced, atol=1e-5)
+    np.testing.assert_allclose(_array(out, "flow_speed_squared.f32"), (along ** 2).sum(axis=1), atol=1e-5)
+
+
 def _assert_polygon(polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMesh, cp: np.ndarray, sigma: np.ndarray) -> None:
     assert polygon["index"] == c
     np.testing.assert_array_equal(np.reshape(polygon["corners"], (-1, 3)), mesh.get_cell(c).points.astype(np.float32))
@@ -502,11 +524,14 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
 @requires_runtime
 def test_a_bundled_example_is_explained_at_a_vertex(tmp_path: Path) -> None:
     """Catches `explain` failing, or `polygonAt` answering, for a bundled example opened before any
-    file was analysed, when the engine holds no polygons."""
+    file was analysed, when the engine holds no polygons, and `flowOnMesh` failing for it."""
     outcome = _run_engine("example", REPO / "web/examples/run_1", tmp_path / "out")
     assert outcome["explained"]["at"] == "vertex"
     assert outcome["explained"]["cfd"] == outcome["vertexCfd"]
     assert outcome["polygon"] is None
+    # Its flow comes from the lookups the pack holds, as for a file just analysed.
+    vertices = json.loads((REPO / "web/examples/run_1.json").read_text())["mesh"]["vertices"]
+    assert outcome["flow"] == {"vertices": vertices, "inducedValues": 3 * vertices, "finite": True}
 
 
 RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"
@@ -602,24 +627,143 @@ def test_written_vtp_reads_back_in_vtk_with_the_same_cells_and_arrays(car: pv.Po
     np.testing.assert_array_equal(written.point_data["height"], original.points[:, 2])
 
 
-@requires_runtime
-def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Catches browser features that assume the shipped definition: with two voxel scales and two
-    neighbour slices instead (125 columns) they must still match Python's column for column."""
-    monkeypatch.setattr(feature_module, "VOXEL_SCALES", (0.05, 0.25))
-    monkeypatch.setattr(feature_module, "DY_NEIGHBOR", (-0.2, 0.2))
-    monkeypatch.setattr(feature_module, "FEATURE_COLUMNS", FeatureColumns(regional=slice(10, 40), slices=slice(40, 125), total_dim=125))
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str) -> None:
+    """Catches browser features that assume the shipped definition: with two surface scales, a two-place
+    outline stencil and one flow pass instead (59 columns) they must still match Python's column for
+    column, from lookups built on the CPU and on the GPU."""
+    if device == "cpu" and RUNTIME is None:
+        pytest.skip("needs Bun or Deno to run the browser engine's modules")
+    if device == "gpu" and DENO is None:
+        pytest.skip("needs Deno, whose WebGPU runs the GPU passes")
+    monkeypatch.setattr(feature_module, "SURFACE_SCALES", (0.05, 0.25))
+    monkeypatch.setattr(feature_module, "SURFACE_STEPS", (0.025, 0.25 / 3.0))
+    monkeypatch.setattr(feature_module, "OUTLINE_DX", (-0.4, 0.4))
+    monkeypatch.setattr(feature_module, "FLOW_PASSES", 1)
+    monkeypatch.setattr(feature_module, "FEATURE_COLUMNS", FeatureColumns(local=slice(0, 10), flow=slice(10, 14), surface=slice(14, 44), outline=slice(44, 59)))
     definition = tmp_path / "definition.json"
     definition.write_text(json.dumps(feature_definition()))
     path = _write_vtp(car, tmp_path / "car.vtp")
     out = tmp_path / "out"
-    outcome = _run_engine("features", path, out, definition)
+    out.mkdir()
+    runtime, mode = (RUNTIME, "features") if device == "cpu" else ([DENO, "run", "--allow-read", "--allow-write"], "features-gpu")
+    subprocess.run([*runtime, str(RUNNER), mode, str(path), str(out), str(definition)], check=True, cwd=REPO, timeout=300)
+    outcome = json.loads((out / "outcome.json").read_text())
+    if device == "gpu" and not outcome["gpu"]:
+        pytest.skip("Deno offers no WebGPU adapter on this machine")
 
     surface = read_vtp_surface(path)
     expected = extract_query_features(SurfaceContext.from_surface(surface), surface.centers, surface.normals)
-    assert outcome["featureCount"] == expected.shape[1] == 125
-    worst = np.abs(_array(out, "features.f32").reshape(expected.shape) - expected).max(axis=0)
-    assert worst.max() < 1e-4, f"feature columns {np.flatnonzero(worst >= 1e-4).tolist()} differ by up to {worst.max():.3g}"
+    assert outcome["featureCount"] == expected.shape[1] == 59
+    # Relative to each column's size: on this coarse car a surface column reaches 37, and the GPU's
+    # float32 grid coordinates leave about 5e-6 of it.
+    worst = np.abs(_array(out, "features.f32").reshape(expected.shape) - expected).max(axis=0) / np.maximum(np.abs(expected).max(axis=0), 1.0)
+    assert worst.max() < 2e-5, f"feature columns {np.flatnonzero(worst >= 2e-5).tolist()} differ by up to {worst.max():.3g} of their size"
+
+
+# Padded to 24 × 20 × 16 and 30 × 12 × 20, so the transforms run lines of every radix: 2, 3, 4 and 5.
+GRID_SHAPES = [(12, 10, 8), (15, 6, 10)]
+# Worst error over each result's largest magnitude. The CPU path follows the reference's float64
+# steps; the GPU computes grid coordinates in float32, about 1 µm of position on a car's 2 cm grid.
+# The CPU path's gradient read is what the wall condition's pass reads, which the GPU does in `wall`.
+GRID_TOLERANCES = {
+    "cpu": {"spectrum": 2e-6, "potential": 2e-6, "spread": 1e-6, "gradient": 1e-6, "blur0": 1e-6, "blur1": 1e-6, "blur2": 1e-6, "ahead": 1e-6},
+    "gpu": {"spectrum": 2e-6, "potential": 2e-6, "spread": 2e-5, "wall": 2e-5, "blur0": 1e-6, "blur1": 1e-6, "blur2": 1e-6, "ahead": 1e-6},
+}
+
+
+def _grid_case(nodes: tuple[int, int, int], directory: Path) -> dict[str, np.ndarray]:
+    """Synthetic inputs for the grid operations, written to `directory` as the runner reads them, and
+    what NumPy and SciPy give for each operation as features.py defines it: random sources, points
+    across the grid and a little beyond it (so the edge clamps are used) with random weights, normals,
+    areas and source densities, and a smooth field with noise for the reads and the 1.2-node Gaussian
+    of the surface scales."""
+    rng = np.random.default_rng(sum(nodes))
+    step, sigma, cube_mean_inverse_distance = 0.02, 1.2, 2.3800772
+    origin = np.array([-1.3, -0.7, -0.4])
+    size = np.array(nodes)
+    sources = rng.standard_normal(nodes).astype(np.float32)
+    points = (origin + rng.uniform(-0.05, 1.05, (4000, 3)) * (size - 1) * step).astype(np.float32)
+    weights = rng.standard_normal(len(points)).astype(np.float32)
+    normals = rng.standard_normal((len(points), 3))
+    normals = (normals / np.linalg.norm(normals, axis=1, keepdims=True)).astype(np.float32)
+    areas = rng.uniform(1e-6, 4e-6, len(points)).astype(np.float32)
+    densities = rng.standard_normal(len(points)).astype(np.float32)
+    x, y = np.arange(nodes[0])[:, None, None], np.arange(nodes[1])[None, :, None]
+    field = (np.sin(0.3 * x) * np.cos(0.2 * y) + 0.1 * rng.standard_normal(nodes)).astype(np.float32)
+    directory.mkdir()
+    spec = {"origin": origin.tolist(), "step": step, "nodes": list(nodes), "sigmaNodes": sigma, "cubeMeanInverseDistance": cube_mean_inverse_distance}
+    (directory / "spec.json").write_text(json.dumps(spec))
+    inputs = {"sources": sources, "points": points, "weights": weights, "normals": normals, "areas": areas, "densities": densities, "field": field}
+    for name, array in inputs.items():
+        array.astype("<f4").tofile(directory / f"{name}.f32")
+
+    q = (points.astype(np.float64) - origin) / step
+    base = np.clip(np.floor(q).astype(np.int64), 0, size - 2)
+    across = np.clip(q - base, 0.0, 1.0)
+    spread = np.zeros(nodes)
+    for corner in itertools.product((0, 1), repeat=3):
+        np.add.at(spread, tuple((base + corner).T), weights * np.prod(np.where(corner, across, 1.0 - across), axis=1))
+
+    padded = tuple(2 * n for n in nodes)
+    axes = [np.minimum(np.arange(p), p - np.arange(p)) * step for p in padded]
+    r = np.sqrt(axes[0][:, None, None] ** 2 + axes[1][None, :, None] ** 2 + axes[2][None, None, :] ** 2)
+    r[0, 0, 0] = step / cube_mean_inverse_distance
+    spectrum = fft.rfftn((-1.0 / (4.0 * np.pi * r)).astype(np.float32)).real.astype(np.float32)
+    transformed = fft.rfftn(sources + sources[:, :, ::-1], s=padded) * spectrum
+
+    gradient = np.stack([map_coordinates(g, q.T, order=1, mode="nearest") for g in np.gradient(field, step)], axis=1)
+    n = normals.astype(np.float64)
+    wall = densities + 0.5 * (-2.0 * n[:, 0] - 2.0 * np.einsum("ij,ij->i", gradient, n) - densities)
+
+    radius = int(3.0 * sigma + 0.5)
+    k = np.arange(-radius, radius + 1)
+    gauss = np.exp(-0.5 * (k / sigma) ** 2)
+    gauss /= gauss.sum()
+    return {
+        "spectrum": spectrum[: nodes[0] + 1, : nodes[1] + 1],
+        "potential": fft.irfftn(transformed, s=padded)[: nodes[0], : nodes[1], : nodes[2]],
+        "spread": spread.astype(np.float32),
+        "gradient": gradient,
+        "wall": wall,
+        **{f"blur{axis}": gaussian_filter1d(field, sigma, axis=axis, truncate=3.0) for axis in range(3)},
+        "ahead": correlate1d(field, np.where(k < 0, gauss, np.where(k == 0, 0.5 * gauss, 0.0)), axis=0),
+    }
+
+
+def _grid_errors(expected: dict[str, np.ndarray], out_dir: Path, device: str) -> dict[str, float]:
+    return {name: float(np.abs(_array(out_dir, f"{name}.f32") - expected[name].ravel()).max() / np.abs(expected[name]).max()) for name in GRID_TOLERANCES[device]}
+
+
+@requires_runtime
+@pytest.mark.parametrize("nodes", GRID_SHAPES)
+def test_grid_operations_on_the_cpu_match_numpy(nodes: tuple[int, int, int], tmp_path: Path) -> None:
+    """Catches the CPU path of the flow and surface inputs (`grid.js`) departing from NumPy: a wrong
+    radix butterfly or twiddle, the ground mirror, the zero and Nyquist frequencies of the real
+    transform, the kernel's octant, the edge clamps of spreading and reading the gradient, or the blur's edges."""
+    expected = _grid_case(nodes, tmp_path / "inputs")
+    out = tmp_path / "out"
+    out.mkdir()
+    subprocess.run([*RUNTIME, str(RUNNER), "grid-cpu", str(tmp_path / "inputs"), str(out)], check=True, cwd=REPO, timeout=300)
+    errors = _grid_errors(expected, out, "cpu")
+    assert all(errors[name] <= limit for name, limit in GRID_TOLERANCES["cpu"].items()), errors
+
+
+@pytest.mark.skipif(DENO is None, reason="needs Deno, whose WebGPU runs the GPU passes")
+@pytest.mark.parametrize("nodes", GRID_SHAPES)
+def test_grid_operations_on_the_gpu_match_numpy(nodes: tuple[int, int, int], tmp_path: Path) -> None:
+    """Catches the WebGPU passes (`grid-gpu.js`) departing from NumPy: as the CPU test, the wall
+    condition's pass, and a carry lost between the words of the spread's fixed-point sums."""
+    expected = _grid_case(nodes, tmp_path / "inputs")
+    out = tmp_path / "out"
+    out.mkdir()
+    subprocess.run([DENO, "run", "--allow-read", "--allow-write", str(RUNNER), "grid-gpu", str(tmp_path / "inputs"), str(out)], check=True, cwd=REPO, timeout=300)
+    outcome = json.loads((out / "outcome.json").read_text())
+    if not outcome["gpu"]:
+        pytest.skip("Deno offers no WebGPU adapter on this machine")
+    assert outcome["error"] is None
+    errors = _grid_errors(expected, out, "gpu")
+    assert all(errors[name] <= limit for name, limit in GRID_TOLERANCES["gpu"].items()), errors
 
 
 def test_exported_model_files_are_reproducible_and_current(tmp_path: Path) -> None:
@@ -630,7 +774,7 @@ def test_exported_model_files_are_reproducible_and_current(tmp_path: Path) -> No
     for name in ("ensemble.json", "weights.bin"):
         assert (first / name).read_bytes() == (second / name).read_bytes(), f"{name} differs between two exports"
         assert (first / name).read_bytes() == (REPO / "web/model" / name).read_bytes(), (
-            f"web/model/{name} is not the export of {CHECKPOINT.name}: run `uv run python -m surrogate.export_web`"
+            f"web/model/{name} is not the export of {CHECKPOINT.name}: run `uv run surrogate export`"
         )
 
 
@@ -653,7 +797,7 @@ def test_bundled_examples_match_the_model_and_fit_the_host() -> None:
     assert examples
     for example in examples:
         summary = json.loads(example.read_text())
-        stale = f"web/examples/{example.stem} was computed with another model: run `uv run python -m surrogate.write_examples`"
+        stale = f"web/examples/{example.stem} was computed with another model: run `uv run surrogate examples`"
         assert summary["model"] == weights_sha256, stale
         assert summary["lookups"]["definition"] == feature_definition(), stale
     oversized = [str(path.relative_to(REPO)) for path in (REPO / "web").rglob("*") if path.is_file() and path.stat().st_size > 25_000_000]

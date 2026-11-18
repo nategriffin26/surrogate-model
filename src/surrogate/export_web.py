@@ -1,7 +1,7 @@
 """Write the browser tool's model files, `web/model/`, from the trained ensemble checkpoint and the
 metrics file written next to it.
 
-    uv run python -m surrogate.export_web [artifacts/ensemble.pt] [web/model]
+    uv run surrogate export
 
 `ensemble.json` holds everything the browser needs to know about the model, so nothing about its shape
 is fixed in the browser's code:
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +36,6 @@ import torch
 from surrogate import features
 from surrogate.model import Z_CLIP, PerCellMLP
 
-REPO = Path(__file__).resolve().parents[2]
 DIMENSIONS = ("length", "width", "height")
 # The data the ensemble was trained on (Ashton et al., DrivAerML, 2024).
 DATASET = {
@@ -56,13 +54,19 @@ def feature_definition() -> dict:
         "count": features.FEATURE_COLUMNS.total_dim,
         "rasterStep": features.RASTER_STEP,
         "domainX": list(features.DOMAIN_X),
-        "domainYHalf": features.DOMAIN_Y_HALF,
         "domainZ": list(features.DOMAIN_Z),
-        "dxOwn": list(features.DX_OWN),
-        "dxNeighbor": list(features.DX_NEIGHBOR),
-        "dyNeighbor": list(features.DY_NEIGHBOR),
-        "dzNeighbor": list(features.DZ_NEIGHBOR),
-        "voxelScales": list(features.VOXEL_SCALES),
+        "outlineDx": list(features.OUTLINE_DX),
+        "outlineDz": list(features.OUTLINE_DZ),
+        "outlineDzDx": list(features.OUTLINE_DZ_DX),
+        "flowStep": features.FLOW_STEP,
+        "flowNodes": list(features.FLOW_NODES),
+        "flowPasses": features.FLOW_PASSES,
+        "flowRelaxation": features.FLOW_RELAXATION,
+        "surfaceScales": list(features.SURFACE_SCALES),
+        "surfaceSteps": list(features.SURFACE_STEPS),
+        "surfaceSigma": features.SURFACE_SIGMA,
+        "gaussianTruncate": features.GAUSSIAN_TRUNCATE,
+        "cubeMeanInverseDistance": features.CUBE_MEAN_INVERSE_DISTANCE,
     }
 
 
@@ -184,14 +188,3 @@ def export_web_model(checkpoint: Path, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "ensemble.json").write_text(json.dumps(model, indent=1) + "\n")
     (out_dir / "weights.bin").write_bytes(weights)
-
-
-def main() -> None:
-    checkpoint = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "artifacts/ensemble.pt"
-    out_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else REPO / "web/model"
-    export_web_model(checkpoint, out_dir)
-    print(f"Wrote {out_dir}/ensemble.json and {out_dir}/weights.bin")
-
-
-if __name__ == "__main__":
-    main()

@@ -26,9 +26,11 @@
 
 import { addCellArrays, CFD_ARRAY, cellArrayNames, readSurface, writeVtp } from './vtp.js';
 import { boundsOf, checkSurface, measureCells, frontalArea } from './geometry.js';
-import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
+import { computeFeatures, describeColumns, featureLayout, flowAt, kindsWithin } from './features.js';
+import { buildLookups } from './lookups.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
+import { createGridOperations } from './grid-gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint, surfaceMesh } from './meshes.js';
 import { Agreement, cfdDrag, coverage, evenPicks, surfaceAgreement, SurfaceTally } from './analysis.js';
@@ -73,8 +75,15 @@ async function prepare() {
   const layout = featureLayout(ensemble.features);
   const gpu = await createGpuNetworks(ensemble);
   const pool = createPool(HELPERS, ensemble);
-  const runners = { gpu, pool, networks: ensemble.folds.length, spreadScale: ensemble.spreadScale };
+  const runners = { gpu, grids: gpu && createGridOperations(gpu.device), pool, networks: ensemble.folds.length, spreadScale: ensemble.spreadScale };
   return { ensemble, layout, runners, device: deviceName(gpu) };
+}
+
+/** A GPU the browser took away, replaced before the next car, with the grid operations on the new device. */
+async function replaceLostGpu(runners, ensemble) {
+  if (!runners.gpu?.lost) return;
+  runners.gpu = await createGpuNetworks(ensemble);
+  runners.grids = runners.gpu && createGridOperations(runners.gpu.device);
 }
 
 /** @returns {import('./result.js').ModelCard} */
@@ -127,6 +136,9 @@ self.onmessage = ({ data }) => {
       break;
     case 'polygonAt':
       answerPolygonAt(data);
+      break;
+    case 'flowOnMesh':
+      answerFlowOnMesh(data);
       break;
     case 'export':
       exportVtp(data);
@@ -189,7 +201,7 @@ async function analyze(current, input) {
   };
   try {
     const { ensemble, layout, runners } = await engine;
-    if (runners.gpu?.lost) runners.gpu = await createGpuNetworks(ensemble);
+    await replaceLostGpu(runners, ensemble);
     const device = deviceName(runners.gpu);
     const stages = stageClock(post);
 
@@ -198,7 +210,7 @@ async function analyze(current, input) {
     checkpoint(current);
 
     stages.begin('measuring');
-    const car = measure(surface, layout, stages.progress);
+    const car = await measure(surface, layout, runners.grids, stages.progress);
     runners.pool.broadcast({ type: 'context', context: car.context });
     checkpoint(current);
 
@@ -328,10 +340,10 @@ async function predictQuick(current, given) {
   };
   try {
     const { ensemble, layout, runners } = await engine;
-    if (runners.gpu?.lost) runners.gpu = await createGpuNetworks(ensemble);
+    await replaceLostGpu(runners, ensemble);
     const started = performance.now();
     const surface = checkSurface(given);
-    const car = measure(surface, layout, () => {});
+    const car = await measure(surface, layout, runners.grids, () => {});
     runners.pool.broadcast({ type: 'context', context: car.context });
     const measured = performance.now();
 
@@ -391,12 +403,12 @@ function geometryOf({ bounds, frontal }) {
 }
 
 /** Polygon geometry, the frontal area, the feature lookups, the polygon-to-point operator and the CFD drag. */
-function measure(surface, layout, progress) {
+async function measure(surface, layout, grids, progress) {
   const cells = measureCells(surface);
   progress(0.5);
   const frontal = frontalArea(surface);
   progress(0.6);
-  const context = buildContext(cells, layout);
+  const context = { layout, ...(await buildLookups(cells, surface.points, layout, grids)) };
   progress(0.8);
   const average = cellToPoint(surface, cells.areas);
   progress(0.95);
@@ -753,6 +765,20 @@ async function explain({ id, point, normal, analysis, model, lookups, vertex }) 
       activations,
     };
     self.postMessage({ type: 'answer', id, answer: explanation });
+  } catch (error) {
+    self.postMessage({ type: 'answerFailed', id, message: error.message });
+  }
+}
+
+/** The flow inputs at a result's mesh vertices (`Engine.flowOnMesh`), from the result's lookups. */
+async function answerFlowOnMesh({ id, lookups, positions, normals }) {
+  try {
+    const { ensemble, layout } = await engine;
+    if (JSON.stringify(lookups.definition) !== JSON.stringify(ensemble.features)) {
+      throw new Error('This result was computed with different model inputs than this page uses, so its flow cannot be shown.');
+    }
+    const flow = flowAt({ ...lookups, layout }, positions, normals);
+    self.postMessage({ type: 'answer', id, answer: flow }, [flow.induced.buffer, flow.speedSquared.buffer]);
   } catch (error) {
     self.postMessage({ type: 'answerFailed', id, message: error.message });
   }

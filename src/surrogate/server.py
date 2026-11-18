@@ -1,4 +1,4 @@
-"""Serve the browser tool in `web/` on this machine: `uv run surrogate-app`.
+"""Serve the browser tool in `web/` on this machine: `uv run surrogate app`.
 
 Everything the tool computes runs in the visitor's browser, so this is a static file server with one route of
 its own: `/api/assistant`, which forwards the assistant's conversation to the model and streams the reply back,
@@ -15,8 +15,6 @@ adding the key, which never reaches the browser. The public site serves the same
 
 from __future__ import annotations
 
-import argparse
-import errno
 import json
 import os
 import urllib.error
@@ -184,26 +182,3 @@ def make_server(port: int, root: Path = WEB_ROOT, assistant: AssistantConfig | N
     """Bind the tool's server to 127.0.0.1; port 0 picks a free one."""
     handler = partial(ToolRequestHandler, directory=str(root), assistant=assistant or assistant_config())
     return ToolServer(("127.0.0.1", port), handler)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve the surface-pressure tool on this machine.")
-    parser.add_argument("--port", type=int, default=8740, help="port to listen on (default 8740)")
-    args = parser.parse_args()
-    try:
-        server = make_server(args.port)
-    except OSError as error:
-        if error.errno != errno.EADDRINUSE:
-            raise
-        parser.exit(1, f"Port {args.port} is already in use. Choose another with --port, for example --port {args.port + 1}.\n")
-    print(f"Surface-pressure tool: http://127.0.0.1:{server.server_address[1]}/  (Ctrl+C to stop)", flush=True)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-
-
-if __name__ == "__main__":
-    main()

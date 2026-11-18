@@ -125,7 +125,7 @@ export function createNetworks({ card, groups, setNetwork }) {
 					h('div', { class: 'fold-row fold-head' }, h('span'), runs.map((run) => h('span', { class: 'fold-run num' }, run)), h('span', { class: 'fold-cp' }, 'Cp here')),
 					foldRows),
 				h('p', { class: 'fold-key' }, h('span', {}, h('i', { class: 'fold-car' }), 'trained on'), h('span', {}, h('i', { class: 'fold-car held' }), 'held out, graded on')),
-				h('figcaption', {}, 'Same inputs, other learners, R² on held-out cars'),
+				h('figcaption', {}, 'Same inputs, other learners, cross-validated R²'),
 				bars(sameInputs.map((row) => ({
 					label: learnerName(row, groups), chips: chips(groups, groupsGiven(groups, row)), value: row.crossValidationR2,
 					text: row.crossValidationR2.toFixed(3), strong: row.learner === 'ensemble',

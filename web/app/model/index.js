@@ -12,6 +12,7 @@ import { Surface } from '../../viewer/surface.js';
 import { createAccuracy } from './accuracy.js';
 import { createDrag } from './drag.js';
 import { arrowDefinition, silhouettes } from './drawings.js';
+import { surfaceFlow } from './flow.js';
 import { inputGroups } from './groups.js';
 import { createInputs, requestAt } from './inputs.js';
 import { measure } from './measures.js';
@@ -163,11 +164,28 @@ export function mountModelView(host, { engine, session }) {
 				if (!(await whenDrawn(viewer, surface))) return;
 				[pictures.missSide, pictures.missBelow] = takePictures(viewer, [side('sigma', maps.spread), below('sigma', maps.spread)]);
 			}
+			const flow = card.columns.some((column) => column.kind === 'flow') ? await flowPictures(result, surface, maps) : null;
 			if (view.case !== c) return;
-			view.caseView = { result, pictures, stats, maps, outlines: silhouettes(result.mesh), cutter: inputs.stencil.car.cutter };
+			view.caseView = { result, pictures, stats, maps, flow, surface, outlines: silhouettes(result.mesh), cutter: inputs.stencil.car.cutter };
 			for (const part of parts) part.setCase(view.caseView);
 			if (points.has(c)) for (const part of parts) part.setPoint(points.get(c));
 			if (!tickets.has(c)) explain(c, hoodRequest(result));
+		}
+
+		/**
+		 * The potential flow over the car: its pressure on the page's car pictured from the side through the Cp map,
+		 * beside CFD's from the same view when the file has it, and its velocity arrows. The car's own Cp is put back.
+		 */
+		async function flowPictures(result, surface, maps) {
+			const flow = surfaceFlow(result.mesh, await engine.flowOnMesh(result));
+			surface.working.setFields({ cp: flow.pressure });
+			if (!(await whenDrawn(viewer, surface))) return null;
+			const [picture, cfdPicture = null] = takePictures(viewer, [
+				{ field: 'cp', map: maps.cp, view: 'side' },
+				...(result.mesh.cfd ? [{ field: 'cfd', map: maps.cp, view: 'side' }] : []),
+			]);
+			surface.working.setFields({ cp: result.mesh.cp });
+			return { ...flow, picture, cfdPicture, map: maps.cp };
 		}
 
 		/** Bring the page up to date with the open case while it is shown. */

@@ -29,7 +29,7 @@ export function createPointwise({ card, groups, training }) {
 		{ label: 'A point and the shape around it', row: shipped, strong: true },
 	].filter(Boolean);
 	const chart = h('figure', { class: 'figure' },
-		h('figcaption', {}, 'Accuracy on cars held out of training, R²'),
+		h('figcaption', {}, 'Cross-validated accuracy, R²'),
 		bars(rows.map(({ label, row, strong }) => ({
 			label,
 			chips: chips(groups, groupsGiven(groups, row)),

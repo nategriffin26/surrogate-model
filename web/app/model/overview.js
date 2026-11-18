@@ -17,7 +17,7 @@ export const STEPS = [
 	{ id: 'networks', name: 'Five networks', section: 'networks' },
 	{ id: 'answer', name: 'Cp and spread', section: 'spread' },
 	{ id: 'field', name: 'Cp on every cell', section: 'accuracy' },
-	{ id: 'drag', name: 'Drag', section: 'drag' },
+	{ id: 'drag', name: 'Pressure drag', section: 'drag' },
 ];
 
 /** The line in small, with the steps a section opens up filled in. */

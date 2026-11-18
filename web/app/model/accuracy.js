@@ -65,7 +65,7 @@ export function createAccuracy({ card }) {
 	const el = section('accuracy', 'On cars it never saw', null,
 		h('div', { class: 'headlines' },
 			h('div', { class: 'headline' }, h('span', { class: 'big-number num' }, card.crossValidation.meanR2.toFixed(3)),
-				h('span', { class: 'headline-label' }, `R², each of the ${count(card.trainRuns.length)} training cars predicted by the networks that never saw it`)),
+				h('span', { class: 'headline-label' }, `R², each of the ${count(card.trainRuns.length)} training cars predicted by the network that never saw it`)),
 			outsideNumber,
 			carNumber),
 		missing,

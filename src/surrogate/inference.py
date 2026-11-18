@@ -1,4 +1,5 @@
-"""Cold end-to-end VTP surface inference: Cp at every cell of the file, and aero diagnostics."""
+"""Cold end-to-end VTP surface inference: Cp at every cell of the file, aero diagnostics, and the file
+written back with the prediction."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyvista as pv
 
 from surrogate.features import DOMAIN_X, RASTER_STEP, SurfaceContext
 from surrogate.metrics import regional_r2_breakdown, surface_field_metrics
@@ -218,3 +220,13 @@ def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> Infe
             "total": round(time.perf_counter() - t_start, 2),
         },
     )
+
+
+def write_prediction_vtp(source: str | Path, result: InferenceResult, out: str | Path) -> None:
+    """Write the surface file `source` to `out` with `result` added as two float32 cell arrays, as the
+    browser tool's export does: `CpPredicted`, the networks' mean, and `CpSpread`, the spread σ(Cp).
+    The file's own arrays stay; an earlier `CpPredicted` or `CpSpread` is replaced."""
+    mesh = pv.read(source)
+    mesh.cell_data["CpPredicted"] = result.cp_mean
+    mesh.cell_data["CpSpread"] = result.cp_std
+    mesh.save(out)

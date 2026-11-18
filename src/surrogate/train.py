@@ -1,8 +1,12 @@
-"""Reproducible 5-fold training and controlled ablation suite on the 10 DrivAerML cases."""
+"""Five-fold training on the ten DrivAerML cases, and the ablations recorded beside it.
+
+The ablations are a staircase that adds one block of inputs at a time (`features.BLOCKS`, starting
+from a constant), closed by the shipped ensemble on every block, and two other learners: a learned
+whole-car vector, and boosted trees on every input.
+"""
 
 from __future__ import annotations
 
-import argparse
 import json
 import time
 from pathlib import Path
@@ -13,7 +17,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from surrogate.features import FEATURE_COLUMNS, VOXEL_SCALES
+from surrogate.dataset import ALLOWED_TRAIN_RUNS, DEFAULT_HOLDOUT_RUNS
+from surrogate.features import BLOCKS, FEATURE_COLUMNS
 from surrogate.metrics import (
     case_evaluation_summary,
     regional_r2_breakdown,
@@ -26,9 +31,7 @@ from surrogate.model import (
     PerCellMLP,
     PointNetGlobalMLP,
     SurrogateEnsemble,
-    select_device,
 )
-from surrogate.preprocess import ALLOWED_TRAIN_RUNS, DEFAULT_HOLDOUT_RUNS
 
 CAR_FOLDS: tuple[tuple[int, int], ...] = (
     (80, 98),
@@ -45,7 +48,7 @@ def _load_processed_dataset(
     manifest_path = processed_dir / "manifest.json"
     if not manifest_path.is_file():
         raise FileNotFoundError(
-            f"Missing {manifest_path}. Run `uv run python -m surrogate.preprocess` first."
+            f"Missing {manifest_path}. Run `uv run surrogate preprocess` first."
         )
     manifest = json.loads(manifest_path.read_text())
     meta_by_run: dict[int, dict[str, Any]] = {int(c["run"]): c for c in manifest["cases"]}
@@ -58,12 +61,7 @@ def _load_processed_dataset(
 
 
 def _select_columns(features: np.ndarray, blocks: tuple[str, ...]) -> np.ndarray:
-    col_map = {
-        "local": FEATURE_COLUMNS.local,
-        "regional": FEATURE_COLUMNS.regional,
-        "slices": FEATURE_COLUMNS.slices,
-    }
-    return np.concatenate([features[:, col_map[b]] for b in blocks], axis=1)
+    return np.concatenate([features[:, getattr(FEATURE_COLUMNS, b)] for b in blocks], axis=1)
 
 
 def _fit_mlp_fold(
@@ -324,8 +322,8 @@ def train_and_evaluate(
     epochs: int = 30,
     seed: int = 42,
     run_ablations: bool = True,
+    device: torch.device,
 ) -> dict[str, Any]:
-    device = select_device()
     arrays_by_run, meta_by_run = _load_processed_dataset(processed_dir)
     holdout_runs = tuple(r for r in DEFAULT_HOLDOUT_RUNS if r in arrays_by_run)
 
@@ -432,7 +430,7 @@ def train_and_evaluate(
             f"Cd,p MAE={holdout_summary['cd_p_mae']:.4f} (bias {holdout_summary['cd_p_bias']:+.4f})"
         )
 
-    # 2. Controlled Ablation Table
+    # 2. Ablations
     ablations: dict[str, Any] = {}
     if run_ablations:
         # 2a. Constant fold-mean baseline (zero learning)
@@ -490,24 +488,12 @@ def train_and_evaluate(
             }
         ablations["constant_baseline"] = const_entry
 
-        # 2b. PointNet 64D global latent ablation
-        pnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, holdout_runs, device=device, seed=seed)
-        ablations["pointnet_global_64d"] = {
-            "label": "PointNet learned global vector g (64D)",
-            "blocks": ["local"],
-            "learner": "pointnet",
-            **pnet,
-        }
-        print(f"[Ablation: PointNet 64D g] CV R²={pnet['cv']['mean_r2']:.4f} | Cd,p MAE={pnet['cv']['cd_p_mae']:.4f}")
-
-        # 2c. Feature-block MLP ablations (local only, slices only, regional only)
-        voxel_sizes = "/".join(f"{100 * scale:g}" for scale in VOXEL_SCALES)
-        subset_specs: list[tuple[str, str, tuple[str, ...]]] = [
-            ("local_only_mlp", "Local MLP (position + normal only)", ("local",)),
-            ("local_plus_slices_mlp", "Local + streamwise XZ/XY slices & Y-hops", ("local", "slices")),
-            ("local_plus_regional_mlp", f"Local + 3D regional voxels ({voxel_sizes} cm)", ("local", "regional")),
-        ]
-        for key, label, blocks in subset_specs:
+        # 2b. The staircase: one network per fold on the first one, two and three blocks of inputs; the
+        # shipped ensemble on all of them closes it
+        for n_blocks in range(1, len(BLOCKS)):
+            blocks = BLOCKS[:n_blocks]
+            key = f"{'_'.join(blocks)}_mlp"
+            label = f"Five networks on {' + '.join(blocks)}"
             sub_folds: list[FoldModel] = []
             sub_oof: dict[int, np.ndarray] = {}
             for fold_idx, val_pair in enumerate(CAR_FOLDS):
@@ -550,7 +536,26 @@ def train_and_evaluate(
             ablations[key] = entry
             print(f"[Ablation: {label}] CV R²={sub_cv['mean_r2']:.4f} | Cd,p MAE={sub_cv['cd_p_mae']:.4f}")
 
-        # 2d. LightGBM baseline on every feature column
+    ablations["shipped_mlp_ensemble"] = {
+        "label": f"Shipped: five networks on all {FEATURE_COLUMNS.total_dim} inputs",
+        "blocks": list(BLOCKS),
+        "learner": "ensemble",
+        "cv": cv_summary,
+        "holdout": holdout_summary,
+    }
+
+    if run_ablations:
+        # 2c. Two other learners: a learned whole-car vector beside position and facing, and boosted
+        # trees on every input
+        pnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, holdout_runs, device=device, seed=seed)
+        ablations["pointnet_global_64d"] = {
+            "label": "PointNet learned global vector g (64D)",
+            "blocks": ["local"],
+            "learner": "pointnet",
+            **pnet,
+        }
+        print(f"[Ablation: PointNet 64D g] CV R²={pnet['cv']['mean_r2']:.4f} | Cd,p MAE={pnet['cv']['cd_p_mae']:.4f}")
+
         lgb_res = run_lightgbm_baseline_isolated(
             processed_dir,
             ALLOWED_TRAIN_RUNS,
@@ -560,20 +565,12 @@ def train_and_evaluate(
             meta_by_run,
         )
         ablations["lightgbm_full"] = {
-            "label": f"LightGBM boosted trees (all {FEATURE_COLUMNS.total_dim} features)",
-            "blocks": ["local", "regional", "slices"],
+            "label": f"LightGBM boosted trees (all {FEATURE_COLUMNS.total_dim} inputs)",
+            "blocks": list(BLOCKS),
             "learner": "trees",
             **lgb_res,
         }
         print(f"[Baseline: LightGBM] CV R²={lgb_res['cv']['mean_r2']:.4f} | Cd,p MAE={lgb_res['cv']['cd_p_mae']:.4f}")
-
-    ablations["shipped_mlp_ensemble"] = {
-        "label": "Shipped 5-Fold Per-Cell MLP (local + regional + slices)",
-        "blocks": ["local", "regional", "slices"],
-        "learner": "ensemble",
-        "cv": cv_summary,
-        "holdout": holdout_summary,
-    }
 
     report = {
         "device": str(device),
@@ -595,25 +592,3 @@ def train_and_evaluate(
     metrics_path.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Wrote {metrics_path}")
     return report
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train 5-fold surface Cp surrogate and run ablations.")
-    parser.add_argument("--processed-dir", type=Path, default=Path("data/processed"))
-    parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts"))
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--skip-ablations", action="store_true")
-    args = parser.parse_args()
-
-    train_and_evaluate(
-        processed_dir=args.processed_dir,
-        artifacts_dir=args.artifacts_dir,
-        epochs=args.epochs,
-        seed=args.seed,
-        run_ablations=not args.skip_ablations,
-    )
-
-
-if __name__ == "__main__":
-    main()

@@ -1,9 +1,9 @@
 """Write `web/model/training-cars.json`, the ten training cars as the model view draws them: each car seen
 from its left (−y) side as a coarse raster of its CFD pressure, with its polygon count and CFD pressure drag.
 
-    uv run python -m surrogate.export_training_cars [data/processed] [web/model/training-cars.json]
+    uv run surrogate export
 
-Reads the preprocessed cases (`surrogate.preprocess`): the manifest and each training run's area-weighted
+Reads the preprocessed cases (`uv run surrogate preprocess`): the manifest and each training run's area-weighted
 sample of cell centres and Cp. A raster cell holds the Cp of the sample nearest the viewer, the one with the
 lowest y, as an orthographic view from −y draws it; a cell no sample falls in is null. Cp is stored in
 hundredths, rounded.
@@ -12,12 +12,10 @@ hundredths, rounded.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[2]
 # Raster cell size in metres: a 4.7 m car is about 120 cells long, more than the thumbnails drawn of it.
 STEP = 0.04
 
@@ -47,10 +45,3 @@ def export_training_cars(processed: Path, out: Path) -> None:
             raster = side_raster(arrays["centers"], arrays["cp"])
         cars.append({"run": run, "cells": cases[run]["n_cells"], "cdP": cases[run]["exact_cd_p"], **raster})
     out.write_text(json.dumps({"step": STEP, "cars": cars}, separators=(",", ":")) + "\n")
-
-
-if __name__ == "__main__":
-    args = sys.argv[1:]
-    processed = Path(args[0]) if args else REPO / "data" / "processed"
-    out = Path(args[1]) if len(args) > 1 else REPO / "web" / "model" / "training-cars.json"
-    export_training_cars(processed, out)

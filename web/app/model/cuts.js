@@ -1,6 +1,6 @@
-// Where an axis-aligned plane cuts the car's surface: the outlines the slice inputs read, drawn on the car. The
-// triangles are bucketed once along y and z, so a cut visits only the triangles that reach its plane and keeps up
-// with a point dragged across the car.
+// Where an axis-aligned plane cuts the car's surface: the outlines the plan-view outline reads and the surface
+// drawings show, drawn on the car and flat. The triangles are bucketed once along y and z, so a cut visits only the
+// triangles that reach its plane and keeps up with a point dragged across the car.
 
 /** Cuts kept per car; a drag across the whole car visits fewer distinct planes than this. */
 const KEPT = 96;
@@ -8,7 +8,7 @@ const KEPT = 96;
 export class SurfaceCutter {
 	/**
 	 * @param {import('../../engine/result.js').DisplayMesh} mesh
-	 * @param {number} step  bucket size in metres, the raster step of the slice inputs
+	 * @param {number} step  bucket size in metres, the raster step of the plan-view outline
 	 */
 	constructor({ positions, normals, indices }, step) {
 		this.positions = positions;

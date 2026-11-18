@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-surrogate-app = "surrogate.server:main"
+surrogate = "surrogate.cli:main"
 
 [project.optional-dependencies]
 dev = [

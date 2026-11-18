@@ -1,18 +1,22 @@
 /**
- * The numbers the networks are told about a surface point, as `features.py` defines them: the point's
- * position and facing; how the surface bends around it at each voxel scale; the body's outline in the
- * point's own streamwise slice and in the slices beside it; the plan-view outline; and flags for
- * whether the body is there at each place looked at. Nothing is folded across the centre plane: the
- * lookups keep the car's two sides apart, and a point is read on its own side.
+ * The numbers the networks are told about a surface point, as `features.py` defines them, read from
+ * a car's lookups (`lookups.js`): where the point is on the car and which way it faces; the flow
+ * around the car standing on the ground, as a sheet of sources on its surface satisfying the wall
+ * condition (the velocity the car adds to the stream, and the squared speed along the surface); the
+ * surface around the point at four scales, whole and split into the part ahead and the part behind;
+ * and how far the car reaches sideways beyond the point, at its height, ahead, behind, above and
+ * below. Nothing is folded across the centre plane: a point is read on its own side.
  *
  * Axes are the file's: x downstream, z up, and so (right-handed) +y toward the car's right as seen
  * from the driver's seat.
  *
- * The definition's constants (voxel scales, stencils, raster, domain) come from the model file, which
- * `export_web.py` writes from `features.py`, so a model trained on another definition brings its own.
- * Arithmetic follows the reference's float32 and float64 steps one for one (`Math.fround` where NumPy
- * rounds to float32), so grid cells are chosen exactly as in training and values agree to float32.
+ * The definition's constants come from the model file, which `export_web.py` writes from
+ * `features.py`, so a model trained on another definition brings its own. Arithmetic follows the
+ * reference's float32 and float64 steps (`Math.fround` where NumPy rounds to float32), so raster
+ * bins are chosen as in training and values agree to float32.
  */
+
+import { gaussianWeights, gradientAt, locate, upstreamHalf } from './grid.js';
 
 const f32 = Math.fround;
 
@@ -21,40 +25,68 @@ const f32 = Math.fround;
  * @property {number} count
  * @property {number} rasterStep
  * @property {number[]} domainX
- * @property {number} domainYHalf
  * @property {number[]} domainZ
- * @property {number[]} dxOwn
- * @property {number[]} dxNeighbor
- * @property {number[]} dyNeighbor
- * @property {number[]} dzNeighbor
- * @property {number[]} voxelScales
+ * @property {number[]} outlineDx
+ * @property {number[]} outlineDz
+ * @property {number[]} outlineDzDx
+ * @property {number} flowStep
+ * @property {number[]} flowNodes      (nx, ny, nz) above the ground; the grid holds their mirror image below too
+ * @property {number} flowPasses
+ * @property {number} flowRelaxation
+ * @property {number[]} surfaceScales
+ * @property {number[]} surfaceSteps
+ * @property {number} surfaceSigma     the Gaussian's standard deviation, as a share of the scale
+ * @property {number} gaussianTruncate the Gaussian's reach, in standard deviations
+ * @property {number} cubeMeanInverseDistance
  *
- * @typedef {FeatureDefinition & { h: number, x0: number, y0: number, z0: number, nx: number, ny: number, nz: number,
- *   dxOwn32: number[], dxNeighbor32: number[], dyNeighbor32: number[], dzNeighbor32: number[] }} FeatureLayout
- *   The raster's origin (x0, y0, z0) and step h in float32, its size (nx, ny, nz) over the domain, y from
- *   −domainYHalf to domainYHalf relative to the car's centre plane.
+ * @typedef {Object} ScaleLayout  One surface scale's grid step and Gaussian.
+ * @property {number} scale
+ * @property {number} step
+ * @property {number} radius          the Gaussian's reach in nodes
+ * @property {Float64Array} weights   the normalised Gaussian at offsets −radius … radius
+ * @property {Float64Array} upstream  the same kept upstream: nodes at smaller x fully, the node itself by half
+ * @property {number} flatPanel       the blurred area a flat panel through the point reads, on average over
+ *   where it falls between nodes
+ *
+ * @typedef {FeatureDefinition & { h: number, x0: number, z0: number, nx: number, nz: number,
+ *   flow: { x0: number, step: number, nodes: number[], passes: number, relaxation: number, cubeMeanInverseDistance: number },
+ *   scales: ScaleLayout[] }} FeatureLayout
+ *   The outline raster's origin (x0, z0) and step h in float32, as the raster is built, and its size
+ *   (nx, nz); the flow grid with its mirror image (nodes[2] twice the definition's); each scale's grid.
  */
 
 /**
- * The definition with its float32 constants and raster sizes worked out once.
+ * The definition with its float32 constants, grid sizes and Gaussians worked out once.
  * @param {FeatureDefinition} definition
  * @returns {FeatureLayout}
  */
 export function featureLayout(definition) {
-  const { rasterStep, domainX, domainYHalf, domainZ } = definition;
+  const { rasterStep, domainX, domainZ, flowNodes, surfaceSigma, gaussianTruncate } = definition;
   const layout = {
     ...definition,
     h: f32(rasterStep),
     x0: f32(domainX[0]),
-    y0: f32(-domainYHalf),
     z0: f32(domainZ[0]),
     nx: Math.round((domainX[1] - domainX[0]) / rasterStep),
-    ny: 2 * Math.round(domainYHalf / rasterStep),
     nz: Math.round((domainZ[1] - domainZ[0]) / rasterStep),
-    dxOwn32: definition.dxOwn.map(f32),
-    dxNeighbor32: definition.dxNeighbor.map(f32),
-    dyNeighbor32: definition.dyNeighbor.map(f32),
-    dzNeighbor32: definition.dzNeighbor.map(f32),
+    flow: {
+      x0: domainX[0],
+      step: definition.flowStep,
+      nodes: [flowNodes[0], flowNodes[1], 2 * flowNodes[2]],
+      passes: definition.flowPasses,
+      relaxation: definition.flowRelaxation,
+      cubeMeanInverseDistance: definition.cubeMeanInverseDistance,
+    },
+    scales: definition.surfaceScales.map((scale, s) => {
+      const step = definition.surfaceSteps[s];
+      const weights = gaussianWeights((surfaceSigma * scale) / step, gaussianTruncate);
+      const radius = (weights.length - 1) / 2;
+      // A flat panel lays step² of area per column of nodes. Across the panel the spread and the read
+      // each share it between the two nodes either side; averaged over where the panel falls between
+      // them, the node itself counts 2/3 and each neighbour 1/6.
+      const flatPanel = step * step * ((2.0 / 3.0) * weights[radius] + (1.0 / 3.0) * weights[radius + 1]);
+      return { scale, step, radius, weights, upstream: upstreamHalf(weights), flatPanel };
+    }),
   };
   const columns = describeColumns(definition).length;
   if (columns !== definition.count) {
@@ -71,14 +103,16 @@ export function featureLayout(definition) {
  * it measured to (a body surface, or for the distances from nose, tail, centre plane and lowest point
  * that plane), null for every other column. The plan-view outline is measured outboard, away from the
  * centre plane on the point's own side: its `along` is [0, 1, 0] for a point on the +y side and is
- * turned to [0, −1, 0] for a point on the −y side.
+ * turned to [0, −1, 0] for a point on the −y side. A surface column also has `scale`, the size it is
+ * named by, `sigma`, its Gaussian's standard deviation (both in metres), and `part`: the whole surface
+ * about the point, the part ahead of it, or the part behind.
  * @param {FeatureDefinition} definition
- * @returns {{ kind: string, group: string, name: string, unit: string, offset: number[], along: number[] | null }[]}
+ * @returns {import('./result.js').ModelColumn[]}
  */
-export function describeColumns({ voxelScales, dxOwn, dxNeighbor, dyNeighbor, dzNeighbor }) {
+export function describeColumns({ surfaceScales, surfaceSigma, outlineDx, outlineDz, outlineDzDx }) {
   const columns = [];
-  const add = (kind, group, name, { offset = [0, 0, 0], along = null } = {}) => {
-    columns.push({ kind, group, name, unit: along ? 'm' : '', offset, along });
+  const add = (kind, group, name, { offset = [0, 0, 0], along = null, ...more } = {}) => {
+    columns.push({ kind, group, name, unit: along ? 'm' : '', offset, along, ...more });
   };
   const where = ([dx, dy, dz]) => {
     const parts = [];
@@ -90,7 +124,7 @@ export function describeColumns({ voxelScales, dxOwn, dxNeighbor, dyNeighbor, dz
     say(dz, 'down', 'up');
     return parts.length ? `, ${parts.join(', ')}` : '';
   };
-  const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], down = [0, 0, -1], up = [0, 0, 1];
+  const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], down = [0, 0, -1];
 
   const position = 'Position and facing';
   add('position', position, 'Distance from nose', { along: forward });
@@ -105,61 +139,40 @@ export function describeColumns({ voxelScales, dxOwn, dxNeighbor, dyNeighbor, dz
   add('position', position, 'y from centre plane, share of half-width');
   add('position', position, 'Share of height from bottom');
 
-  for (const scale of voxelScales) {
-    const group = `Bend at ${Math.round(scale * 100)} cm`;
-    const block = (offset) => {
-      const label = where(offset);
-      add('bend', group, `Mean facing rearward${label}`, { offset });
-      add('bend', group, `Mean facing +y${label}`, { offset });
-      add('bend', group, `Mean facing up${label}`, { offset });
-      add('bend', group, `Surface density${label}`, { offset });
+  const flow = 'Potential flow';
+  add('flow', flow, 'Induced velocity, rearward');
+  add('flow', flow, 'Induced velocity, +y');
+  add('flow', flow, 'Induced velocity, up');
+  add('flow', flow, 'Speed along the surface, squared');
+
+  for (const scale of surfaceScales) {
+    const group = `Surface at ${Math.round(scale * 100)} cm`;
+    const surface = (name, part) => add('surface', group, name, { scale, sigma: surfaceSigma * scale, part });
+    const facing = (part, label) => {
+      surface(`Mean facing rearward${label}`, part);
+      surface(`Mean facing +y${label}`, part);
+      surface(`Mean facing up${label}`, part);
+      surface(`Surface density${label}`, part);
     };
-    block([0, 0, 0]);
-    add('bend', group, 'Bend, rearward');
-    add('bend', group, 'Bend, +y');
-    add('bend', group, 'Bend, up');
-    block([-scale, 0, 0]);
-    block([scale, 0, 0]);
-  }
-
-  // Tops and bottoms are signed heights of the body above the place read, so both run upward.
-  const own = 'Own slice';
-  add('slice', own, 'Body top above', { along: up });
-  add('slice', own, 'Body bottom below', { along: up });
-  for (const dx of dxOwn) {
-    add('slice', own, `Body top above${where([dx, 0, 0])}`, { offset: [dx, 0, 0], along: up });
-    add('slice', own, `Body bottom below${where([dx, 0, 0])}`, { offset: [dx, 0, 0], along: up });
-  }
-  add('slice', own, 'Distance from slice front', { along: forward });
-  add('slice', own, 'Distance to slice rear', { along: rearward });
-  add('slice', own, 'Slice peak above', { along: up });
-
-  const flags = 'On-body flags';
-  add('flag', flags, 'Body here');
-  for (const dx of dxOwn) add('flag', flags, `Body${where([dx, 0, 0])}`, { offset: [dx, 0, 0] });
-
-  const neighbours = 'Neighbour slices';
-  for (const dy of dyNeighbor) {
-    for (const dx of dxNeighbor) {
-      add('neighbour', neighbours, `Body top above${where([dx, dy, 0])}`, { offset: [dx, dy, 0], along: up });
-      add('neighbour', neighbours, `Body bottom below${where([dx, dy, 0])}`, { offset: [dx, dy, 0], along: up });
-    }
-  }
-  for (const dy of dyNeighbor) {
-    for (const dx of dxNeighbor) add('flag', flags, `Body${where([dx, dy, 0])}`, { offset: [dx, dy, 0] });
+    facing('whole', '');
+    surface('Bend, rearward', 'whole');
+    surface('Bend, +y', 'whole');
+    surface('Bend, up', 'whole');
+    facing('ahead', ', ahead');
+    facing('behind', ', behind');
   }
 
   const outline = 'Plan-view outline';
   add('outline', outline, 'Outline outboard', { along: outboard });
-  for (const dx of dxOwn) add('outline', outline, `Outline outboard${where([dx, 0, 0])}`, { offset: [dx, 0, 0], along: outboard });
-  for (const dz of dzNeighbor) {
-    for (const dx of dxNeighbor) add('outline', outline, `Outline outboard${where([dx, 0, dz])}`, { offset: [dx, 0, dz], along: outboard });
+  for (const dx of outlineDx) add('outline', outline, `Outline outboard${where([dx, 0, 0])}`, { offset: [dx, 0, 0], along: outboard });
+  for (const dz of outlineDz) {
+    for (const dx of outlineDzDx) add('outline', outline, `Outline outboard${where([dx, 0, dz])}`, { offset: [dx, 0, dz], along: outboard });
   }
   return columns;
 }
 
 /** Column kinds in the order the model view lists them. */
-const COLUMN_KINDS = ['position', 'bend', 'slice', 'neighbour', 'outline', 'flag'];
+const COLUMN_KINDS = ['position', 'flow', 'surface', 'outline'];
 
 /**
  * The kinds of the columns inside [start, stop) ranges, in `COLUMN_KINDS` order: what a model given
@@ -174,137 +187,14 @@ export function kindsWithin(columns, ranges) {
 }
 
 /**
- * @typedef {Object} VoxelGrid  Area and area-weighted normal sums on a regular grid centred on the car's centre plane.
- *   Summed in float64 as the reference does, then kept as float32: a fine grid is tens of MB, every
- *   helper worker holds a copy, and the features read from it move by under 1e-6.
- * @property {number} scale
- * @property {number[]} origin   (3) float64
- * @property {number[]} shape    (3)
- * @property {Float32Array} area
- * @property {Float32Array} normalX
- * @property {Float32Array} normalY
- * @property {Float32Array} normalZ
- *
- * @typedef {Object} SurfaceContext  Whole-car lookups, built once from every polygon (`SurfaceContext`).
- * @property {FeatureLayout} layout
- * @property {number[]} bounds
- * @property {number} yCenter
- * @property {Float32Array} zTop        (nx, ny) highest centre in each (x, y) column, rows from y = −domainYHalf
- * @property {Float32Array} zBottom     (nx, ny) lowest
- * @property {Float32Array} occupied    (nx, ny) 1 where the column holds any polygon
- * @property {Float32Array} yOut        (2, nx, nz) how far the body reaches from the centre plane in each
- *   (x, z) column: [0] toward −y, [1] toward +y
- * @property {Float32Array} xFirst      (ny) leading x of each y strip
- * @property {Float32Array} xLast       (ny) trailing x
- * @property {Float32Array} zPeak       (ny) highest z
- * @property {VoxelGrid[]} voxels
+ * @typedef {import('./lookups.js').SurfaceLookups & { layout: FeatureLayout }} SurfaceContext
+ *   A car's lookups with the layout of the definition they were built for.
  */
 
-/**
- * @param {import('./geometry.js').CellGeometry} cells
- * @param {FeatureLayout} layout
- * @returns {SurfaceContext}
- */
-export function buildContext(cells, layout) {
-  const { centers, normals, areas, bounds } = cells;
-  const { h, x0, y0, z0, nx, ny, nz } = layout;
-  const [xmin, xmax, ymin, ymax, zmin] = bounds;
-  const yCenter = 0.5 * (ymin + ymax);
-  const yCenter32 = f32(yCenter);
-  const cellCount = areas.length;
-
-  const zTop = new Float32Array(nx * ny).fill(-Infinity);
-  const zBottom = new Float32Array(nx * ny).fill(Infinity);
-  const yOut = new Float32Array(2 * nx * nz);
-  const voxels = layout.voxelScales.map((scale) => voxelGrid(scale, layout));
-
-  for (let c = 0; c < cellCount; c++) {
-    const x = centers[3 * c];
-    const yRelative = f32(centers[3 * c + 1] - yCenter32);
-    const fromCentre = Math.abs(yRelative);
-    const z = centers[3 * c + 2];
-    const ix = clamp(Math.trunc(f32(f32(x - x0) / h)), nx);
-    const iy = clamp(Math.trunc(f32(f32(yRelative - y0) / h)), ny);
-    const iz = clamp(Math.trunc(f32(f32(z - z0) / h)), nz);
-    const column = ix * ny + iy;
-    if (z > zTop[column]) zTop[column] = z;
-    if (z < zBottom[column]) zBottom[column] = z;
-    const reach = ((yRelative >= 0 ? nx : 0) + ix) * nz + iz;
-    if (fromCentre > yOut[reach]) yOut[reach] = fromCentre;
-
-    const area = areas[c];
-    for (const grid of voxels) {
-      const [ox, oy, oz] = grid.origin;
-      const [sx, sy, sz] = grid.shape;
-      const vx = clamp(Math.trunc((x - ox) / grid.scale), sx);
-      const vy = clamp(Math.trunc((yRelative - oy) / grid.scale), sy);
-      const vz = clamp(Math.trunc((z - oz) / grid.scale), sz);
-      const v = (vx * sy + vy) * sz + vz;
-      grid.area[v] += area;
-      grid.normalX[v] += area * normals[3 * c];
-      grid.normalY[v] += area * normals[3 * c + 1];
-      grid.normalZ[v] += area * normals[3 * c + 2];
-    }
-  }
-
-  const occupied = new Float32Array(nx * ny);
-  for (let i = 0; i < nx * ny; i++) {
-    if (zTop[i] !== -Infinity) {
-      occupied[i] = 1;
-    } else {
-      zTop[i] = zmin;
-      zBottom[i] = zmin;
-    }
-  }
-
-  const xFirst = new Float32Array(ny);
-  const xLast = new Float32Array(ny);
-  const zPeak = new Float32Array(ny);
-  for (let j = 0; j < ny; j++) {
-    let first = -1;
-    let last = -1;
-    let peak = -Infinity;
-    for (let i = 0; i < nx; i++) {
-      if (occupied[i * ny + j]) {
-        if (first < 0) first = i;
-        last = i;
-      }
-      if (zTop[i * ny + j] > peak) peak = zTop[i * ny + j];
-    }
-    xFirst[j] = first >= 0 ? stationX(layout, first) : xmin;
-    xLast[j] = last >= 0 ? stationX(layout, last) : xmax;
-    zPeak[j] = peak;
-  }
-
-  for (const grid of voxels) {
-    for (const field of ['area', 'normalX', 'normalY', 'normalZ']) grid[field] = new Float32Array(grid[field]);
-  }
-  return { layout, bounds, yCenter, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, voxels };
-}
-
-/** x of raster station i, as the reference's float32 `x0 + h * arange(nx)`. */
-function stationX({ x0, h }, i) {
-  return f32(x0 + f32(h * i));
-}
-
-function voxelGrid(scale, { domainX, domainYHalf, domainZ }) {
-  const halfY = Math.ceil(domainYHalf / scale);
-  const origin = [domainX[0], -halfY * scale, domainZ[0]];
-  const shape = [
-    Math.ceil((domainX[1] - domainX[0]) / scale) + 1,
-    2 * halfY,
-    Math.ceil((domainZ[1] - domainZ[0]) / scale) + 1,
-  ];
-  const size = shape[0] * shape[1] * shape[2];
-  return {
-    scale, origin, shape,
-    area: new Float64Array(size), normalX: new Float64Array(size), normalY: new Float64Array(size), normalZ: new Float64Array(size),
-  };
-}
-
-function clamp(index, size) {
-  return index < 0 ? 0 : index >= size ? size - 1 : index;
-}
+const CUBE = new Float64Array(6);
+const VELOCITY = new Float64Array(3);
+const WHOLE = new Float64Array(4);
+const AHEAD = new Float64Array(4);
 
 /**
  * Write the features of points [first, first + count) into `out`, one row of `stride` floats per
@@ -315,137 +205,162 @@ function clamp(index, size) {
  * @param {Float32Array} out       (count, stride)
  */
 export function computeFeatures(context, positions, normals, first, count, out, stride = context.layout.count) {
-  const { layout, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, voxels } = context;
-  const { h, x0, y0, z0, nx, ny, nz, dxOwn32, dxNeighbor32, dyNeighbor32, dzNeighbor32 } = layout;
+  const { layout, yOut, flow, scales } = context;
+  const { rasterStep, domainX, domainZ, nx, nz, outlineDx, outlineDz, outlineDzDx } = layout;
   const [xmin, xmax, ymin, ymax, zmin, zmax] = context.bounds;
-  const xmin32 = f32(xmin), xmax32 = f32(xmax), zmin32 = f32(zmin);
-  const length = f32(Math.max(xmax - xmin, 1e-6));
-  const halfWidth = f32(Math.max(0.5 * (ymax - ymin), 1e-6));
-  const height = f32(Math.max(zmax - zmin, 1e-6));
-  const yCenter32 = f32(context.yCenter);
-  const columnX = (x) => clamp(Math.trunc(f32(f32(x - x0) / h)), nx);
-  const rowY = (y) => clamp(Math.trunc(f32(f32(y - y0) / h)), ny);
-  const sampled = new Float64Array(4);
+  const yCenter = context.yCenter;
+  const flowGrid = { origin: flow.origin, step: layout.flow.step, nodes: layout.flow.nodes };
+  const scaleGrids = scales.map(({ origin, nodes }, s) => ({ origin, nodes, step: layout.scales[s].step }));
+  const bin = (value, low, size) => clamp(Math.trunc((value - low) / rasterStep), size);
 
   for (let p = 0; p < count; p++) {
     const q = 3 * (first + p);
     const sx = positions[q];
-    const sy = f32(positions[q + 1] - yCenter32);
-    const fromCentre = Math.abs(sy);
+    const sy = positions[q + 1] - yCenter;
     const sz = positions[q + 2];
-    const n0 = normals[q];
-    const n1 = normals[q + 1];
-    const n2 = normals[q + 2];
+    const n0 = normals[q], n1 = normals[q + 1], n2 = normals[q + 2];
     let k = p * stride;
 
     // Position and facing.
-    const fromNose = f32(sx - xmin32);
-    const fromBottom = f32(sz - zmin32);
-    out[k++] = fromNose;
-    out[k++] = xmax32 - sx;
+    out[k++] = sx - xmin;
+    out[k++] = xmax - sx;
     out[k++] = sy;
-    out[k++] = fromBottom;
+    out[k++] = sz - zmin;
     out[k++] = n0;
     out[k++] = n1;
     out[k++] = n2;
-    out[k++] = fromNose / length;
-    out[k++] = sy / halfWidth;
-    out[k++] = fromBottom / height;
+    out[k++] = (sx - xmin) / (xmax - xmin);
+    out[k++] = sy / (0.5 * (ymax - ymin));
+    out[k++] = (sz - zmin) / (zmax - zmin);
 
-    // Bend at each voxel scale: mean facing and surface density here, upstream and downstream.
-    for (const grid of voxels) {
-      const voxelFace = grid.scale * grid.scale;
-      for (const dx of [0, -grid.scale, grid.scale]) {
-        const x = dx === 0 ? sx : f32(sx + f32(dx));
-        sampleGrid(grid, x, sy, sz, sampled);
-        const area = Math.max(sampled[0], 1e-9);
-        const vx = f32(sampled[1] / area);
-        const vy = f32(sampled[2] / area);
-        const vz = f32(sampled[3] / area);
-        out[k++] = vx;
-        out[k++] = vy;
-        out[k++] = vz;
-        out[k++] = sampled[0] / voxelFace;
-        if (dx === 0) {
-          out[k++] = n0 - vx;
-          out[k++] = n1 - vy;
-          out[k++] = n2 - vz;
-        }
-      }
-    }
+    // The velocity the car adds to the stream, and the squared speed of the whole flow along the surface.
+    flowAtPoint(flowGrid, flow.potential, sx, positions[q + 1], sz, n0, n1, n2, out, k);
+    k += 4;
 
-    // Own slice: the body's top and bottom here and along the stencil, then the slice's extent.
-    const ownTop = k;
-    const ownFlags = ownTop + 5 + 2 * dxOwn32.length;
-    let j = rowY(sy);
-    let i = columnX(sx);
-    out[ownTop] = zTop[i * ny + j] - sz;
-    out[ownTop + 1] = zBottom[i * ny + j] - sz;
-    out[ownFlags] = occupied[i * ny + j];
-    for (let d = 0; d < dxOwn32.length; d++) {
-      i = columnX(f32(sx + dxOwn32[d]));
-      out[ownTop + 2 + 2 * d] = zTop[i * ny + j] - sz;
-      out[ownTop + 3 + 2 * d] = zBottom[i * ny + j] - sz;
-      out[ownFlags + 1 + d] = occupied[i * ny + j];
-    }
-    const extent = ownTop + 2 + 2 * dxOwn32.length;
-    out[extent] = sx - xFirst[j];
-    out[extent + 1] = xLast[j] - sx;
-    out[extent + 2] = zPeak[j] - sz;
-
-    // Neighbour slices.
-    const neighbourTop = ownFlags + 1 + dxOwn32.length;
-    const neighbourFlags = neighbourTop + 2 * dyNeighbor32.length * dxNeighbor32.length;
-    let n = 0;
-    for (let e = 0; e < dyNeighbor32.length; e++) {
-      j = rowY(f32(sy + dyNeighbor32[e]));
-      for (let d = 0; d < dxNeighbor32.length; d++, n++) {
-        i = columnX(f32(sx + dxNeighbor32[d]));
-        out[neighbourTop + 2 * n] = zTop[i * ny + j] - sz;
-        out[neighbourTop + 2 * n + 1] = zBottom[i * ny + j] - sz;
-        out[neighbourFlags + n] = occupied[i * ny + j];
-      }
+    // The surface around the point at each scale: its mean facing and density, the point's own facing
+    // against that mean, then the same for the part ahead and the part behind.
+    for (let s = 0; s < scales.length; s++) {
+      readScale(scaleGrids[s], scales[s], sx, positions[q + 1], sz);
+      const flat = layout.scales[s].flatPanel;
+      const whole = Math.max(WHOLE[0], 1e-12);
+      const mx = WHOLE[1] / whole, my = WHOLE[2] / whole, mz = WHOLE[3] / whole;
+      out[k++] = mx;
+      out[k++] = my;
+      out[k++] = mz;
+      out[k++] = WHOLE[0] / flat;
+      out[k++] = n0 - mx;
+      out[k++] = n1 - my;
+      out[k++] = n2 - mz;
+      const ahead = Math.max(AHEAD[0], 1e-12);
+      out[k++] = AHEAD[1] / ahead;
+      out[k++] = AHEAD[2] / ahead;
+      out[k++] = AHEAD[3] / ahead;
+      out[k++] = AHEAD[0] / (0.5 * flat);
+      const behindArea = WHOLE[0] - AHEAD[0];
+      const behind = Math.max(behindArea, 1e-12);
+      out[k++] = (WHOLE[1] - AHEAD[1]) / behind;
+      out[k++] = (WHOLE[2] - AHEAD[2]) / behind;
+      out[k++] = (WHOLE[3] - AHEAD[3]) / behind;
+      out[k++] = behindArea / (0.5 * flat);
     }
 
     // Plan-view outline: how far beyond the point the body reaches away from the centre plane, on the
-    // point's own side and at its height, along the stencil.
+    // point's own side and at its height, along the stencil. Bins are found in float64, as the
+    // reference finds them for a point it asks about.
     const side = sy >= 0 ? nx : 0;
-    const reach = (x, kz) => yOut[(side + columnX(x)) * nz + kz] - fromCentre;
-    let o = neighbourFlags + n;
-    let kz = clamp(Math.trunc(f32(f32(sz - z0) / h)), nz);
-    out[o++] = reach(sx, kz);
-    for (let d = 0; d < dxOwn32.length; d++) out[o++] = reach(f32(sx + dxOwn32[d]), kz);
-    for (let e = 0; e < dzNeighbor32.length; e++) {
-      kz = clamp(Math.trunc(f32(f32(f32(sz + dzNeighbor32[e]) - z0) / h)), nz);
-      for (let d = 0; d < dxNeighbor32.length; d++) out[o++] = reach(f32(sx + dxNeighbor32[d]), kz);
+    const fromCentre = Math.abs(sy);
+    const reach = (x, z) => yOut[(side + bin(x, domainX[0], nx)) * nz + bin(z, domainZ[0], nz)] - fromCentre;
+    out[k++] = reach(sx, sz);
+    for (const dx of outlineDx) out[k++] = reach(sx + dx, sz);
+    for (const dz of outlineDz) {
+      for (const dx of outlineDzDx) out[k++] = reach(sx + dx, sz + dz);
     }
   }
 }
 
 /**
- * Trilinear interpolation of a voxel grid's four fields at (x, y, z), cell-centred, with coordinates
- * clamped to the grid as SciPy's `map_coordinates(order=1, mode='nearest')` does.
+ * The flow inputs at points with their normals: the velocity the car adds to the stream along +x,
+ * in units of the stream's speed, and the squared speed of the whole flow along the surface, so
+ * 1 − |V_t|² is potential flow's pressure coefficient.
+ * @param {SurfaceContext} context
+ * @param {Float32Array} positions (P, 3)
+ * @param {Float32Array} normals   (P, 3) unit, outward
+ * @returns {{ induced: Float32Array, speedSquared: Float32Array }}  (P, 3) and (P)
  */
-function sampleGrid(grid, x, y, z, out) {
-  const [sx, sy, sz] = grid.shape;
-  const [ox, oy, oz] = grid.origin;
-  const h = grid.scale;
-  const cx = Math.min(Math.max((x - ox) / h - 0.5, 0), sx - 1);
-  const cy = Math.min(Math.max((y - oy) / h - 0.5, 0), sy - 1);
-  const cz = Math.min(Math.max((z - oz) / h - 0.5, 0), sz - 1);
-  const x0 = Math.floor(cx), y0 = Math.floor(cy), z0 = Math.floor(cz);
-  const tx = cx - x0, ty = cy - y0, tz = cz - z0;
-  const x1 = Math.min(x0 + 1, sx - 1), y1 = Math.min(y0 + 1, sy - 1), z1 = Math.min(z0 + 1, sz - 1);
-  out[0] = out[1] = out[2] = out[3] = 0;
-  for (let corner = 0; corner < 8; corner++) {
-    const ix = corner & 4 ? x1 : x0;
-    const iy = corner & 2 ? y1 : y0;
-    const iz = corner & 1 ? z1 : z0;
-    const w = (corner & 4 ? tx : 1 - tx) * (corner & 2 ? ty : 1 - ty) * (corner & 1 ? tz : 1 - tz);
-    const v = (ix * sy + iy) * sz + iz;
-    out[0] += w * grid.area[v];
-    out[1] += w * grid.normalX[v];
-    out[2] += w * grid.normalY[v];
-    out[3] += w * grid.normalZ[v];
+export function flowAt({ layout, flow }, positions, normals) {
+  const grid = { origin: flow.origin, step: layout.flow.step, nodes: layout.flow.nodes };
+  const count = positions.length / 3;
+  const induced = new Float32Array(3 * count);
+  const speedSquared = new Float32Array(count);
+  const row = new Float32Array(4);
+  for (let p = 0; p < count; p++) {
+    const q = 3 * p;
+    flowAtPoint(grid, flow.potential, positions[q], positions[q + 1], positions[q + 2], normals[q], normals[q + 1], normals[q + 2], row, 0);
+    induced.set(row.subarray(0, 3), q);
+    speedSquared[p] = row[3];
   }
+  return { induced, speedSquared };
+}
+
+/** The four flow inputs at (x, y, z) with normal n into out[at .. at + 4]: u, then |V_t|² of V = u + (1, 0, 0). */
+function flowAtPoint(grid, potential, x, y, z, n0, n1, n2, out, at) {
+  gradientAt(grid, potential, x, y, z, VELOCITY, 0);
+  const vx = VELOCITY[0] + 1, vy = VELOCITY[1], vz = VELOCITY[2];
+  const across = vx * n0 + vy * n1 + vz * n2;
+  const tx = vx - across * n0, ty = vy - across * n1, tz = vz - across * n2;
+  out[at] = VELOCITY[0];
+  out[at + 1] = VELOCITY[1];
+  out[at + 2] = VELOCITY[2];
+  out[at + 3] = tx * tx + ty * ty + tz * tz;
+}
+
+function clamp(index, size) {
+  return index < 0 ? 0 : index >= size ? size - 1 : index;
+}
+
+/**
+ * A scale's whole and ahead fields at (x, y, z) into `WHOLE` and `AHEAD`: trilinear over the eight
+ * nodes around the point, each found among the kept nodes, summed corner by corner as the reference sums.
+ */
+function readScale(grid, { kept, whole, ahead }, x, y, z) {
+  const [, ny, nz] = grid.nodes;
+  locate(CUBE, grid, x, y, z);
+  const ix = CUBE[0], fx = CUBE[1], iy = CUBE[2], fy = CUBE[3], iz = CUBE[4], fz = CUBE[5];
+  WHOLE.fill(0);
+  AHEAD.fill(0);
+  for (let dx = 0; dx < 2; dx++) {
+    const wx = dx ? fx : 1 - fx;
+    for (let dy = 0; dy < 2; dy++) {
+      const wxy = wx * (dy ? fy : 1 - fy);
+      // The two nodes along z are neighbours in the kept list, as they are in the grid.
+      const node = ((ix + dx) * ny + iy + dy) * nz + iz;
+      const slot = keptSlot(kept, node, x, y, z);
+      if (kept[slot + 1] !== node + 1) throw notKept(x, y, z);
+      for (let dz = 0; dz < 2; dz++) {
+        const w = wxy * (dz ? fz : 1 - fz);
+        const row = 4 * (slot + dz);
+        for (let c = 0; c < 4; c++) {
+          WHOLE[c] += w * whole[row + c];
+          AHEAD[c] += w * ahead[row + c];
+        }
+      }
+    }
+  }
+}
+
+/** Where `node` is in the ascending `kept`. */
+function keptSlot(kept, node, x, y, z) {
+  let low = 0;
+  let high = kept.length - 1;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (kept[middle] < node) low = middle + 1;
+    else high = middle;
+  }
+  if (kept[low] !== node) throw notKept(x, y, z);
+  return low;
+}
+
+function notKept(x, y, z) {
+  return new Error(`The car's surface lookups do not reach (${x}, ${y}, ${z}): they are kept only around its polygons and points.`);
 }

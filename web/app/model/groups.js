@@ -15,13 +15,17 @@ const WORDS = {
 		name: 'Position and facing',
 		reason: 'Surface facing the wind takes high pressure; surface facing away sits in the low pressure of the wake.',
 	},
-	bend: {
+	flow: {
+		name: 'Potential flow',
+		reason: 'An ideal flow solved around the whole car on the ground: it stops against the nose and speeds up over crests as air does, but never separates, so it has no wake.',
+	},
+	surface: {
 		name: 'Nearby surface',
 		reason: 'How the surface curves around the point: flow speeds up over a crest, and pressure falls.',
 	},
-	slice: {
-		name: 'The car ahead and behind',
-		reason: 'What the flow met before the point and meets after it: a long hood or a sharp drop changes the pressure here.',
+	outline: {
+		name: 'Plan-view outline',
+		reason: 'How far the body stands out beside the point, ahead of it and behind it at its height: air along the side speeds up past a wheel arch and slows where the body narrows.',
 	},
 };
 

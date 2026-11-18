@@ -33,21 +33,22 @@ function wavySheet(withCfd) {
   return { source: { name: 'sheet.vtp', cells: rows * columns }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
 }
 
-const RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak'];
-const VOXEL_SUMS = ['area', 'normalX', 'normalY', 'normalZ'];
-
-/** `SurfaceLookups` with small rasters and one voxel grid of irregular values. */
+/** `SurfaceLookups` with a small raster, potential and surface scale of irregular values. */
 function lookups() {
   const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
-  const grid = { scale: 0.25, origin: [-1, -1, -0.5], shape: [3, 4, 5] };
-  VOXEL_SUMS.forEach((name, k) => { grid[name] = values(60, 10 + k); });
   return {
-    definition: { count: 191 },
+    definition: { count: 99 },
     bounds: [-0.7, 2.3, -0.5, 0.5, -0.1, 0.1],
     yCenter: 0,
-    ...Object.fromEntries(RASTERS.map((name, k) => [name, values(50 + k, k)])),
-    voxels: [grid],
+    yOut: values(50, 1),
+    flow: { origin: [-1.3, -1.27, -1.98], potential: values(60, 2) },
+    scales: [{ origin: [-1, -1, -0.5], nodes: [3, 4, 5], kept: Int32Array.of(0, 1, 7, 8, 59), whole: values(20, 3), ahead: values(20, 4) }],
   };
+}
+
+/** Every array of `SurfaceLookups`, by name, for comparing two of them value for value. */
+function lookupArrays({ yOut, flow, scales }) {
+  return { yOut, potential: flow.potential, ...Object.fromEntries(scales.flatMap((scale, k) => ['kept', 'whole', 'ahead'].map((name) => [`${name}${k}`, scale[name]]))) };
 }
 
 function sameValues(a, b) {
@@ -81,8 +82,9 @@ Deno.test('a packed result comes back within the stated precision', async () => 
     return [Math.min(...lane), Math.max(...lane)];
   });
   assert(back.mesh.bounds.every((value, i) => Math.abs(value - bounds[i]) < 1e-4), `bounds ${back.mesh.bounds} are not ${bounds}`);
-  for (const name of RASTERS) assert(sameValues(back.lookups[name], result.lookups[name]), `lookup ${name} changed`);
-  for (const name of VOXEL_SUMS) assert(sameValues(back.lookups.voxels[0][name], result.lookups.voxels[0][name]), `voxel ${name} changed`);
+  for (const [name, array] of Object.entries(lookupArrays(result.lookups))) assert(sameValues(lookupArrays(back.lookups)[name], array), `lookup ${name} changed`);
+  assert(JSON.stringify(back.lookups.scales[0].origin) === JSON.stringify(result.lookups.scales[0].origin), 'scale origin changed');
+  assert(JSON.stringify(back.lookups.flow.origin) === JSON.stringify(result.lookups.flow.origin), 'flow origin changed');
   assert(new Set(match).size === match.length && !match.includes(undefined), 'vertices do not map one to one');
 
   for (let v = 0; v < match.length; v++) {
@@ -127,6 +129,6 @@ Deno.test('loadResult decodes a bundled example in a worker to what unpackResult
     assert(sameValues(loaded.mesh[name], direct.mesh[name]), `mesh ${name} differs`);
   }
   assert(loaded.mesh.bounds.every((value, i) => value === direct.mesh.bounds[i]), 'mesh bounds differ');
-  for (const name of RASTERS) assert(sameValues(loaded.lookups[name], direct.lookups[name]), `lookup ${name} differs`);
+  for (const [name, array] of Object.entries(lookupArrays(direct.lookups))) assert(sameValues(lookupArrays(loaded.lookups)[name], array), `lookup ${name} differs`);
   assert(JSON.stringify(loaded.forces) === JSON.stringify(direct.forces), 'forces differ');
 });
