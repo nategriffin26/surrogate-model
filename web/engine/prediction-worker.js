@@ -24,6 +24,11 @@ self.onmessage = ({ data }) => {
     case 'working':
       workingGrid = buildPointGrid(data.positions);
       break;
+    // The car's analysis has ended: its lookups (tens of MB in each helper) are not needed again.
+    case 'release':
+      context = null;
+      workingGrid = null;
+      break;
     case 'features': {
       // Rows of `stride` floats, as the GPU networks take them; the padding stays zero.
       const { positions, normals, count, stride } = data;

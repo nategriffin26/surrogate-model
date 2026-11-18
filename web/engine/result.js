@@ -65,8 +65,12 @@
  *   Resolves once `Result.mesh`, the working mesh, carries its fields. The working mesh is a
  *   faithful simplification that the tools (probing, section cuts, plots) run on.
  *   Rejects with an Error whose message says what is wrong with the file and what to do.
- *   Aborting `signal`, or starting another analysis, abandons this one: its promise rejects with a
- *   DOMException named 'AbortError' and its events stop, including those after it resolved.
+ *   Analyses run one at a time, in the order asked for, each to its end: a later one starts once
+ *   every earlier one has sent its last event (`exact` and the last `fullFields`, or its failure) or
+ *   was aborted, so a car is never left without its exact numbers. Its first `stage` event says it
+ *   has started. Aborting `signal` abandons this analysis, waiting or running, and releases its memory:
+ *   its promise rejects with a DOMException named 'AbortError' and its events stop, including those
+ *   after it resolved.
  * @property {(result: Result, point: number[], normal: number[]) => Promise<Explanation>} explain
  *   For a result this engine analysed or one `loadResult` read: everything the model was told at a
  *   surface point and what each network answered. For the file analysed last, while the engine holds
@@ -122,6 +126,8 @@
  * @property {string} activation  what the networks compute between layers, e.g. 'GELU'
  * @property {number} spreadScale  the factor, fitted on the training cars, that turns the networks'
  *   standard deviation into the spread σ(Cp) the engine reports
+ * @property {number} spreadCoverage  the share of the surface of the runs outside training where
+ *   |Cp − CFD| ≤ σ(Cp), with σ already scaled (measured in training on an area-weighted cell sample)
  * @property {Record<'length' | 'width' | 'height', { min: number, max: number }>} dimensions  the
  *   training cars' range of each, in metres
  * @property {{ meanR2: number, worstCarR2: number, mae: number, relativeL2: number, dragMae: number }} crossValidation

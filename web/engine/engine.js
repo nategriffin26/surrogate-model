@@ -8,8 +8,9 @@
 export function createEngine() {
   const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   let nextId = 1;
-  /** @type {{ id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, release: () => void } | null} */
-  let analysis = null;
+  /** Analyses not yet ended, by id: the one the worker runs and those waiting their turn there. */
+  /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, release: () => void }>} */
+  const analyses = new Map();
   /** @type {Map<number, { resolve: Function, reject: Function }>} */
   const explanations = new Map();
   /** Set when the worker cannot run at all: every analysis fails with it. */
@@ -33,7 +34,7 @@ export function createEngine() {
         unavailable = new Error(`The analysis engine could not start: ${data.message}`);
         device.reject(unavailable);
         model.reject(unavailable);
-        if (analysis) finish(analysis, unavailable);
+        for (const current of analyses.values()) finish(current, unavailable);
         return;
       case 'explanation':
       case 'explanationFailed': {
@@ -46,8 +47,8 @@ export function createEngine() {
       default:
         break;
     }
-    if (!analysis || analysis.id !== data.id) return;
-    const current = analysis;
+    const current = analyses.get(data.id);
+    if (!current) return;
     switch (data.type) {
       case 'stage':
         current.on.stage?.(data.stage, data.fraction);
@@ -74,6 +75,10 @@ export function createEngine() {
       case 'failed':
         finish(current, new Error(data.message));
         break;
+      // Its last event has gone out: the worker has moved on to the next analysis.
+      case 'finished':
+        finish(current);
+        break;
       default:
         throw new Error(`Unknown engine message ${data.type}`);
     }
@@ -85,7 +90,7 @@ export function createEngine() {
     const error = new Error(`The analysis engine stopped: ${event.message}. Reload the page and try again.`);
     device.reject(error);
     model.reject(error);
-    if (analysis) finish(analysis, error);
+    for (const current of analyses.values()) finish(current, error);
     for (const request of explanations.values()) request.reject(error);
     explanations.clear();
   };
@@ -95,7 +100,7 @@ export function createEngine() {
     if (!current.settled) current.reject(error);
     current.settled = true;
     current.release();
-    if (analysis === current) analysis = null;
+    analyses.delete(current.id);
   }
 
   function abortError() {
@@ -103,10 +108,6 @@ export function createEngine() {
   }
 
   function analyze(file, on = {}, { signal } = {}) {
-    if (analysis) {
-      worker.postMessage({ type: 'abort', id: analysis.id });
-      finish(analysis, abortError());
-    }
     if (unavailable) return Promise.reject(unavailable);
     if (signal?.aborted) return Promise.reject(abortError());
     const id = nextId++;
@@ -117,7 +118,7 @@ export function createEngine() {
       };
       const current = { id, on, resolve, reject, settled: false, release: () => signal?.removeEventListener('abort', onAbort) };
       signal?.addEventListener('abort', onAbort, { once: true });
-      analysis = current;
+      analyses.set(id, current);
       worker.postMessage({ type: 'analyze', id, file });
     });
   }

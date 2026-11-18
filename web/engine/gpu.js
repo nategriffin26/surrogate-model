@@ -40,8 +40,14 @@ struct Output {
 var<workgroup> xTile: array<array<f32, 128>, 16>;
 var<workgroup> wTile: array<array<f32, 128>, 16>;
 
-fn tileQuad(tile: ptr<workgroup, array<array<f32, 128>, 16>>, k: u32, first: u32) -> vec4f {
-  return vec4f((*tile)[k][first], (*tile)[k][first + 1u], (*tile)[k][first + 2u], (*tile)[k][first + 3u]);
+// Separate readers for the two tiles: core WGSL cannot pass a workgroup pointer to a function
+// (naga, in Firefox and Deno, rejects it; Chrome allows it as an extension).
+fn xQuad(k: u32, first: u32) -> vec4f {
+  return vec4f(xTile[k][first], xTile[k][first + 1u], xTile[k][first + 2u], xTile[k][first + 3u]);
+}
+
+fn wQuad(k: u32, first: u32) -> vec4f {
+  return vec4f(wTile[k][first], wTile[k][first + 1u], wTile[k][first + 2u], wTile[k][first + 3u]);
 }
 
 // x Phi(x) with erf from Abramowitz and Stegun 7.1.26, as network.js computes it.
@@ -80,10 +86,10 @@ fn dense(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) loca
     }
     workgroupBarrier();
     for (var k = 0u; k < 16u; k++) {
-      let a0 = tileQuad(&xTile, k, 4u * local.y);
-      let a1 = tileQuad(&xTile, k, 64u + 4u * local.y);
-      let b0 = tileQuad(&wTile, k, 4u * local.x);
-      let b1 = tileQuad(&wTile, k, 64u + 4u * local.x);
+      let a0 = xQuad(k, 4u * local.y);
+      let a1 = xQuad(k, 64u + 4u * local.y);
+      let b0 = wQuad(k, 4u * local.x);
+      let b1 = wQuad(k, 64u + 4u * local.x);
       for (var i = 0u; i < 4u; i++) {
         acc[i][0] += a0[i] * b0;
         acc[i][1] += a0[i] * b1;

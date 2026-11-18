@@ -14,6 +14,10 @@
  * Once the result is out, the rest of the polygons are predicted in the background when the device
  * can do all of them in a minute, where the working mesh's pressure changes fastest first. The full
  * mesh's fields fill in as they go, and at the end the surface numbers are summed over every polygon.
+ *
+ * Analyses run one at a time, each to its end, in the order asked for: a car's background prediction
+ * is part of its analysis, and two files at once would need twice the memory. Only an abort ends one
+ * early.
  */
 
 import { readSurface } from './vtp.js';
@@ -68,9 +72,13 @@ function deviceName(gpu) {
   return gpu ? `WebGPU (${gpu.name})` : `CPU (${HELPERS} threads)`;
 }
 
-/** The analysis running, or the last one; a new one marks it aborted. */
-let job = null;
-/** The file analysed last, with its polygons, for `explain`; let go when the next analysis starts. */
+/** Analyses asked for and not yet ended, by id: the one running and those waiting their turn. */
+const jobs = new Map();
+/** Settles when the last analysis asked for has ended. */
+let turn = Promise.resolve();
+/** The analysis running, if any. */
+let running = null;
+/** The file analysed last, with its polygons, for `explain`; let go when its analysis is aborted or the next starts. */
 let lastCar = null;
 /** The lookups `explain` was last given for a result whose polygons are not held, made ready to use. */
 let explainedLookups = null;
@@ -79,15 +87,17 @@ class Aborted extends Error {}
 
 self.onmessage = ({ data }) => {
   switch (data.type) {
-    case 'analyze':
+    case 'analyze': {
+      const job = { id: data.id, aborted: false, controller: new AbortController() };
+      jobs.set(job.id, job);
+      turn = turn.then(() => run(job, data.file));
+      break;
+    }
+    case 'abort': {
+      const job = jobs.get(data.id);
       if (job) abort(job);
-      lastCar = null;
-      job = { id: data.id, aborted: false, controller: new AbortController() };
-      analyze(job, data.file);
       break;
-    case 'abort':
-      if (job?.id === data.id) abort(job);
-      break;
+    }
     case 'explain':
       explain(data);
       break;
@@ -96,10 +106,24 @@ self.onmessage = ({ data }) => {
   }
 };
 
+/** One analysis, start to end, once those before it have ended; then the helpers let its car go. */
+async function run(job, file) {
+  if (!job.aborted) {
+    running = job;
+    lastCar = null;
+    await analyze(job, file);
+    running = null;
+    engine.then(({ runners }) => runners.pool.broadcast({ type: 'release' }), () => {});
+  }
+  jobs.delete(job.id);
+  self.postMessage({ type: 'finished', id: job.id });
+}
+
 function abort(current) {
   current.aborted = true;
   current.controller.abort(new Aborted());
-  engine.then(({ runners }) => runners.pool.clear(new Aborted()), () => {});
+  if (lastCar?.id === current.id) lastCar = null;
+  if (current === running) engine.then(({ runners }) => runners.pool.clear(new Aborted()), () => {});
 }
 
 function checkpoint(current) {
@@ -228,7 +252,8 @@ async function analyze(current, file) {
     post({ type: 'result', result });
 
     const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
-    completeSurface(current, runners, post, {
+    // The background prediction is the rest of this analysis: the next one waits for it.
+    await completeSurface(current, runners, post, {
       surface, car, shape, envelope: ensemble.envelope, working: { ...mesh, sourcePoint: working.sourcePoint },
       batches: [pickBatchDone, ringBatch], predicted, showFull: Boolean(full),
       affordable: cells.areas.length / cellsPerSecond <= FULL_PREDICTION_SECONDS,
