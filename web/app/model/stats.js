@@ -1,6 +1,5 @@
-// What the page measures on the open car, over its working mesh's triangles weighted by area: where the prediction
-// misses the CFD (by region and cell by cell) and how the misses compare with the spread σ(Cp). Only for a car whose
-// file carried CFD.
+// What the page measures on the reference car, over its working mesh's triangles weighted by area: where the
+// prediction misses the CFD (by region and cell by cell) and how the misses compare with the spread σ(Cp).
 
 /**
  * Regions of the surface, in the order the chart lists them, each named at `accuracy.regions.<id>` in copy.json.
@@ -81,11 +80,9 @@ export function caseStats(cells, bounds, yCenter) {
 	const regionArea = new Float64Array(REGIONS.length);
 	const regionError = new Float64Array(REGIONS.length);
 	let total = 0;
-	let within = 0;
 	for (let t = 0; t < count; t++) {
 		const error = Math.abs(cp[t] - cfd[t]);
 		total += areas[t];
-		if (error <= sigma[t]) within += areas[t];
 		if (region[t] < 0) continue;
 		regionArea[region[t]] += areas[t];
 		regionError[region[t]] += areas[t] * error;
@@ -118,5 +115,5 @@ export function caseStats(cells, bounds, yCenter) {
 		density[j * SCATTER_BINS + i] += areas[t];
 	}
 
-	return { regions, calibration, coverage: within / total, scatter: { lo, hi, bins: SCATTER_BINS, density } };
+	return { regions, calibration, scatter: { lo, hi, bins: SCATTER_BINS, density } };
 }

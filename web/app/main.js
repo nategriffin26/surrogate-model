@@ -19,14 +19,12 @@ import { h } from './dom.js';
 import { EXPORTS, baseName, defineExport, defineExportOperations, pictureOf } from './export.js';
 import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
 import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
-import { createHistogramPanel, defineHistogramOperations } from './histogram.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
 import { menu } from './menu.js';
 import { onOperation, operations, runOperation } from './operations.js';
 import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
-import { createRegions, createRegionsPanel } from './regions.js';
 import { defineReport } from './report.js';
 import { createResultCard } from './results.js';
 import { Session } from './session.js';
@@ -97,11 +95,9 @@ defineDisplayOperations(tool);
 defineCaseOperations(tool);
 defineSectionOperations(tool);
 defineProbeOperations(tool);
-const regions = createRegions(tool);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
-defineHistogramOperations({ session, regions });
-const comparison = createComparison({ session, regions, update, run });
-const variants = createVariants({ session, engine, workspace, regions, update, run });
+const comparison = createComparison({ session, engine, update, run });
+const variants = createVariants({ session, engine, workspace, update, run });
 defineExportOperations(tool);
 const files = defineFileOperations(tool);
 
@@ -162,24 +158,14 @@ const legend = createLegend({
 		...(patch.ramp !== undefined ? { ramp: patch.ramp } : {}),
 		...(patch.banded !== undefined ? { banded: patch.banded } : {}),
 	}),
-	reset: () => run('set_colour_scale', { field: legendField(), reset: true }),
 });
 $('[data-legend]').append(legend.el);
 
 const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
-defineReport({ session, engine, regions, section, comparison, variants });
-const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
-const histogram = createHistogramPanel({ session, regions, active: described, combine: regionsPanel });
-/** The dock's panel tabs; each one's `stop` undoes what it shows on the car when another tab is chosen. */
+defineReport({ session, engine, section, comparison, variants });
+/** The dock's panel tabs after Section and Probes. */
 const panels = [
-	// The selection and the saved regions beside the field's distribution, whose brushed range is one more rule.
-	{
-		name: 'regions', label: 'Regions', controls: regionsPanel.controls,
-		el: h('div', { class: 'dock-row' }, regionsPanel.el, histogram.el),
-		render: () => { regionsPanel.render(); histogram.render(); },
-		stop: () => { regionsPanel.stop(); histogram.stop(); },
-	},
 	{ name: 'compare', label: 'Compare', ...comparison.panel },
 	{ name: 'variants', label: 'Variants', ...variants.panel },
 ];
@@ -192,8 +178,6 @@ const dock = createDock({
 	view,
 	actions: {
 		tab: (name) => {
-			// Painting, a lasso or a brushed range belongs to its tab; leaving it gives the car back.
-			for (const panel of panels) if (panel.name !== name) panel.stop();
 			// Choosing Section turns the section on, which brings its plot up; when it is on already the tab just shows it.
 			if (name === 'section' && !view.section.on) return run('set_section', { on: true });
 			view.dock = name;
@@ -234,7 +218,7 @@ $('[data-model-toggle]').append(modelToggle);
 let modelMounted = null;
 function setMode(next) {
 	mode = next;
-	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer }));
+	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine }));
 	update('layout');
 }
 
@@ -296,7 +280,7 @@ function setAssistant(open) {
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
-const resultCard = createResultCard({ host: card, overlay, viewer, active: described, regions, run });
+const resultCard = createResultCard({ host: card, overlay, viewer, active: described, run });
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
@@ -380,7 +364,7 @@ function renderLayout() {
 	modelToggle.title = mode === 'model' ? 'Back to the tool' : 'How the model is built';
 	$('[data-export]').hidden = !ready();
 	modelHost.hidden = mode !== 'model';
-	viewer.hoverPicking = ready() && !viewer.tool;
+	viewer.hoverPicking = ready();
 	body.classList.toggle('dock-closed', view.dockCollapsed);
 }
 
@@ -420,9 +404,6 @@ function applyViewer() {
 	const s = view.section;
 	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, plane: Boolean(viewer.section?.plane) } : null);
 	viewer.setDisplay(view.display);
-	// The selection's tint, on the car it was worked out for; a new array only when the selection or the car changes.
-	const tint = ready() ? regions.tintOf(c) : null;
-	if (tint !== viewer.selection) viewer.setSelection(tint);
 	annotations.apply(c);
 }
 

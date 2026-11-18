@@ -1,16 +1,13 @@
-// The result card over the view: the readout of what is selected, or of the whole car when nothing is.
+// The result card over the view: the whole car's pressure force coefficients (pressure only: the model predicts no
+// wall shear), beside the CFD's when the file carries CFD, with the spread of Cx across the networks; where Cp is
+// highest and lowest, on a side view of the car and flown to on request; then its reference area and size, and the
+// dimensions outside the training range.
 //
-// For the whole car: its pressure force coefficients (pressure only: the model predicts no wall shear), beside the
-// CFD's when the file carries CFD, with the spread of Cx across the networks; where Cp is highest and lowest, on a
-// side view of the car and flown to on request; then its reference area and size, and the dimensions outside the
-// training range. For a selection: its coefficients, area and area-weighted mean Cp, with its share of the car's.
-//
-// The whole car's numbers are the Result's totals, summed over every polygon of the file, and the CFD's are summed
-// over the same polygons. A selection's are summed over the file's own polygons it picks, or on a bundled example
-// over its simplified mesh's faces (regions.js), with its shares over the same faces.
+// The numbers are the Result's totals, summed over every polygon of the file, and the CFD's are summed over the same
+// polygons.
 
 import { coefficient, h, s } from './dom.js';
-import { percent, signed } from './format.js';
+import { signed } from './format.js';
 
 const DIMENSION_LABELS = { length: 'Length', width: 'Width', height: 'Height' };
 /** The card's content width, which the drawings fill: 264 px less its padding and border. */
@@ -39,20 +36,12 @@ function profileOf(mesh, bounds) {
 	return { path: `M${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L')}Z`, height, map };
 }
 
-/**
- * What the card reads out for a case: the selection on it, with the whole car summed over the same faces for shares,
- * or the whole car from its totals, with the CFD's when the file carries CFD. Extremes are {cp, point, normal}.
- */
-function subjectOf(c, regions) {
+/** What the card reads out for a case: the whole car from its totals, with the CFD's when the file carries CFD. Extremes are {cp, point, normal}. */
+function subjectOf(c) {
 	const at = (e) => e && { cp: e.value, point: e.center, normal: e.normal };
-	const selection = regions.selectionOn(c);
-	if (selection) {
-		const { part, whole } = selection;
-		return { name: 'Selection', area: part.area, meanCp: part.meanCp, coefficients: part.coefficients, whole, extremes: { max: at(part.cpMax), min: at(part.cpMin) } };
-	}
 	const r = c.result;
 	const t = r.totals;
-	return { name: 'Whole car', coefficients: t.coefficients, reference: r.referenceTotals?.coefficients ?? null, byNetwork: r.forces.cdPModels, whole: null, extremes: { max: at(t.cpMax), min: at(t.cpMin) } };
+	return { name: 'Whole car', coefficients: t.coefficients, reference: r.referenceTotals?.coefficients ?? null, byNetwork: r.forces.cdPModels, extremes: { max: at(t.cpMax), min: at(t.cpMin) } };
 }
 
 const COEFFICIENTS = [
@@ -71,25 +60,8 @@ function wholeCarRows(of, row) {
 	]);
 }
 
-/** A selection's coefficients, area and mean Cp, with its share of the car's where a share means something. */
-function selectionRows(of, row) {
-	const share = (part, whole) => (Math.abs(whole) < 1e-9 ? '' : percent(part / whole));
-	const [cx, cy, cz] = of.coefficients;
-	const [wx, , wz] = of.whole.coefficients;
-	return [
-		row(coefficient('x'), COEFFICIENTS[0][1], signed(cx, 3), share(cx, wx)),
-		row(coefficient('y'), COEFFICIENTS[1][1], signed(cy, 3)),
-		row(coefficient('z'), COEFFICIENTS[2][1], signed(cz, 3), share(cz, wz)),
-		row(['Area'], 'Surface area', `${of.area.toFixed(2)} m²`, share(of.area, of.whole.area)),
-		row(['Mean Cp'], 'Area-weighted mean pressure coefficient', of.meanCp === null ? '–' : signed(of.meanCp, 3)),
-	];
-}
-
-/**
- * host: where the card goes; overlay: over the 3D view, for the extremes' markers; regions: the selection's readout;
- * run(name, args) runs an operation.
- */
-export function createResultCard({ host, overlay, viewer, active, regions, run }) {
+/** host: where the card goes; overlay: over the 3D view, for the extremes' markers; run(name, args) runs an operation. */
+export function createResultCard({ host, overlay, viewer, active, run }) {
 	const outlines = new WeakMap();
 	const markers = { max: h('div', { class: 'extreme-marker max', hidden: true }, h('span', {}, 'max')), min: h('div', { class: 'extreme-marker min', hidden: true }, h('span', {}, 'min')) };
 	overlay.append(markers.max, markers.min);
@@ -118,20 +90,15 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 		placeMarkers();
 	});
 
-	/**
-	 * The readout as a grid whose third column holds what the values are set against: a selection's share of the
-	 * car's, or the CFD's for the whole car of a file that carries CFD. That column's head shares the title's row, so
-	 * it costs no line.
-	 */
+	/** The readout as a grid whose third column holds the CFD's, for a file that carries CFD; that column's head shares the title's row, so it costs no line. */
 	function readout(of) {
-		const against = of.whole ? 'Share' : of.reference ? 'CFD' : null;
-		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), against ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
-		const rows = of.whole ? selectionRows(of, row) : wholeCarRows(of, row);
-		if (!against) return [h('div', { class: 'result-label' }, of.name), h('dl', { class: 'result-forces' }, rows)];
+		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), of.reference ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
+		const rows = wholeCarRows(of, row);
+		if (!of.reference) return [h('div', { class: 'result-label' }, of.name), h('dl', { class: 'result-forces' }, rows)];
 		return h('dl', { class: 'result-forces against' },
 			h('dt', { class: 'result-label' }, of.name),
-			h('dd', { class: 'result-head' }, of.whole ? '' : 'Predicted'),
-			h('dd', { class: 'result-head', title: of.whole ? 'Share of the whole car\'s, summed over the same faces' : 'Summed from the CFD in the file, over the same polygons' }, against),
+			h('dd', { class: 'result-head' }, 'Predicted'),
+			h('dd', { class: 'result-head', title: 'Summed from the CFD in the file, over the same polygons' }, 'CFD'),
 			rows);
 	}
 
@@ -186,7 +153,7 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 		// The card is rebuilt, so nothing in it is hovered any more; a pinned spot belongs to the car it was on.
 		marked.hovered = null;
 		if (c !== shown) marked.pinned = null;
-		subject = c?.result ? subjectOf(c, regions) : null;
+		subject = c?.result ? subjectOf(c) : null;
 		placeMarkers();
 		if (!subject) {
 			host.replaceChildren();
@@ -196,7 +163,7 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 		const card = h('div', { class: `result-card${c === shown ? ' settled' : ''}` },
 			readout(subject),
 			extremes(c, subject),
-			subject.whole ? null : facts(c.result));
+			facts(c.result));
 		host.replaceChildren(card);
 		shown = c;
 	}

@@ -19,14 +19,13 @@ import { FaceIndex, VertexGrid } from './picking.js';
  *
  * A mark, points as flat (N, 3) arrays in metres; `colours`, where allowed, RGBA bytes per item.
  * @typedef {{ kind: 'lines', points: Float32Array, starts: Uint32Array, closed: boolean }
- *   | { kind: 'segments', a: Float32Array, b: Float32Array }
  *   | { kind: 'arrows', points: Float32Array, vectors: Float32Array, colours: Uint8Array | null }
  *   | { kind: 'points', points: Float32Array, size: number, colours: Uint8Array | null }
  *   | { kind: 'labels', points: Float32Array, texts: string[], offset: number[] | null }
  *   | { kind: 'box', min: number[], max: number[] }
  *   | { kind: 'plane', point: number[], normal: number[], size: number[] }} Mark
  *   `lines` holds polylines one after another, `starts` the index of each one's first point and then the count of
- *   points; `closed` joins each one's last point to its first. `segments` are separate lines a[i] to b[i].
+ *   points; `closed` joins each one's last point to its first.
  */
 
 /** White beyond a mark's edge, CSS px, and its opacity. */
@@ -375,9 +374,6 @@ function addMark(batches, mark, colour, width) {
 			}
 			return;
 		}
-		case 'segments':
-			for (let i = 0; i < mark.a.length / 3; i++) segment(point(mark.a, i), point(mark.b, i), colour);
-			return;
 		case 'arrows': {
 			const h = batches.heads;
 			const count = mark.points.length / 3;

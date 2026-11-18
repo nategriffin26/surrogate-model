@@ -128,7 +128,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 
 	defineOperation({
 		name: 'fly_to',
-		description: 'Fly the camera close to a surface point and look at it from outside, along the surface normal there (tipped to stay above the floor). Use it to show the engineer a place on the car: an extreme, a probe, a region. Points are in metres along the file\'s axes (x downstream, z up).',
+		description: 'Fly the camera close to a surface point and look at it from outside, along the surface normal there (tipped to stay above the floor). Use it to show the engineer a place on the car: an extreme, a probe. Points are in metres along the file\'s axes (x downstream, z up).',
 		parameters: {
 			type: 'object',
 			properties: {

@@ -1,9 +1,9 @@
-// How good the model is on cars it never saw: the open car's CFD, prediction and their difference from the side and
-// from below, every cell's prediction against its CFD, the error by region, and the accuracy measured in training.
+// How good the model is on a car it never saw: the reference car's CFD, prediction and their difference from the side
+// and from below, every cell's prediction against its CFD, the error by region, and the accuracy measured in training.
 
 import { h, s } from '../dom.js';
 import { count, signed } from '../format.js';
-import { carName, colorBar, pictureFrame, runOf, section } from './charts.js';
+import { colorBar, pictureFrame, runOf, section } from './charts.js';
 import { copied } from './copy.js';
 import { locator } from './overview.js';
 
@@ -58,11 +58,8 @@ export function createAccuracy({ card }) {
 	const frames = Object.fromEntries(['cfdSide', 'cpSide', 'errorSide', 'cfdBelow', 'cpBelow', 'errorBelow'].map((id) => [id, pictureFrame(id)]));
 	const scales = h('div', { class: 'picture-scales' });
 	const outsideNumber = h('div', { class: 'headline' });
-	// A copy block: the car's R² hides with its label when the label is hidden, as an unnamed number would be read as another.
-	const carNumber = h('div', { class: 'headline copy-block' });
+	const carNumber = h('div', { class: 'headline' });
 	const charts = h('div', { class: 'accuracy-charts' });
-	const body = h('div', { class: 'accuracy-body' });
-	const missing = h('div', { class: 'missing', hidden: true });
 
 	const el = section('accuracy', {},
 		h('div', { class: 'headlines' },
@@ -70,43 +67,32 @@ export function createAccuracy({ card }) {
 				copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.crossValidation', { trainingCars: count(card.trainRuns.length) })),
 			outsideNumber,
 			carNumber),
-		missing,
-		body);
-	body.append(
-		h('div', { class: 'picture-grid three' },
-			h('div', { class: 'picture-heads copy-block' },
-				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.cfd'),
-				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.predicted'),
-				copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.error')),
-			frames.cfdSide.el, frames.cpSide.el, frames.errorSide.el,
-			frames.cfdBelow.el, frames.cpBelow.el, frames.errorBelow.el),
-		scales,
+		h('figure', { class: 'figure' },
+			h('div', { class: 'picture-grid three' },
+				h('div', { class: 'picture-heads copy-block' },
+					copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.cfd'),
+					copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.predicted'),
+					copied(h('span', { class: 'picture-head' }), 'accuracy.pictures.error')),
+				frames.cfdSide.el, frames.cpSide.el, frames.errorSide.el,
+				frames.cfdBelow.el, frames.cpBelow.el, frames.errorBelow.el),
+			scales),
 		charts);
 	el.prepend(locator('accuracy'));
 
 	return {
 		el,
-		setCase({ result, pictures, stats, maps }) {
-			// The open car's own number replaces the card's for the same run: two R² for one car would read as a contradiction.
-			const outside = card.outsideRuns.filter((r) => result.accuracy === null || r.run !== runOf(result));
+		setCar({ result, pictures, stats, maps }) {
+			// The car's own number replaces the card's for the same run: two R² for one car would read as a contradiction.
+			const outside = card.outsideRuns.filter((r) => r.run !== runOf(result));
 			outsideNumber.hidden = outside.length === 0;
 			outsideNumber.replaceChildren(
 				h('span', { class: 'big-number num' }, outside.map((r) => r.r2.toFixed(3)).join(' · ')),
 				copied(h('span', { class: 'headline-label' }), `accuracy.headlines.outside.${new Intl.PluralRules('en').select(outside.length)}`, {
 					runs: new Intl.ListFormat('en').format(outside.map((r) => String(r.run))),
 				}));
-			carNumber.hidden = result.accuracy === null;
-			if (result.accuracy) {
-				carNumber.replaceChildren(
-					h('span', { class: 'big-number num' }, result.accuracy.r2.toFixed(3)),
-					copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.car', { car: () => carName(result, card) }));
-			}
-			missing.hidden = stats !== null;
-			body.hidden = stats === null;
-			if (!stats) {
-				missing.replaceChildren(copied(h('p'), 'accuracy.missing', { car: result.source.name }));
-				return;
-			}
+			carNumber.replaceChildren(
+				h('span', { class: 'big-number num' }, result.accuracy.r2.toFixed(3)),
+				copied(h('span', { class: 'headline-label' }), 'accuracy.headlines.car'));
 			for (const [id, frame] of Object.entries(frames)) frame.show(pictures[id]);
 			scales.replaceChildren(colorBar(maps.cp, 'accuracy.scales.cp'), colorBar(maps.error, 'accuracy.scales.error'));
 			charts.replaceChildren(

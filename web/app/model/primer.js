@@ -1,8 +1,8 @@
 // What a cell is told, taught on an invented body: one figure, the groups of inputs as its modes. The side view
 // carries the shown group's measurements, the panel beside it shows them close (end-on, the surface close up, or the
-// networks), and the numbers stay whole underneath with the shown group's squares lit, beside the open car's. The body
-// is measured and predicted by the engine like any car given as arrays; every number here is the engine's
-// explanation at the body's cell, read through the model's own columns.
+// networks), and the numbers stay whole underneath with the shown group's squares lit and listed. The body is measured
+// and predicted by the engine like any car given as arrays; every number here is the engine's explanation at the
+// body's cell, read through the model's own columns.
 
 import { h } from '../dom.js';
 import { aroundLookup, bodySurface, sideLookup } from './body.js';
@@ -78,8 +78,8 @@ function cellState(arrangement, truncate, { position, normal, features, activati
 const valueText = (column, v) => (column.unit ? `${num(v)} ${column.unit}` : num(v));
 
 /**
- * The figure, and the open car's numbers in it beside the body's. `onShow` hears when the reader shows another group,
- * size or station, to draw the same on the car.
+ * The figure, and a grid of the reference car's numbers laid out as the body's. `onShow` hears when the reader shows
+ * another group, size or station, to draw the same on the car.
  * @param {{ card: import('../../engine/result.js').ModelCard, groups: import('./groups.js').InputGroup[],
  *   engine: import('../../engine/result.js').Engine, onShow: () => void }} options
  */
@@ -90,7 +90,6 @@ export function createPrimer({ card, groups, engine, onShow }) {
 	const ui = { mode: 0, size: 1, part: 0, station: stations.indexOf(0) - 4 };
 	const body = { result: null, side: null, vertex: -1, state: null, asking: false, next: -1 };
 	const grids = [];
-	let car = null;
 
 	const modeButtons = MODES.map((mode, i) => h('button', {
 		type: 'button', role: 'tab', style: `--group: ${mode === 'all' ? COLOR.network : COLOR[mode]}`, onclick: () => { ui.mode = i; repaint(); },
@@ -197,23 +196,22 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		return [];
 	}
 
-	/** The readout: the listed numbers of the body and of the car side by side, or for all of them each group's count and the answer. */
+	/** The readout: the body's listed numbers, or for all of them each group's count and the answer. */
 	function paintReadout() {
-		const value = (state, i) => (state
-			? h('dd', { class: 'num' }, h('i', { class: 'swatch', style: `--group: ${shade(state.standard[i], 1.5)}` }), valueText(card.columns[i], state.values[i]))
-			: h('dd'));
-		const head = h('div', { class: 'readout-head copy-block' }, h('dt'), copied(h('dd'), 'inputs.readout.body'), copied(h('dd'), 'inputs.readout.car'));
 		const rows = listed();
 		if (!rows.length) {
-			readout.replaceChildren(head,
+			readout.replaceChildren(
 				...arrangement.blocks.map((block, i) => h('div', {},
 					h('dt', {}, h('i', { class: 'swatch', style: `--group: ${COLOR[block.group]}` }), copied(h('span'), `inputs.modes.${MODES[i]}`)),
-					h('dd', { class: 'num both' }, block.count))),
-				h('div', {}, copied(h('dt'), 'inputs.readout.cp'), h('dd', { class: 'num' }, body.state ? num(body.state.cp) : ''), h('dd', { class: 'num' }, car ? num(car.cp) : '')));
+					h('dd', { class: 'num' }, block.count))),
+				h('div', {}, copied(h('dt'), 'inputs.readout.cp'), h('dd', { class: 'num' }, body.state ? num(body.state.cp) : '')));
 			return;
 		}
-		readout.replaceChildren(head, ...rows.flatMap(([i, words]) => [
-			h('div', {}, copied(h('dt'), `inputs.names.${words}`), value(body.state, i), value(car, i)),
+		const value = (i) => (body.state
+			? h('dd', { class: 'num' }, h('i', { class: 'swatch', style: `--group: ${shade(body.state.standard[i], 1.5)}` }), valueText(card.columns[i], body.state.values[i]))
+			: h('dd'));
+		readout.replaceChildren(...rows.flatMap(([i, words]) => [
+			h('div', {}, copied(h('dt'), `inputs.names.${words}`), value(i)),
 			...(words === 'facingSideways' ? [copied(h('p', { class: 'readout-note' }), 'inputs.names.sideways')] : []),
 		]));
 	}
@@ -295,13 +293,13 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			const mode = MODES[ui.mode];
 			return { group: mode === 'all' ? null : mode, size: scales[ui.size], station: stations[ui.station] };
 		},
-		/** A grid of the open car's numbers in `node`, laid out as the body's; `setCar` fills it. */
-		carGrid: (node) => numbersGrid(node, 'The open car\'s numbers'),
-		/** The open car's numbers at its cell, for the readout's second column and the car's grid. */
+		/** A grid of the reference car's numbers in `node`, laid out as the body's; `setCar` fills it. */
+		carGrid: (node) => numbersGrid(node, 'The reference car\'s numbers'),
+		/** The reference car's numbers at its cell, for the car's grid. */
 		setCar(explanation) {
-			car = explanation ? cellState(arrangement, 0, explanation) : null;
-			if (car) grids.slice(1).forEach((grid) => grid.update(car));
-			paintReadout();
+			if (!explanation) return;
+			const car = cellState(arrangement, 0, explanation);
+			grids.slice(1).forEach((grid) => grid.update(car));
 		},
 	};
 }

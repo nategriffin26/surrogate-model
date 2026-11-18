@@ -1,5 +1,5 @@
-// The colour legend: field, ramp, ticks, and a range that can be typed, dragged, made symmetric about zero, reset,
-// or split into discrete bands. It draws through the same ramp and band rule as the shader.
+// The colour legend: field, ramp, ticks, and a range that can be typed, dragged or split into discrete bands. It
+// draws through the same ramp and band rule as the shader.
 
 import { h } from './dom.js';
 import { MAPS } from './fields.js';
@@ -71,7 +71,7 @@ function parse(text) {
 	return Number.isFinite(value) ? value : null;
 }
 
-/** actions: change(patch to the map), reset(). */
+/** actions: change(patch to the map). */
 export function createLegend(actions) {
 	const title = h('span', { class: 'legend-title' });
 	// A gradient, not a canvas: putting pixels into a canvas waits on the GPU process, which the networks keep busy.
@@ -80,16 +80,11 @@ export function createLegend(actions) {
 	const lo = h('input', { class: 'legend-end', 'aria-label': 'Range minimum', inputmode: 'decimal', spellcheck: 'false' });
 	const hi = h('input', { class: 'legend-end legend-end-hi', 'aria-label': 'Range maximum', inputmode: 'decimal', spellcheck: 'false' });
 	const banded = h('button', { type: 'button', class: 'legend-tool', title: 'Discrete bands', onclick: () => actions.change({ banded: !state.map.banded }) }, icon('bands'));
-	const symmetric = h('button', { type: 'button', class: 'legend-tool', title: 'Symmetric about zero', onclick: () => {
-		const m = Math.max(Math.abs(state.map.lo), Math.abs(state.map.hi));
-		actions.change({ lo: -m, hi: m });
-	} }, icon('symmetric'));
-	const reset = h('button', { type: 'button', class: 'legend-tool', title: 'Reset range', onclick: () => actions.reset() }, icon('reset'));
 	const rampList = h('div', { class: 'menu-list', role: 'menu' });
 	const swatch = h('span', { class: 'ramp-swatch' });
 	const ramps = menu(h('button', { type: 'button', class: 'legend-tool legend-ramp', title: 'Colour ramp' }, swatch, icon('chevron')), rampList, { align: 'right' });
 	const el = h('div', { class: 'legend' },
-		h('div', { class: 'legend-head' }, title, h('span', { class: 'legend-tools' }, banded, symmetric, reset, ramps.el)),
+		h('div', { class: 'legend-head' }, title, h('span', { class: 'legend-tools' }, banded, ramps.el)),
 		bar,
 		h('div', { class: 'legend-scale' }, lo, ticks, hi));
 	let state = null;

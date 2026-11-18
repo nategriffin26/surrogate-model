@@ -1,16 +1,19 @@
 // The whole model in one line, at the top of the page: a new car, one of its cells, what the cell is told, the five
-// networks fitted to the ten training cars, their answer and its spread, the pressure on every cell, and drag summed
-// from it. Each step links to the section below that opens it up, and each section carries the line in small with
-// its own steps marked, so the page reads as this one diagram taken apart.
+// networks fitted to the ten training cars, their answer and its spread, the pressure on every cell, and the car's
+// pressure drag summed from it. Each step but the last links to the section below that opens it up, and each section
+// carries the line in small with its own steps marked, so the page reads as this one diagram taken apart.
 
 import { h, s } from '../dom.js';
 import { count, signed } from '../format.js';
-import { countWord, pictureFrame, showCarName } from './charts.js';
+import { countWord, pictureFrame, runOf } from './charts.js';
 import { copied } from './copy.js';
 import { closeUp } from './drawings.js';
 import { trainingCar } from './training.js';
 
-/** The steps of the line, in order, each named at `overview.steps.<id>`, and the section that opens it up. */
+/**
+ * The steps of the line, in order, each named at `overview.steps.<id>`, and the section that opens it up: the car's
+ * pressure drag, summed from the pressure, has none.
+ */
 export const STEPS = [
 	{ id: 'car', section: 'accuracy' },
 	{ id: 'cell', section: 'point' },
@@ -18,16 +21,17 @@ export const STEPS = [
 	{ id: 'networks', section: 'networks' },
 	{ id: 'answer', section: 'spread' },
 	{ id: 'field', section: 'accuracy' },
-	{ id: 'drag', section: 'drag' },
+	{ id: 'drag', section: null },
 ];
 
-/** The line in small, with the steps a section opens up filled in. */
+/** The line in small, a dot per step a section opens up, with the steps of section `sectionId` filled in. */
 export function locator(sectionId) {
+	const opened = STEPS.filter((step) => step.section);
 	const gap = 22;
-	const width = gap * (STEPS.length - 1) + 12;
+	const width = gap * (opened.length - 1) + 12;
 	return s('svg', { class: 'locator', viewBox: `0 0 ${width} 12`, width, height: 12, 'aria-hidden': 'true' },
 		s('line', { x1: 6, y1: 6, x2: width - 6, y2: 6 }),
-		STEPS.map((step, i) => s('circle', { cx: 6 + i * gap, cy: 6, r: step.section === sectionId ? 5 : 3.5, class: step.section === sectionId ? 'here' : '' })));
+		opened.map((step, i) => s('circle', { cx: 6 + i * gap, cy: 6, r: step.section === sectionId ? 5 : 3.5, class: step.section === sectionId ? 'here' : '' })));
 }
 
 /** The five networks' Cp at the point as ticks, their mean as a dot, on a short scale around them. */
@@ -74,7 +78,7 @@ export function createOverview({ card, groups, training }) {
 	const parts = Object.fromEntries(STEPS.map((step) => [step.id, h('div', { class: 'step-figure' })]));
 	const numbers = Object.fromEntries(STEPS.map((step) => [step.id, h('span', { class: 'step-number num' })]));
 	const networks = { networks: card.networks.length, networksWord: countWord(card.networks.length) };
-	const steps = STEPS.map((step) => h('a', { class: `step step-${step.id}`, href: `#model-${step.section}` },
+	const steps = STEPS.map((step) => h(step.section ? 'a' : 'div', { class: `step step-${step.id}`, href: step.section && `#model-${step.section}` },
 		parts[step.id], copied(h('span', { class: 'step-name' }), `overview.steps.${step.id}`, networks), numbers[step.id]));
 	const line = h('div', { class: 'overview-line' }, steps.flatMap((step, i) => (i ? [h('span', { class: 'step-arrow', 'aria-hidden': 'true' }), step] : [step])));
 
@@ -101,15 +105,15 @@ export function createOverview({ card, groups, training }) {
 	parts.field.append(fieldFrame.el);
 	copied(numbers.drag, 'overview.steps.drag.number');
 
-	const view = { case: null, point: null };
+	const view = { car: null, point: null };
 	const overview = {
 		el: h('div', { class: 'overview' }, fitted, line, loop),
-		/** The open car: its pictures (clay and predicted Cp from the side), its numbers and its colour maps. */
-		setCase(caseView) {
-			view.case = caseView;
-			const { result, pictures, maps } = caseView;
-			grid.replaceChildren(...training.cars.map((car) => trainingCar(car, maps.cp, 'solid')));
-			showCarName(numbers.car, result, card);
+		/** The car: its pictures (clay and predicted Cp from the side), its numbers and its colour maps. */
+		setCar(car) {
+			view.car = car;
+			const { result, pictures, maps } = car;
+			grid.replaceChildren(...training.cars.map((trained) => trainingCar(trained, maps.cp, 'solid')));
+			copied(numbers.car, 'car.outside', { run: runOf(result) });
 			fieldFrame.show(pictures.fieldSide);
 			copied(numbers.field, 'overview.steps.field.number', { cells: count(result.source.cells) });
 			copied(loopLabel, 'overview.loop', { cells: count(result.source.cells) });
@@ -119,9 +123,9 @@ export function createOverview({ card, groups, training }) {
 		/** The point the page explains: what the engine said there, or why it could not. */
 		setPoint(point) {
 			view.point = point;
-			if (!view.case || !point?.explanation) return;
+			if (!view.car || !point?.explanation) return;
 			const { explanation } = point;
-			const { pictures, cutter } = view.case;
+			const { pictures, cutter } = view.car;
 			const [u, v] = pictures.claySide.place(explanation.position);
 			carFrame.show(pictures.claySide, h('i', { class: 'picture-point', style: `left: ${100 * u}%; top: ${100 * v}%` }));
 			parts.cell.replaceChildren(closeUp({ width: 96, explanation, cutter }));

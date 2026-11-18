@@ -1,7 +1,7 @@
 // Annotations: what the assistant lays on a car to show something. A field of their own colours the car as Pressure
-// does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines, arrows, region
-// outlines, boxes and planes mark places in 3D. Everything is drawn in named layers that belong to the case, listed
-// in the Layers menu among the view tools, where each can be hidden or removed, and kept while other cases are shown.
+// does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines, arrows, boxes and
+// planes mark places in 3D. Everything is drawn in named layers that belong to the case, listed in the Layers menu
+// among the view tools, where each can be hidden or removed, and kept while other cases are shown.
 // Every action is an operation, so a call from the assistant, a line of Python and a control do the same thing;
 // Python sends its arrays as typed arrays, never as JSON.
 //
@@ -17,7 +17,6 @@ import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
 import { RAMPS, rampCss } from './ramps.js';
-import { maskOf } from './regions.js';
 
 /** Colours by name: the theme's ink and accents, with orange bright enough to stand out on the car. */
 export const PALETTE = {
@@ -32,17 +31,16 @@ export const PALETTE = {
 	white: '#ffffff',
 };
 const RAMP_NAMES = Object.keys(RAMPS);
-/** Line width, CSS px, of a new layer; outlines start a little heavier. */
+/** Line width, CSS px, of a new layer. */
 const LINE_PX = 1.5;
-const OUTLINE_PX = 2;
 const POINT_PX = 7;
 /** A label's text is cut at this length: a label names a place, it does not explain it. */
 const LABEL_CHARS = 80;
 /** Arrows given no scale are drawn with the longest this share of the car's length. */
 const ARROW_SHARE = 0.06;
 /** A layer called by no name takes its kind's. */
-const DEFAULT_NAMES = { labels: 'Labels', points: 'Points', lines: 'Lines', arrows: 'Arrows', outline: 'Outline', box: 'Boxes', plane: 'Planes', paint: 'Paint' };
-const KIND_WORDS = { labels: ['label', 'labels'], points: ['point', 'points'], lines: ['line', 'lines'], arrows: ['arrow', 'arrows'], segments: ['outline', 'outlines'], box: ['box', 'boxes'], plane: ['plane', 'planes'] };
+const DEFAULT_NAMES = { labels: 'Labels', points: 'Points', lines: 'Lines', arrows: 'Arrows', box: 'Boxes', plane: 'Planes', paint: 'Paint' };
+const KIND_WORDS = { labels: ['label', 'labels'], points: ['point', 'points'], lines: ['line', 'lines'], arrows: ['arrow', 'arrows'], box: ['box', 'boxes'], plane: ['plane', 'planes'] };
 
 /**
  * @typedef {Object} Layer
@@ -304,30 +302,6 @@ function paintOn(mesh, cells, layers) {
 	return { colour, cover };
 }
 
-/** Each edge of the masked faces that borders an unmasked face or none: the region's outline, as segments. */
-function outlineOf(mesh, mask) {
-	const { indices, positions } = mesh;
-	const vertices = positions.length / 3;
-	const uses = new Map();
-	for (let f = 0; f < mask.length; f++) {
-		if (!mask[f]) continue;
-		for (let k = 0; k < 3; k++) {
-			const u = indices[3 * f + k], v = indices[3 * f + ((k + 1) % 3)];
-			const key = Math.min(u, v) * vertices + Math.max(u, v);
-			uses.set(key, (uses.get(key) ?? 0) + 1);
-		}
-	}
-	const edges = [...uses].filter(([, n]) => n === 1).map(([key]) => key);
-	const a = new Float32Array(3 * edges.length);
-	const b = new Float32Array(3 * edges.length);
-	edges.forEach((key, i) => {
-		const u = Math.floor(key / vertices), v = key % vertices;
-		a.set(positions.subarray(3 * u, 3 * u + 3), 3 * i);
-		b.set(positions.subarray(3 * v, 3 * v + 3), 3 * i);
-	});
-	return { a, b };
-}
-
 /** A starting scale for values: symmetric about zero when they straddle it, else their 1st to 99th percentile. */
 function scaleFor(values) {
 	const step = Math.max(1, Math.floor(values.length / 20000));
@@ -397,13 +371,13 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		if (c === session.active) update('viewer', 'dock', 'toolbar', ...parts);
 	}
 
-	/** The drawing layer called `name` on case c, made now if there is none (`width` px wide), restyled by `style`. */
-	function drawingLayer(c, name, by, style, width = LINE_PX) {
+	/** The drawing layer called `name` on case c, made now if there is none, restyled by `style`. */
+	function drawingLayer(c, name, by, style) {
 		const store = storeOf(c);
 		let layer = layerOn(store, name);
 		if (layer?.kind === 'field') throw new Error(`"${name}" is a field layer on case ${c.id}; draw in a layer of another name.`);
 		if (!layer) {
-			layer = { name, kind: 'drawing', by, visible: true, colour: PALETTE.ink, width, marks: [], paint: null, field: null };
+			layer = { name, kind: 'drawing', by, visible: true, colour: PALETTE.ink, width: LINE_PX, marks: [], paint: null, field: null };
 			store.layers.push(layer);
 		}
 		if (style.colour !== undefined) layer.colour = colourOf('colour', style.colour);
@@ -411,9 +385,9 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		return layer;
 	}
 
-	/** Add a mark to a layer of case c and show it; a new layer starts `width` px wide. */
-	function draw(c, args, by, kind, mark, width) {
-		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES[kind]), by, { colour: args.colour, width_px: args.width_px }, width);
+	/** Add a mark to a layer of case c and show it. */
+	function draw(c, args, by, kind, mark) {
+		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES[kind]), by, { colour: args.colour, width_px: args.width_px });
 		layer.marks.push(mark);
 		layer.visible = true;
 		changed(c);
@@ -485,9 +459,9 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	// ---- paint ----
 
 	function paintFaces(c, args, by) {
-		const { where, region_id, selection, mask, colours } = args;
-		const sources = [where, region_id, selection || undefined, mask, colours].filter((v) => v !== undefined).length;
-		if (sources !== 1) throw new Error('Say which faces with exactly one of where, region_id, selection, mask or colours.');
+		const { where, mask, colours } = args;
+		const sources = [where, mask, colours].filter((v) => v !== undefined).length;
+		if (sources !== 1) throw new Error('Say which faces with exactly one of where, mask or colours.');
 		const cells = cellsOf(c.result);
 		const faces = cells.areas.length;
 		const rgba = new Uint8Array(4 * faces);
@@ -497,11 +471,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		} else {
 			let picked;
 			if (where !== undefined) picked = evaluate(where, cells);
-			else if (region_id !== undefined) picked = maskOf(cells, [{ op: 'replace', rule: { kind: 'region', region_id } }], session.regions);
-			else if (selection) {
-				if (!view.selection) throw new Error('Nothing is selected. Select faces first, or give where or region_id.');
-				picked = maskOf(cells, view.selection.terms, session.regions);
-			} else {
+			else {
 				if (!ArrayBuffer.isView(mask) || mask.length !== faces) throw new Error(`mask must hold one value per face of the working mesh (${faces}); got ${mask?.length ?? JSON.stringify(mask)}.`);
 				picked = mask;
 			}
@@ -559,7 +529,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	const layerSummary = (layer) => {
 		const counts = {};
 		for (const mark of layer.marks) {
-			const n = mark.kind === 'lines' ? mark.starts.length - 1 : mark.kind === 'segments' ? 1 : mark.kind === 'box' || mark.kind === 'plane' ? 1 : mark.points.length / 3;
+			const n = mark.kind === 'lines' ? mark.starts.length - 1 : mark.kind === 'box' || mark.kind === 'plane' ? 1 : mark.points.length / 3;
 			counts[mark.kind] = (counts[mark.kind] ?? 0) + n;
 		}
 		const painted = layer.paint ? layer.paint.reduce((n, v, i) => n + (i % 4 === 3 && v > 0), 0) : 0;
@@ -595,13 +565,11 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'paint_faces',
-		description: 'Paint faces of the working mesh in a colour over the field shown: those where an expression is true (show_field\'s names), a saved region, the selection, or a mask or colours per face sent from Python (case.paint). Painting adds to a layer\'s paint. Returns the faces painted, their area and their share of the car\'s area.',
+		description: 'Paint faces of the working mesh in a colour over the field shown: those where an expression is true (show_field\'s names), or a mask or colours per face sent from Python (case.paint). Painting adds to a layer\'s paint. Returns the faces painted, their area and their share of the car\'s area.',
 		parameters: {
 			type: 'object',
 			properties: {
 				where: { type: 'string', description: 'Faces where this is true, e.g. "cp < -1".' },
-				region_id: { type: 'integer', description: 'A saved region (list_regions).' },
-				selection: { type: 'boolean', description: 'The current selection.' },
 				mask: fromPython('One 0 or 1 per face'),
 				colours: fromPython('RGBA bytes per face; alpha 0 leaves a face unpainted'),
 				colour: { type: 'string', description: `Colour name (${Object.keys(PALETTE).join(', ')}) or "#rrggbb"; default orange.` },
@@ -725,31 +693,6 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
 			const layer = draw(c, args, by, 'arrows', { kind: 'arrows', points, vectors: vectors.map((v) => v * scale), colours });
 			return { layer: layer.name, arrows: points.length / 3, scale: round(scale, 8), longest_m: round(longest * scale, 4) };
-		},
-	});
-
-	defineOperation({
-		name: 'draw_outline',
-		description: 'Outline a saved region, or the current selection, on the car: the edges where its faces meet the rest. Returns the layer, the region\'s face count and area.',
-		parameters: {
-			type: 'object',
-			properties: { region_id: { type: 'integer', description: 'A saved region (list_regions); default the selection.' }, layer: layerArg('outline'), colour: colourArg, width_px: widthArg, case_id: caseId },
-			additionalProperties: false,
-		},
-		run(args, { by }) {
-			const c = caseFor(args.case_id);
-			const cells = cellsOf(c.result);
-			let terms;
-			if (args.region_id !== undefined) terms = [{ op: 'replace', rule: { kind: 'region', region_id: args.region_id } }];
-			else if (view.selection) terms = view.selection.terms;
-			else throw new Error('Nothing is selected. Give region_id, or select faces first.');
-			const mask = maskOf(cells, terms, session.regions);
-			let faces = 0, area = 0;
-			for (let f = 0; f < mask.length; f++) if (mask[f]) faces++, (area += cells.areas[f]);
-			if (faces === 0) throw new Error('The region picks no faces of this car; there is no outline.');
-			const { a, b } = outlineOf(c.result.mesh, mask);
-			const layer = draw(c, args, by, 'outline', { kind: 'segments', a, b }, OUTLINE_PX);
-			return { layer: layer.name, faces, area_m2: round(area, 5), edges: a.length / 3 };
 		},
 	});
 

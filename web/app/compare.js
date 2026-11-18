@@ -3,10 +3,10 @@
 // from its nearest vertex facing the same way (sampleFields), a car's and its variants' vertex for vertex, so the two
 // can be drawn and subtracted point by point.
 // A comparison offers two fields, the other's Cp on this car and the difference ΔCp, this car's minus the other's;
-// draws this car beside the other on request; adds the other's line to the section plot; and reads the whole car,
-// the selection and every saved region on both into one table. In the table each side is measured on its own faces:
-// the CFD on this car's, another car on its own, where the same rules pick its regions. A car and one of its variants
-// are compared like for like: the car's side is its surface predicted unchanged the way the variant was.
+// draws this car beside the other on request; adds the other's line to the section plot; and reads the whole car on
+// both into one row, each side summed on its own polygons: the CFD on this car's, another car on its own. A car and
+// one of its variants are compared like for like: the car's side is its surface predicted unchanged the way the
+// variant was.
 
 import { sampleFields } from '../engine/nearest.js';
 import { caseSummary } from './cases.js';
@@ -87,17 +87,32 @@ const QUANTITIES = [
 /** The quantities the table shows, which with the section plot beside it fit a phone's width; the operation and the CSV give Cy and mean Cp too. */
 const SHOWN = ['cx', 'cz'];
 
-/** A quantity of a table row on this car, on the other, and their difference; null where a side has no faces. */
+/** A quantity of the whole car on this car, on the other, and their difference. */
 function valuesOf(q, row) {
 	const a = q.of(row.mine), b = q.of(row.other);
-	return [a, b, a === null || b === null ? null : a - b];
+	return [a, b, a - b];
+}
+
+/** Sums over every face of some cells: area, area-weighted mean of `cp`, and the pressure force coefficients Cx, Cy, Cz = −Σ Cp n A / reference area. */
+function measure(cells, cp, referenceArea) {
+	const { areas, normals } = cells;
+	let area = 0, cpArea = 0, fx = 0, fy = 0, fz = 0;
+	for (let c = 0; c < areas.length; c++) {
+		const a = areas[c];
+		area += a;
+		cpArea += cp[c] * a;
+		fx -= cp[c] * normals[3 * c] * a;
+		fy -= cp[c] * normals[3 * c + 1] * a;
+		fz -= cp[c] * normals[3 * c + 2] * a;
+	}
+	return { faces: areas.length, area, meanCp: area > 0 ? cpArea / area : null, coefficients: [fx, fy, fz].map((f) => f / referenceArea) };
 }
 
 /**
- * app: { session, regions, update, run }. The comparison: its fields, its side-by-side panes, its operations and the
+ * app: { session, engine, update, run }. The comparison: its fields, its side-by-side panes, its operations and the
  * Compare tab.
  */
-export function createComparison({ session, regions, update, run }) {
+export function createComparison({ session, engine, update, run }) {
 	const view = session.view;
 	const compared = (c) => comparedOn(view, session.cases, c);
 
@@ -130,91 +145,109 @@ export function createComparison({ session, regions, update, run }) {
 		return pair ? [{ field: 'cp', label: pair.mine }, { field: COMPARED, label: pair.label }] : null;
 	}
 
+	/** Per result: its working mesh's faces, and the file's own polygons for sums, once fetched. */
+	const perResult = new WeakMap();
+	const known = (result) => perResult.get(result) ?? perResult.set(result, { cells: engine.workingCells(result), file: null }).get(result);
+
 	/**
-	 * The rows of the table: the whole car, the selection, each saved region; each side summed on its own polygons
-	 * (regions.measureOn: a dropped file's own, a bundled example's simplified mesh, a variant's own), with the RMS of
-	 * ΔCp over this car's. A whole car the simplified mesh would only approach comes from the exact numbers its result
-	 * carries: the prediction's totals, and the reference field's.
+	 * The cells a case's sums run over: a dropped file's own polygons, fetched from the engine the first time they are
+	 * wanted once every polygon is predicted (and again when a reference is attached), and kept with the result; until
+	 * then, and for a bundled example, which carries only the working mesh, that mesh's faces. A variant was predicted
+	 * on its faces themselves, so they are its own polygons.
 	 */
-	function rows(c) {
-		const pair = compared(c);
-		if (!pair) return [];
-		const items = [
-			{ name: 'Whole car', terms: null },
-			...(view.selection ? [{ name: 'Selection', terms: view.selection.terms }] : []),
-			...session.regions.map((r) => ({ name: r.name, region_id: r.id, terms: r.terms })),
-		];
-		return items.map((item) => ({ ...item, mine: side(pair.self, item.terms, false), other: side(pair.other ?? pair.self, item.terms, !pair.other), rms: rms(pair.self, pair, item.terms) }));
+	function sumBasis(c) {
+		const held = known(c.result);
+		if (c.result.form === 'quick') return { cells: held.cells, over: `every face it was predicted on (${held.cells.areas.length})`, exact: true };
+		const { reference } = c.result;
+		if (held.file?.cells && held.file.reference === reference) return held.file;
+		if (c.kind === 'file' && held.file?.reference !== reference && engine.canExportVtp(c.result)) {
+			held.file = { cells: null, reference };
+			engine.fileCells(c.result).then((set) => {
+				if (!set || held.file.reference !== reference) return;
+				// Only what sums read is kept: the points and polygons themselves would double the memory.
+				const { centers, normals, areas, cp, sigma, cfd } = set;
+				held.file = { cells: { centers, normals, areas, cp, sigma, cfd }, over: `every polygon of the file (${areas.length})`, exact: true, reference };
+				update('dock');
+			});
+		}
+		return { cells: held.cells, over: `${held.cells.areas.length} faces of the simplified working mesh (Cp at each face the mean of its corners, as drawn)`, exact: false };
 	}
 
-	/** One side of a row: case x's prediction, or with `cfd` its reference field, over the faces some terms pick. */
-	function side(x, terms, cfd) {
-		const sum = regions.measureOn(x, terms, { cfd });
-		if (terms || sum.exact) return { ...sum.part, over: sum.over };
+	/** The whole car on both sides, with the RMS of ΔCp over this car's faces. */
+	function row(c) {
+		const pair = compared(c);
+		return { name: 'Whole car', mine: side(pair.self, false), other: side(pair.other ?? pair.self, !pair.other), rms: rms(pair.self, pair) };
+	}
+
+	/** Sums of a case's prediction, and of its reference field, kept per set of cells. */
+	const sums = new WeakMap();
+
+	/**
+	 * One side: case x's prediction, or with `cfd` its reference field, summed on its own polygons. Where those are
+	 * not yet at hand the result's exact totals stand in: the reference's are summed over every polygon from the start,
+	 * the prediction's once every polygon is predicted.
+	 */
+	function side(x, cfd) {
+		const basis = sumBasis(x);
+		if (basis.exact) {
+			const held = sums.get(basis.cells) ?? sums.set(basis.cells, {}).get(basis.cells);
+			const field = cfd ? 'cfd' : 'cp';
+			held[field] ??= measure(basis.cells, basis.cells[field], x.result.geometry.frontalArea);
+			return { ...held[field], over: basis.over };
+		}
 		const r = x.result;
-		// The reference's totals are summed over every polygon from the start; the prediction's once `exact` arrives.
 		if (cfd) return { faces: r.source.cells, area: r.totals.area, ...r.referenceTotals, over: 'every polygon' };
 		return { faces: r.source.cells, area: r.totals.area, meanCp: r.totals.meanCp, coefficients: r.totals.coefficients, over: caseSummary(x, null).totals_over };
 	}
 
 	/**
-	 * Area-weighted RMS of ΔCp over this car's faces some terms pick: against the CFD on the polygons it is summed on,
-	 * against another car on the simplified mesh, where the other's Cp is brought. Kept per field and terms.
+	 * Area-weighted RMS of ΔCp over this car's faces: against the CFD on the polygons it is summed on, against another
+	 * car on the simplified mesh, where the other's Cp is brought. Kept per field.
 	 */
 	const rmsKept = new WeakMap();
-	function rms(c, pair, terms) {
+	function rms(c, pair) {
 		const cfd = !pair.other;
-		const cells = cfd ? regions.sumBasis(c).cells : regions.cellsOf(c.result);
+		const cells = cfd ? sumBasis(c).cells : known(c.result).cells;
 		const key = cfd ? cells : pair.difference;
-		const byTerms = rmsKept.get(key) ?? rmsKept.set(key, new WeakMap()).get(key);
-		const id = terms ?? key;
-		if (!byTerms.has(id)) {
-			const mask = terms ? (cfd ? regions.maskOn(c, terms) : regions.maskOf(c, terms)) : null;
+		if (!rmsKept.has(key)) {
 			const I = c.result.mesh.indices, d = pair.difference;
-			byTerms.set(id, rmsOver(cells.areas, cfd ? (f) => cells.cp[f] - cells.cfd[f] : (f) => (d[I[3 * f]] + d[I[3 * f + 1]] + d[I[3 * f + 2]]) / 3, mask));
+			rmsKept.set(key, rmsOver(cells.areas, cfd ? (f) => cells.cp[f] - cells.cfd[f] : (f) => (d[I[3 * f]] + d[I[3 * f + 1]] + d[I[3 * f + 2]]) / 3));
 		}
-		return byTerms.get(id);
+		return rmsKept.get(key);
 	}
 
-	/** What the table sums on the simplified mesh rather than on the polygons of a file, said once under it; or null. */
+	/** Whether RMS ΔCp is taken on the simplified mesh rather than on the polygons of a file, said once under the table; or null. */
 	function simplified(c) {
 		const { self, other } = compared(c);
-		const exact = (x) => regions.sumBasis(x).exact;
 		// A car and its variant are both predicted on the simplified mesh, so it is the surface the difference is taken on.
 		const quick = (x) => x.result.form === 'quick';
-		const regionRows = Boolean(view.selection || session.regions.length) && !(exact(self) && (!other || exact(other)));
-		const rmsRow = (Boolean(other) && !(quick(self) && quick(other))) || !exact(self);
-		if (regionRows && rmsRow) return 'Regions are summed, and RMS ΔCp taken, on the simplified mesh.';
-		if (regionRows) return 'Regions are summed on the simplified mesh.';
-		return rmsRow ? 'RMS ΔCp is taken on the simplified mesh.' : null;
+		const onSimplified = (Boolean(other) && !(quick(self) && quick(other))) || !sumBasis(self).exact;
+		return onSimplified ? 'RMS ΔCp is taken on the simplified mesh.' : null;
 	}
 
-	const rowOut = (row) => ({
-		name: row.name,
-		...(row.region_id !== undefined ? { region_id: row.region_id } : {}),
-		this_car: sideOut(row.mine),
-		other: sideOut(row.other),
-		difference: Object.fromEntries(QUANTITIES.map((q) => [q.key, r5(valuesOf(q, row)[2])])),
-		rms_dcp: round(row.rms, 5),
-	});
-	const sideOut = (m) => ({ faces: m.faces, area_m2: round(m.area, 5), ...Object.fromEntries(QUANTITIES.map((q) => [q.key, r5(q.of(m))])), summed_over: m.over });
-	const r5 = (v) => (v === null ? null : round(v, 5));
+	const sideOut = (m) => ({ faces: m.faces, area_m2: round(m.area, 5), ...Object.fromEntries(QUANTITIES.map((q) => [q.key, round(q.of(m), 5)])), summed_over: m.over });
 
 	function comparisonOut(c) {
 		const pair = compared(c);
+		const whole = row(c);
 		return {
 			case_id: c.id,
 			compared_with: pair.other ? { case_id: pair.other.id, name: pair.other.name } : 'cfd',
 			...(pair.unchanged ? { like_for_like: 'The car is read as its surface predicted unchanged on the simplified mesh, as its variant is, so the difference is the change alone.' } : {}),
 			side_by_side: view.compare.sideBySide,
-			rows: rows(c).map(rowOut),
-			rms_dcp_over: pair.other || !regions.sumBasis(pair.self).exact ? 'this car\'s simplified mesh, of the difference field as drawn' : 'this car\'s polygons, Cp minus CFD on each',
+			whole_car: {
+				this_car: sideOut(whole.mine),
+				other: sideOut(whole.other),
+				difference: Object.fromEntries(QUANTITIES.map((q) => [q.key, round(valuesOf(q, whole)[2], 5)])),
+				rms_dcp: round(whole.rms, 5),
+			},
+			rms_dcp_over: pair.other || !sumBasis(pair.self).exact ? 'this car\'s simplified mesh, of the difference field as drawn' : 'this car\'s polygons, Cp minus CFD on each',
 		};
 	}
 
 	defineOperation({
 		name: 'set_comparison',
-		description: 'Compare the car on screen with the CFD its file carries (with "cfd": the back-check of the prediction) or with another open case (with its case_id), or stop comparing (with null). The other\'s pressure is brought onto this car\'s surface, another car\'s from its nearest point facing the same way. A comparison offers two fields for set_field: compared (the other\'s Cp on this car) and difference (ΔCp, this car\'s minus the other\'s). side_by_side draws this car\'s Cp beside the other\'s under one camera. The section plot adds the other\'s line. Returns the comparison table: the whole car, the selection and each saved region on both, each side measured on its own faces, with the difference and the RMS of ΔCp.',
+		description: 'Compare the car on screen with the CFD its file carries (with "cfd": the back-check of the prediction) or with another open case (with its case_id), or stop comparing (with null). The other\'s pressure is brought onto this car\'s surface, another car\'s from its nearest point facing the same way. A comparison offers two fields for set_field: compared (the other\'s Cp on this car) and difference (ΔCp, this car\'s minus the other\'s). side_by_side draws this car\'s Cp beside the other\'s under one camera. The section plot adds the other\'s line. Returns the whole car on both, each side summed on its own polygons, with the difference and the RMS of ΔCp.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -261,7 +294,7 @@ export function createComparison({ session, regions, update, run }) {
 
 	defineOperation({
 		name: 'read_comparison',
-		description: 'The comparison table for a case, without changing the view: the whole car, the selection and each saved region, each with area, Cx, Cy, Cz and mean Cp on this car and on what it is compared with (each side on its own faces), their difference, and the area-weighted RMS of ΔCp over this car\'s faces. Compared with CFD, also the whole car\'s Cx over every polygon of the file.',
+		description: 'The comparison for a case, without changing the view: the whole car\'s area, Cx, Cy, Cz and mean Cp on this car and on what it is compared with (each side summed on its own polygons, as summed_over says), their difference, and the area-weighted RMS of ΔCp over this car\'s faces.',
 		parameters: { type: 'object', properties: { case_id: { type: 'integer', description: 'Default the case on screen.' } }, additionalProperties: false },
 		run({ case_id }) {
 			const c = case_id === undefined ? session.active : session.byId(case_id);
@@ -275,7 +308,7 @@ export function createComparison({ session, regions, update, run }) {
 		name: 'comparison',
 		label: 'Comparison',
 		format: 'CSV',
-		title: 'The comparison table: each region on this car and on what it is compared with, and their difference',
+		title: 'The whole car on this car and on what it is compared with, and their difference',
 		unavailable: (c) => (compared(c) ? null : 'Nothing is compared. Choose what to compare with in the Compare tab.'),
 		make: async (c) => new Blob([comparisonCsv(c)], { type: 'text/csv' }),
 		fileName: (c) => `${baseName(c)}-comparison.csv`,
@@ -283,11 +316,10 @@ export function createComparison({ session, regions, update, run }) {
 
 	function comparisonCsv(c) {
 		const pair = compared(c);
-		const head = ['region', 'area_m2', ...QUANTITIES.flatMap((q) => [`${q.key}_this`, `${q.key}_other`, `${q.key}_difference`]), 'rms_dcp'];
-		const quote = (text) => `"${text.replaceAll('"', '""')}"`;
-		const lines = [`# ${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}`, head.join(',')];
-		lines.push(...rows(c).map((row) => [quote(row.name), row.mine.area.toFixed(5), ...QUANTITIES.flatMap((q) => valuesOf(q, row).map((v) => (v === null ? '' : v.toFixed(5)))), row.rms.toFixed(5)].join(',')));
-		return lines.join('\n') + '\n';
+		const whole = row(c);
+		const head = ['area_m2', ...QUANTITIES.flatMap((q) => [`${q.key}_this`, `${q.key}_other`, `${q.key}_difference`]), 'rms_dcp'];
+		const values = [whole.mine.area.toFixed(5), ...QUANTITIES.flatMap((q) => valuesOf(q, whole).map((v) => v.toFixed(5))), whole.rms.toFixed(5)];
+		return `# ${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}\n${head.join(',')}\n${values.join(',')}\n`;
 	}
 
 	// ---- the Compare tab ----
@@ -343,13 +375,13 @@ export function createComparison({ session, regions, update, run }) {
 			return;
 		}
 		const shown = QUANTITIES.filter((q) => SHOWN.includes(q.key));
-		const cells = (values) => values.map((v, k) => h('td', { class: k % 3 === 2 ? 'compare-delta' : '' }, v === null ? '' : signed(v, 3)));
-		const body = rows(c).map((row) => h('tr', {}, h('td', { class: 'compare-name' }, row.name), ...cells(shown.flatMap((q) => valuesOf(q, row))), h('td', {}, row.rms.toFixed(3))));
+		const whole = row(c);
+		const cells = shown.flatMap((q) => valuesOf(q, whole)).map((v, k) => h('td', { class: k % 3 === 2 ? 'compare-delta' : '' }, signed(v, 3)));
 		table.replaceChildren(
 			h('thead', {},
 				h('tr', { class: 'compare-groups' }, h('th', {}), ...shown.map((q) => h('th', { colspan: 3 }, q.name())), h('th', { title: 'Area-weighted root mean square of ΔCp over this car\'s faces' }, 'RMS ΔCp')),
-				h('tr', {}, h('th', {}, 'Region'), ...shown.flatMap(() => [h('th', {}, pair.mine), h('th', {}, pair.label), h('th', {}, 'Δ')]), h('th', {}))),
-			h('tbody', {}, ...body),
+				h('tr', {}, h('th', {}), ...shown.flatMap(() => [h('th', {}, pair.mine), h('th', {}, pair.label), h('th', {}, 'Δ')]), h('th', {}))),
+			h('tbody', {}, h('tr', {}, h('td', { class: 'compare-name' }, whole.name), ...cells, h('td', {}, whole.rms.toFixed(3)))),
 		);
 	}
 
@@ -358,15 +390,14 @@ export function createComparison({ session, regions, update, run }) {
 		panes,
 		/** The comparison table of case c, as read_comparison gives it, or null when c is compared with nothing. */
 		read: (c) => (compared(c) ? comparisonOut(c) : null),
-		panel: { el, controls, render, sectionSlot, stop: () => {} },
+		panel: { el, controls, render, sectionSlot },
 	};
 }
 
-/** Area-weighted root mean square of a per-face difference, delta(f), over the faces a mask picks (every face without one). */
-function rmsOver(areas, delta, mask) {
+/** Area-weighted root mean square of a per-face difference, delta(f), over every face where it is defined. */
+function rmsOver(areas, delta) {
 	let sum = 0, area = 0;
 	for (let f = 0; f < areas.length; f++) {
-		if (mask && !mask[f]) continue;
 		const d = delta(f);
 		if (Number.isNaN(d)) continue;
 		sum += areas[f] * d * d;

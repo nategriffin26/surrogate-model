@@ -233,8 +233,8 @@ class Case:
 
 
 class View:
-    """Marks on a case, anchored in 3D so they stay put as the camera moves: labels, points, lines, arrows, region
-    outlines, boxes and planes. `pressure.view` draws on the case on screen at each call; `case.view` on that case.
+    """Marks on a case, anchored in 3D so they stay put as the camera moves: labels, points, lines, arrows, boxes and
+    planes. `pressure.view` draws on the case on screen at each call; `case.view` on that case.
     Every method draws into `layer` (a default per kind when left out) and returns what it drew."""
 
     def __init__(self, case: Case | None = None) -> None:
@@ -280,10 +280,6 @@ class View:
         drawn 6 % of the car's length. Returns the scale used."""
         points = _points(points)
         return await self._draw("draw_arrows", color, points.length // 3, points=points, vectors=_points(vectors), scale=None if scale is None else float(scale), layer=layer, width_px=width)
-
-    async def outline(self, region_id: int | None = None, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
-        """The outline of a saved region (`list_regions`), or of the selection when none is given."""
-        return await self._draw("draw_outline", color, region_id=region_id, layer=layer, width_px=width)
 
     async def box(self, lo, hi, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
         """A box along the axes from corner `lo` to corner `hi`, [x, y, z] each."""

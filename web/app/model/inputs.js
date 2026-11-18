@@ -1,12 +1,12 @@
-// What a cell is told. First the invented body (`primer.js`), its groups of inputs as modes; then the open car, with
-// its cell as a handle the reader drags or moves with a click, the shown group's inputs drawn on the car where they are
-// read, the networks' answer there, and the car's own numbers in the body's grid.
+// What a cell is told. First the invented body (`primer.js`), its groups of inputs as modes; then the reference car,
+// with its cell as a handle the reader drags or moves with a click, the shown group's inputs drawn on the car where
+// they are read, the networks' answer there, and the car's own numbers in the body's grid.
 
 import { h } from '../dom.js';
 import { signed } from '../format.js';
 import { Viewer } from '../../viewer/viewer.js';
 import { COLOR } from './body-views.js';
-import { carName, section } from './charts.js';
+import { section } from './charts.js';
 import { copied } from './copy.js';
 import { locator } from './overview.js';
 import { createPrimer } from './primer.js';
@@ -46,7 +46,7 @@ export function createInputs({ card, groups, engine, ask }) {
 	const caption = h('p', { class: 'car-caption' });
 	const carGrid = h('div', { class: 'primer-vector' });
 	// `close`: whether the camera is in nearby surface's close view of the cell.
-	const state = { case: null, point: null, close: false };
+	const state = { car: null, point: null, close: false };
 	const primer = createPrimer({ card, groups, engine, onShow: () => { drawMarks(); frame(); } });
 	primer.carGrid(carGrid);
 
@@ -91,9 +91,8 @@ export function createInputs({ card, groups, engine, ask }) {
 	const canvas = viewer.canvas;
 
 	async function pickAndAsk(x, y) {
-		const c = state.case;
 		const hit = await viewer.pick(x, y);
-		if (hit && c === state.case) ask(requestAt(hit.point, hit.vertex, c.result.mesh.normals));
+		if (hit) ask(requestAt(hit.point, hit.vertex, state.car.result.mesh.normals));
 	}
 
 	/** While the handle is dragged the cell follows the pointer; moves that arrive while a pick runs collapse into the latest. */
@@ -110,7 +109,7 @@ export function createInputs({ card, groups, engine, ask }) {
 	}
 
 	canvas.addEventListener('pointerdown', (e) => {
-		if (!state.case || e.button !== 0) return;
+		if (!state.car || e.button !== 0) return;
 		press = { x: e.clientX, y: e.clientY, slop: TAP_SLOP[e.pointerType] ?? TAP_SLOP.touch, handle: stencil.onHandle(e.clientX, e.clientY) };
 		if (!press.handle) return;
 		// The handle's press is the cell's: the camera never sees it.
@@ -138,7 +137,7 @@ export function createInputs({ card, groups, engine, ask }) {
 			return;
 		}
 		const tapped = press && !press.handle && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= press.slop;
-		if (tapped && e.button === 0 && state.case) pickAndAsk(e.clientX, e.clientY);
+		if (tapped && e.button === 0 && state.car) pickAndAsk(e.clientX, e.clientY);
 	}, { capture: true });
 	canvas.addEventListener('pointercancel', () => {
 		dragging = null;
@@ -176,13 +175,12 @@ export function createInputs({ card, groups, engine, ask }) {
 		el,
 		viewer,
 		stencil,
-		/** A newly opened car is framed whole by the page; nearby surface's close view follows its first cell. */
-		setCase(caseView) {
-			if (caseView.surface !== state.case?.surface) state.close = false;
-			state.case = caseView;
+		/** The car, framed whole by the page; nearby surface's close view follows its first cell. */
+		setCar(car) {
+			state.car = car;
 			// The car in clay: the pictures taken of it leave a field on.
 			viewer.setPanes([{ field: 'none', map: null }]);
-			copied(caption, 'inputs.car.caption', { car: () => carName(caseView.result, card) });
+			copied(caption, 'inputs.car.caption');
 		},
 		setPoint(point) {
 			state.point = point;
@@ -194,9 +192,9 @@ export function createInputs({ card, groups, engine, ask }) {
 	};
 }
 
-/** The networks' answer at the cell: each network's Cp as a tick, their mean, and the CFD there when the file has it. */
+/** The networks' answer at the cell: each network's Cp as a tick, their mean, and the CFD there. */
 function answerFigure({ cpModels, cp, sigma, cfd }) {
-	const values = [...cpModels, ...(cfd === null ? [] : [cfd])];
+	const values = [...cpModels, cfd];
 	const mid = (Math.min(...values) + Math.max(...values)) / 2;
 	const half = Math.max(0.05, (Math.max(...values) - Math.min(...values)) * 0.65);
 	const x = (v) => `${50 + (50 * (v - mid)) / half}%`;
@@ -206,13 +204,13 @@ function answerFigure({ cpModels, cp, sigma, cfd }) {
 		h('div', { class: 'answer-strip' },
 			cpModels.map((v) => h('i', { class: 'answer-network', style: `left: ${x(v)}` })),
 			h('i', { class: 'answer-mean', style: `left: ${x(cp)}` }),
-			cfd === null ? null : h('i', { class: 'answer-cfd', style: `left: ${x(cfd)}` })),
+			h('i', { class: 'answer-cfd', style: `left: ${x(cfd)}` })),
 		h('p', { class: 'answer-key copy-block' },
 			item('inputs.car.network', 'key-network'),
 			item('inputs.car.mean', 'key-mean'),
-			cfd === null ? null : item('inputs.car.cfd', 'key-cfd')),
+			item('inputs.car.cfd', 'key-cfd')),
 		h('dl', { class: 'answer-numbers' },
 			number('inputs.car.cp', signed(cp, 3)),
 			number('inputs.car.spread', sigma.toFixed(3)),
-			cfd === null ? null : number('inputs.car.cfdValue', signed(cfd, 3))));
+			number('inputs.car.cfdValue', signed(cfd, 3))));
 }

@@ -3,9 +3,9 @@
 
 import { h } from '../dom.js';
 import { count, signed } from '../format.js';
-import { bars, chips, countWord, section, shade } from './charts.js';
+import { countWord, section, shade } from './charts.js';
 import { copied, text } from './copy.js';
-import { groupOf, groupsGiven, learnerName } from './groups.js';
+import { groupOf } from './groups.js';
 import { locator } from './overview.js';
 
 const HEIGHT = 250;
@@ -106,7 +106,6 @@ export function createNetworks({ card, groups }) {
 	runs.map((run) => h('i', { class: `fold-car${network.validationRuns.includes(run) ? ' held' : ''}`, title: text('networks.folds.run', { run }) })),
 	cpCells[k]));
 
-	const sameInputs = card.comparison.filter((row) => row.learner !== 'constant' && groupsGiven(groups, row).length === groups.length);
 	const network = card.networks[0];
 	const trainedOn = network.trainRuns.length;
 	const heldOut = network.validationRuns.length;
@@ -130,12 +129,7 @@ export function createNetworks({ card, groups }) {
 					foldRows),
 				h('p', { class: 'fold-key copy-block' },
 					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car' }), copied(h('span'), 'networks.folds.trained')),
-					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car held' }), copied(h('span'), 'networks.folds.held'))),
-				copied(h('figcaption'), 'networks.learners.caption'),
-				bars(sameInputs.map((row) => ({
-					label: learnerName(row, groups), chips: chips(groups, groupsGiven(groups, row)), value: row.crossValidationR2,
-					text: row.crossValidationR2.toFixed(3), strong: row.learner === 'ensemble',
-				})), 1, 'networks.learners.inputs'))));
+					h('span', { class: 'copy-block' }, h('i', { class: 'fold-car held' }), copied(h('span'), 'networks.folds.held'))))));
 	el.prepend(locator('networks'));
 
 	function draw() {
@@ -155,7 +149,7 @@ export function createNetworks({ card, groups }) {
 
 	return {
 		el,
-		setCase() {},
+		setCar() {},
 		setPoint(point) {
 			state.point = point;
 			draw();

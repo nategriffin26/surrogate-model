@@ -1,6 +1,5 @@
-// The spread: the five networks disagree where the model is unsure. The open car's spread σ(Cp) beside its actual
-// error on one colour scale, the error against the spread over cells grouped by spread, and how often the error
-// stays within the spread.
+// The spread: the five networks disagree where the model is unsure. The reference car's spread σ(Cp) beside its actual
+// error on one colour scale, and the error against the spread over cells grouped by spread.
 
 import { h, s } from '../dom.js';
 import { countWord, colorBar, pictureFrame, section } from './charts.js';
@@ -36,43 +35,25 @@ export function createSpread({ card }) {
 	const frames = Object.fromEntries(['sigmaSide', 'missSide', 'sigmaBelow', 'missBelow'].map((id) => [id, pictureFrame(id)]));
 	const scale = h('div', { class: 'picture-scales' });
 	const chart = h('div');
-	const coverage = h('div', { class: 'headline' });
-	// Without CFD there is no error to picture: its head goes with its pictures.
-	const errorHead = h('span', {}, copied(h('span', { class: 'picture-head' }), 'spread.pictures.error'));
-	const missing = h('div', { class: 'missing', hidden: true });
 	const networks = { networks: card.networks.length, networksWord: countWord(card.networks.length) };
 	const grid = h('div', { class: 'picture-grid two' },
-		h('div', { class: 'picture-heads copy-block' }, copied(h('span', { class: 'picture-head' }), 'spread.pictures.spread', networks), errorHead),
+		h('div', { class: 'picture-heads copy-block' },
+			copied(h('span', { class: 'picture-head' }), 'spread.pictures.spread', networks),
+			copied(h('span', { class: 'picture-head' }), 'spread.pictures.error')),
 		frames.sigmaSide.el, frames.missSide.el, frames.sigmaBelow.el, frames.missBelow.el);
-	const charts = h('div', { class: 'spread-charts' },
-		h('figure', { class: 'figure' }, copied(h('figcaption'), 'spread.calibration.caption'), chart),
-		h('div', { class: 'headlines' },
-			coverage,
-			h('div', { class: 'headline' }, h('span', { class: 'big-number num' }, `${Math.round(100 * card.spreadCoverage)} %`),
-				copied(h('span', { class: 'headline-label' }), 'spread.headlines.outside'))));
 
 	const el = section('spread', networks,
-		h('div', { class: 'spread-layout' }, h('div', {}, grid, scale), charts), missing);
+		h('div', { class: 'spread-layout' },
+			h('figure', { class: 'figure' }, grid, scale),
+			h('figure', { class: 'figure' }, copied(h('figcaption'), 'spread.calibration.caption'), chart)));
 	el.prepend(locator('spread'));
 
 	return {
 		el,
-		setCase({ result, pictures, stats, maps }) {
-			frames.sigmaSide.show(pictures.sigmaSide);
-			frames.sigmaBelow.show(pictures.sigmaBelow);
-			scale.replaceChildren(colorBar(maps.spread, stats ? 'spread.scales.both' : 'spread.scales.spread'));
-			errorHead.hidden = frames.missSide.el.hidden = frames.missBelow.el.hidden = stats === null;
-			charts.hidden = stats === null;
-			missing.hidden = stats !== null;
-			if (!stats) {
-				missing.replaceChildren(copied(h('p'), 'spread.missing', { car: result.source.name }));
-				return;
-			}
-			frames.missSide.show(pictures.missSide);
-			frames.missBelow.show(pictures.missBelow);
+		setCar({ pictures, stats, maps }) {
+			for (const [id, frame] of Object.entries(frames)) frame.show(pictures[id]);
+			scale.replaceChildren(colorBar(maps.spread, 'spread.scales.both'));
 			chart.replaceChildren(calibrationFigure(stats.calibration));
-			coverage.replaceChildren(h('span', { class: 'big-number num' }, `${Math.round(100 * stats.coverage)} %`),
-				copied(h('span', { class: 'headline-label' }), 'spread.headlines.car'));
 		},
 		setPoint() {},
 	};

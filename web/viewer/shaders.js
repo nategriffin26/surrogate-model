@@ -5,14 +5,12 @@ export const CAR_VERTEX = /* glsl */ `
 attribute float cp;
 attribute float sigma;
 attribute float cfd;
-attribute float selected;    // share of the area around the vertex inside the selection (working mesh only)
 attribute float custom;      // a field the app supplies, such as an annotation's array (working mesh only)
 attribute vec4 paint;        // a colour painted on the car, alpha its strength (working mesh only)
 attribute float paintCover;  // share of the area around the vertex the paint covers (working mesh only)
 varying float vCp;
 varying float vSigma;
 varying float vCfd;
-varying float vSelected;
 varying float vCustom;
 varying vec4 vPaint;
 varying float vPaintCover;
@@ -22,7 +20,6 @@ void main() {
 	vCp = cp;
 	vSigma = sigma;
 	vCfd = cfd;
-	vSelected = selected;
 	vCustom = custom;
 	vPaint = paint;
 	vPaintCover = paintCover;
@@ -61,7 +58,6 @@ uniform float uOrtho;
 uniform vec3 uViewDir;
 uniform float uSection;      // 1 draws the section line
 uniform vec4 uPlane;         // section plane: unit normal, offset
-uniform float uSelection;    // 1 shows the selection: faces outside it fade toward clay, its edge drawn in the accent
 uniform float uPaint;        // 1 shows paint on the car
 uniform vec4 uArrival;       // x of the front, front width, streak depth, 1 while the field is arriving
 uniform float uFade;         // 0..1 fade from clay, used instead of the front under reduced motion
@@ -71,7 +67,6 @@ uniform vec3 uAccent;
 varying float vCp;
 varying float vSigma;
 varying float vCfd;
-varying float vSelected;
 varying float vCustom;
 varying vec4 vPaint;
 varying float vPaintCover;
@@ -155,10 +150,6 @@ void main() {
 	if (uFade < 1.0) base = mix(clay, base, uFade);
 	// Paint arrives as sRGB bytes, like the theme's colours; the car is shaded in linear light.
 	if (uPaint > 0.5) base = mix(base, sRGBTransferEOTF(vec4(vPaint.rgb, 1.0)).rgb, vPaint.a * smoothstep(0.3, 0.7, vPaintCover));
-	if (uSelection > 0.5) {
-		base = mix(mix(base, uClay, 0.8), base, smoothstep(0.3, 0.7, vSelected));
-		base = mix(base, uAccent, 0.9 * lineAt(vSelected - 0.5, 1.5));
-	}
 	gl_FragColor = vec4(shaded(base), 1.0);
 	#include <colorspace_fragment>
 }`;

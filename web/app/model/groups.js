@@ -1,16 +1,13 @@
 // The model's inputs as the page tells them: groups of columns that the models compared in training were given
-// or not given together, each with its colour and its words; and the compared models themselves, in those groups'
-// terms. Everything else comes from the model card, so a model trained on other groups brings its own, and a group
-// with nothing here stops the page with an error naming it.
-
-import { text } from './copy.js';
+// or not given together, each with its colour and its words. Everything else comes from the model card, so a model
+// trained on other groups brings its own, and a group with nothing here stops the page with an error naming it.
 
 /** The learners of this model's own kind: one network on a cell's inputs, or the five of them. */
 const OWN = new Set(['mlp', 'ensemble']);
 
 /**
  * Each group, by the kind of its first input (the engine's column kind, the one place the page names it): the stem of
- * its keys in copy.json (its name at `groups.<words>`) and its colour; and, for a group that reads the same things
+ * its keys in copy.json (its legend at `overview.legend.<words>`) and its colour; and, for a group that reads the same things
  * over and over, the column field it repeats over, of which the page shows one value at a time (one size of nearby
  * surface, one station of the slices).
  */
@@ -23,7 +20,7 @@ const WORDS = {
 /**
  * @typedef {Object} InputGroup
  * @property {string} id         the kind of its first input
- * @property {string} words      the stem of its keys in copy.json; its name is at `groups.<words>`
+ * @property {string} words      the stem of its keys in copy.json; its legend is at `overview.legend.<words>`
  * @property {string} color
  * @property {string[]} kinds    the column kinds in it
  * @property {number[]} columns  indices into `ModelCard.columns`
@@ -75,25 +72,4 @@ export function inputGroups(card) {
 /** The group a column belongs to. */
 export function groupOf(groups, column) {
 	return groups.find((group) => group.columns.includes(column));
-}
-
-/** The groups a compared model was given. */
-export function groupsGiven(groups, row) {
-	return groups.filter((group) => group.kinds.every((kind) => row.inputs.includes(kind)));
-}
-
-/**
- * A compared model's words, as [key, values] for `copied`. Single networks differ only in their inputs, so each is
- * named by them: the first group alone (`{group}`), or the groups added to it (`{added}`), in their names' words.
- */
-export function learnerName(row, groups) {
-	if (!['constant', 'pointnet', 'mlp', 'trees', 'ensemble'].includes(row.learner)) {
-		throw new Error(`The model card compares a learner the page does not know: “${row.learner}”.`);
-	}
-	if (row.learner !== 'mlp') return [`learners.${row.learner}`];
-	const [first, ...added] = groupsGiven(groups, row);
-	const name = (group) => text(`groups.${group.words}`).toLowerCase();
-	return added.length === 0
-		? ['learners.mlp.alone', { group: () => name(first) }]
-		: ['learners.mlp.added', { added: () => added.map(name).join(' + ') }];
 }

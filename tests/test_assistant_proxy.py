@@ -34,7 +34,7 @@ KEY = "sk-test-key"
 MODEL = "meta/muse-spark-1.3-contributor"
 CONVERSATION = {
     "messages": [{"role": "user", "content": "What is the lowest Cp on case 1?"}],
-    "tools": [{"type": "function", "function": {"name": "measure_region", "parameters": {"type": "object"}}}],
+    "tools": [{"type": "function", "function": {"name": "read_section", "parameters": {"type": "object"}}}],
 }
 
 

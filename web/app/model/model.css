@@ -10,12 +10,10 @@
 .model-page .num { font-variant-numeric: tabular-nums; }
 .model-page .symbol { font-style: italic; }
 .model-page .point-failure { margin: 8px 0 0; color: var(--rose); font-size: 13px; line-height: 1.45; }
-.model-page .missing { color: var(--muted); font-size: 14px; }
-.model-page[data-case]:not([data-case="ready"]) .model-body { display: none; }
-.model-page .case-notice:empty { display: none; }
-.model-page .case-notice { margin: 28px 0; color: var(--muted); font-size: 15px; }
-.model-page .case-notice p { margin: 0 0 12px; }
-.model-page .notice-actions { display: flex; gap: 10px; }
+.model-page:not([data-state="ready"]) .model-body { display: none; }
+.model-page .page-notice:empty { display: none; }
+.model-page .page-notice { margin: 28px 0; color: var(--muted); font-size: 15px; }
+.model-page .page-notice p { margin: 0; }
 .model-page .figure { margin: 0; min-width: 0; }
 .model-page figcaption { margin: 0 0 10px; color: var(--heading); font-size: 13px; font-weight: 600; }
 .model-page .figure figcaption:not(:first-child) { margin-top: 26px; }
@@ -23,11 +21,13 @@
 .model-page .small-number { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
 .model-page .hint { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
 
-/* Words emptied in copy.json leave no box: a block whose words are all empty goes with them, and a row of a grid keeps
-   its columns when its first cell goes. A line break typed into the words shows. */
+/* Words emptied in copy.json leave no box. A block whose words are all empty goes with them: a figure (its caption,
+   heads, axis names, labels, key and note all empty), a headline (a number nobody names), a key, a legend; the
+   layouts that hold figures side by side give a gone figure's width to the others. A row of a grid keeps its columns
+   when its first cell goes. A line break typed into the words shows. */
 .model-page [data-copy] { white-space: pre-line; }
-.model-page .copy-block:not(:has([data-copy]:not([hidden]))) { display: none; }
-.model-page :is(.bar-row, .facing-row, .fold-row) > :nth-child(2) { grid-column-start: 2; }
+.model-page :is(.copy-block, figure, .headline, .headlines):not(:has([data-copy]:not([hidden]))) { display: none; }
+.model-page :is(.bar-row, .fold-row) > :nth-child(2) { grid-column-start: 2; }
 .model-page .picture-heads { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
 .model-page .picture-heads > :nth-child(2) { grid-column: 2; }
 .model-page .picture-heads > :nth-child(3) { grid-column: 3; }
@@ -45,7 +45,7 @@
 .model-page .training-car { display: block; width: 100%; height: auto; }
 .model-page .step { grid-row: 2; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; color: inherit; text-align: center; text-decoration: none; }
 .model-page .step-figure { display: grid; place-items: center; width: 100%; height: 96px; margin-bottom: 6px; }
-.model-page .step:hover .step-name, .model-page .overview-training:hover .step-name { color: var(--link); }
+.model-page a.step:hover .step-name, .model-page .overview-training:hover .step-name { color: var(--link); }
 .model-page .step-name { color: var(--heading); font-size: 13px; font-weight: 600; transition: color 0.15s; }
 .model-page .step-number { color: var(--muted); font-size: 12px; }
 .model-page .step-arrow { grid-row: 2; position: relative; height: 96px; }
@@ -81,16 +81,16 @@
 
 /* ---- sections ---- */
 .model-page .model-section { margin-top: 56px; padding-top: 40px; border-top: 1px solid var(--hair); scroll-margin-top: 12px; }
-.model-page .figure-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; margin-bottom: 34px; }
-.model-page .figure-pair > .figure + .figure { padding-left: 56px; margin-left: -56px; border-left: 1px solid var(--hair); }
+.model-page .figure-pair { display: flex; gap: 0 56px; }
+.model-page .figure-pair > .figure { flex: 1 1 0; }
+/* The rule between the two figures, drawn only after a figure that is shown. */
+.model-page .figure-pair > .figure:has([data-copy]:not([hidden])) ~ .figure { padding-left: 56px; margin-left: -56px; border-left: 1px solid var(--hair); }
 .model-page .example-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .model-page .example-grid .example { padding: 6px 5px; border: 1px solid var(--rule); border-radius: 6px; }
 .model-page .example-cells { margin: 4px 0 14px; }
 .model-page .training-car.dots { max-width: 100%; height: auto; }
-.model-page .bar-head span { color: var(--faint); font-size: 11.5px; }
-.model-page .bar-head { min-height: 16px; }
 
-/* Bars on one scale, with the chips of the inputs each model was given. */
+/* Bars on one scale: the error by region. */
 .model-page .bars { display: flex; flex-direction: column; gap: 4px; max-width: 760px; }
 .model-page .bar-row { display: grid; grid-template-columns: minmax(0, 250px) max-content minmax(0, 1fr) 48px; gap: 12px; align-items: center; min-height: 26px; }
 .model-page .bar-label { color: var(--ink); font-size: 13px; }
@@ -98,11 +98,6 @@
 .model-page .bar-track { height: 8px; border-radius: 4px; background: var(--hair); }
 .model-page .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--steel); opacity: 0.5; }
 .model-page .bar-value { color: var(--heading); font-size: 13px; text-align: right; }
-.model-page .bar-row.strong .bar-label { color: var(--heading); font-weight: 600; }
-.model-page .bar-row.strong .bar-fill { background: var(--link); opacity: 1; }
-.model-page .chips { display: inline-flex; gap: 3px; }
-.model-page .chip { width: 10px; height: 10px; border-radius: 2px; background: var(--group); }
-.model-page .chip.off { background: transparent; box-shadow: inset 0 0 0 1px var(--rule); }
 
 /* ---- what a cell is told: the invented body (primer.js, body-views.js), then the open car ---- */
 .model-page .inputs-primer svg, .model-page .inputs-car svg { display: block; overflow: hidden; font-family: var(--body); -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
@@ -128,13 +123,11 @@
 .model-page [data-mode="slices"] .square:not([data-group="slices"]) { opacity: 0.25; }
 .model-page .swatch { display: inline-block; width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--group); vertical-align: -1px; margin-right: 6px; }
 .model-page .primer-modes .swatch { margin: 0; }
-.model-page .primer-readout { display: grid; grid-template-columns: auto auto auto; justify-content: start; align-content: start; gap: 2px 16px; min-height: 200px; margin: 0; font-size: 13px; }
+.model-page .primer-readout { display: grid; grid-template-columns: auto auto; justify-content: start; align-content: start; gap: 2px 16px; min-height: 200px; margin: 0; font-size: 13px; }
 .model-page .primer-readout > div { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 .model-page .primer-readout dt { color: var(--muted); }
 .model-page .primer-readout dd { margin: 0; color: var(--heading); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .model-page .primer-readout dd .swatch { box-shadow: inset 0 0 0 0.5px rgba(13, 34, 51, 0.2); }
-.model-page .primer-readout .readout-head dd { color: var(--faint); font-size: 12px; font-weight: 500; }
-.model-page .primer-readout .both { grid-column: span 2; text-align: left; }
 .model-page .readout-note { grid-column: 1 / -1; margin: -2px 0 2px; color: var(--faint); font-size: 12px; }
 .model-page .choice { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--tint); }
 .model-page .choice button { height: 30px; min-width: 44px; padding: 0 10px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background 0.15s, color 0.15s; }
@@ -240,10 +233,11 @@
 .model-page .cut { fill: none; stroke: #4f6a78; stroke-width: 1.4; stroke-linecap: round; }
 .model-page .facing { stroke: var(--heading); stroke-width: 1.6; }
 .model-page .point-dot { fill: #fff; stroke: var(--heading); stroke-width: 2.5; }
-.model-page .spread-charts .headline { max-width: 190px; }
 
 /* ---- the networks ---- */
-.model-page .networks-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 56px; }
+.model-page .networks-layout { display: flex; gap: 56px; }
+.model-page .networks-layout > .figure { flex: 1 1 0; }
+.model-page .networks-layout > .figure:first-child { flex-grow: 1.1; }
 .model-page .network-holder { position: relative; width: 100%; }
 .model-page .network-output { position: absolute; right: 2px; bottom: 2px; width: 40px; color: var(--faint); font-size: 11px; font-weight: 500; line-height: 1; text-align: center; }
 .model-page .network-canvas { display: block; width: 100%; font-family: var(--body); }
@@ -261,13 +255,12 @@
 .model-page .fold-head .fold-cp { color: var(--faint); font-size: 11px; }
 .model-page .fold-key { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 6px; color: var(--muted); font-size: 12px; }
 .model-page .fold-key .fold-car { width: 16px; height: 12px; }
-.model-page :is(.fold-key, .drag-key) > span { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; }
+.model-page .fold-key > span { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; }
 
 /* ---- pictures of the car ---- */
 .model-page .picture { position: relative; }
 .model-page .picture canvas { display: block; width: 100%; height: 100%; }
 .model-page .headlines { display: flex; flex-wrap: wrap; gap: 20px 56px; margin: 8px 0 28px; }
-.model-page .headlines.column { flex-direction: column; gap: 22px; }
 .model-page .headline { display: flex; flex-direction: column; gap: 4px; max-width: 280px; }
 .model-page .headline-label { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
 .model-page .picture-grid { display: grid; gap: 8px 18px; align-items: end; }
@@ -282,39 +275,21 @@
 .model-page .color-bar-ramp { grid-column: -2; height: 8px; border-radius: 4px; }
 .model-page .color-bar-ticks { grid-column: -2; position: relative; height: 14px; color: var(--muted); font-size: 11px; }
 .model-page .color-bar-ticks span { position: absolute; top: 0; transform: translateX(-50%); }
-.model-page .accuracy-charts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 56px; margin-top: 36px; }
+.model-page .accuracy-charts { display: flex; gap: 56px; margin-top: 36px; }
+.model-page .accuracy-charts > .figure:last-child { flex: 1 1 0; }
 .model-page .scatter { position: relative; }
 .model-page .scatter-axes { display: block; overflow: visible; }
 .model-page .scatter-density { position: absolute; top: 0; image-rendering: pixelated; }
-.model-page :is(.scatter-axes, .calibration, .drag-line) text { fill: var(--muted); font: 500 10.5px var(--body); }
+.model-page :is(.scatter-axes, .calibration) text { fill: var(--muted); font: 500 10.5px var(--body); }
 .model-page :is(.scatter-axes, .calibration) .axis-name { fill: var(--heading); font-size: 11.5px; }
 .model-page :is(.scatter-axes, .calibration) .frame { fill: none; stroke: var(--hair); }
 .model-page :is(.scatter-axes, .calibration) .diagonal { stroke: var(--heading); stroke-dasharray: 4 3; opacity: 0.45; }
-.model-page .spread-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 56px; }
-.model-page .spread-charts { display: flex; flex-direction: column; gap: 26px; }
+.model-page .spread-layout { display: flex; gap: 56px; }
+.model-page .spread-layout > .figure { flex: 1 1 0; }
+.model-page .spread-layout > .figure:first-child { flex-grow: 1.25; }
 .model-page .calibration { display: block; overflow: visible; }
 .model-page .calibration-line { fill: none; stroke: var(--violet); stroke-width: 2; }
 .model-page .calibration-dot { fill: var(--violet); stroke: #fff; stroke-width: 1.5; }
-
-/* ---- drag ---- */
-.model-page .drag-layout { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 56px; }
-.model-page .drag-line { display: block; overflow: visible; }
-.model-page .drag-line .grid { stroke: var(--hair); }
-.model-page .drag-line .row-name { fill: var(--heading); font-size: 12px; }
-.model-page .drag-line .training-drag { fill: var(--steel); fill-opacity: 0.55; stroke: #fff; stroke-width: 1; }
-.model-page .drag-line .average { stroke: var(--heading); stroke-width: 1.5; stroke-dasharray: 3 2; }
-.model-page .drag-line .average-label { fill: var(--heading); }
-.model-page .drag-line .network-drag { stroke: var(--heading); stroke-width: 1.5; opacity: 0.55; }
-.model-page .drag-line .predicted-drag { fill: var(--link); stroke: #fff; stroke-width: 2; }
-.model-page .drag-line .cfd-drag { fill: #fff; stroke: var(--rose); stroke-width: 2; }
-.model-page .drag-key { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: var(--muted); font-size: 12px; }
-.model-page .facing-split { display: grid; gap: 6px; margin-top: 8px; }
-.model-page .facing-row { display: grid; grid-template-columns: 170px 220px 56px; justify-content: start; align-items: center; gap: 12px; font-size: 12.5px; }
-.model-page .facing-track { position: relative; height: 12px; }
-.model-page .facing-zero { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--muted); }
-.model-page .facing-fill { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--heading); opacity: 0.35; }
-.model-page .facing-row.sum .bar-label { color: var(--heading); font-weight: 600; }
-.model-page .facing-row.sum .facing-fill { background: var(--link); opacity: 1; }
 
 @media (max-width: 1360px) {
 	.model-page { padding: 28px 32px 96px; }

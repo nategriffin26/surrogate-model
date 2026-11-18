@@ -1,11 +1,11 @@
 // The report: the analysis on screen as one HTML page, for someone without the tool. It holds the view as drawn, the
-// whole car, the selection and the saved regions, the section plot, the probe set in use, the comparison and the
-// study, each read from what the operations give, so the page and the tool agree. The picture is inlined as a data
-// URL, the plot as SVG, and the styles travel in the page: it loads nothing.
+// whole car, the section plot, the probe set in use, the comparison and the study, each read from what the
+// operations give, so the page and the tool agree. The picture is inlined as a data URL, the plot as SVG, and the
+// styles travel in the page: it loads nothing.
 
 import { caseSummary } from './cases.js';
 import { EXPORTS, baseName, defineExport } from './export.js';
-import { percent, signed } from './format.js';
+import { signed } from './format.js';
 import { readSet } from './probes.js';
 
 const PLOT = { width: 900, height: 300 };
@@ -64,8 +64,8 @@ async function carriedFaces() {
 	return inlined.join('\n');
 }
 
-/** app: { session, engine, regions, section, comparison, variants }. Defines the report export. */
-export function defineReport({ session, engine, regions, section, comparison, variants }) {
+/** app: { session, engine, section, comparison, variants }. Defines the report export. */
+export function defineReport({ session, engine, section, comparison, variants }) {
 	const view = session.view;
 
 	function wholeCar(c) {
@@ -82,17 +82,6 @@ export function defineReport({ session, engine, regions, section, comparison, va
 		];
 		const outside = s.outside_training.map((d) => `${d.dimension} ${d.value_m.toFixed(3)} m (training ${d.training_min_m.toFixed(3)} to ${d.training_max_m.toFixed(3)} m)`);
 		return `<h2>Whole car</h2>${table(null, rows)}${note(`Summed over ${s.totals_over}.`)}${outside.length ? note(`Outside the training range: ${outside.join('; ')}.`) : ''}`;
-	}
-
-	function regionsPart(c) {
-		const picked = [
-			...(view.selection ? [{ name: 'Selection', terms: view.selection.terms }] : []),
-			...session.regions.map((r) => ({ name: r.name, terms: r.terms })),
-		];
-		if (!picked.length) return '';
-		const read = picked.map((r) => ({ name: r.name, ...regions.readoutOf(c, r.terms) }));
-		const rows = read.map(({ name, readout: m }) => [name, m.area_m2.toFixed(3), number(m.cx), number(m.cz), number(m.mean_cp), percent(m.share_of_car.cx)]);
-		return `<h2>Regions</h2>${table(['Region', 'Area, m²', markup(coefficient('x')), markup(coefficient('z')), 'Mean Cp', markup(`Share of ${coefficient('x')}`)], rows)}${note(`Summed over ${read[0].summed_over}.`)}`;
 	}
 
 	function sectionPart() {
@@ -117,8 +106,9 @@ export function defineReport({ session, engine, regions, section, comparison, va
 		const other = out.compared_with === 'cfd' ? 'CFD' : out.compared_with.name;
 		const mine = out.compared_with === 'cfd' ? 'Predicted' : c.name;
 		const columns = [['cx', coefficient('x')], ['cz', coefficient('z')], ['mean_cp', 'Mean Cp']];
-		const head = ['Region', ...columns.flatMap(([, name]) => [markup(`${name}, ${escape(mine)}`), markup(`${name}, ${escape(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
-		const rows = out.rows.map((row) => [row.name, ...columns.flatMap(([key]) => [number(row.this_car[key]), number(row.other[key]), number(row.difference[key])]), number(row.rms_dcp)]);
+		const head = ['', ...columns.flatMap(([, name]) => [markup(`${name}, ${escape(mine)}`), markup(`${name}, ${escape(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
+		const whole = out.whole_car;
+		const rows = [['Whole car', ...columns.flatMap(([key]) => [number(whole.this_car[key]), number(whole.other[key]), number(whole.difference[key])]), number(whole.rms_dcp)]];
 		return `<h2>Compared with ${escape(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
 	}
 
@@ -143,7 +133,7 @@ export function defineReport({ session, engine, regions, section, comparison, va
 			`${r.source.cells.toLocaleString('en-US')} polygons`,
 			`model ${r.model.slice(0, 8)}`,
 		].join(' · ');
-		const parts = [wholeCar(c), regionsPart(c), sectionPart(), await probesPart(c), comparisonPart(c), studyPart(c)];
+		const parts = [wholeCar(c), sectionPart(), await probesPart(c), comparisonPart(c), studyPart(c)];
 		return `<!doctype html>
 <html lang="en">
 <head>
@@ -168,7 +158,7 @@ ${parts.join('\n')}
 		name: 'report',
 		label: 'Report',
 		format: 'HTML',
-		title: 'The analysis on screen as one page: the view, the whole car, regions, the section, probes, the comparison and the study',
+		title: 'The analysis on screen as one page: the view, the whole car, the section, probes, the comparison and the study',
 		unavailable: () => null,
 		make: async (c) => new Blob([await reportOf(c)], { type: 'text/html' }),
 		fileName: (c) => `${baseName(c)}-report.html`,

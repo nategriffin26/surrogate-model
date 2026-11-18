@@ -4,7 +4,7 @@
 import { s } from './dom.js';
 import { niceTicks, signed } from './format.js';
 
-export function scale([d0, d1], [r0, r1]) {
+function scale([d0, d1], [r0, r1]) {
 	const k = (r1 - r0) / (d1 - d0 || 1);
 	const f = (v) => r0 + (v - d0) * k;
 	f.invert = (p) => d0 + (p - r0) / k;

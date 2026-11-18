@@ -40,15 +40,11 @@ export class Session extends EventTarget {
 			section: { on: true, axis: 1, offset: 0 },
 			dock: 'section',
 			dockCollapsed: false,
-			/** The faces picked out, as rules ({terms}: see regions.js), so every car shown picks the same part; or null. */
-			selection: null,
 			/** The probe set in use: the one clicks add to and the probe table shows; or null. */
 			probeSet: null,
 			/** What the car on screen is compared with, {with: 'cfd' or a case id, sideBySide}; or null. */
 			compare: null,
 		};
-		/** Saved regions, {id, name, terms}, which any car can be measured on. */
-		this.regions = [];
 		/** Probe sets, {id, name, probes: [{n, point, label?}], next}, which every car reads at its own cells. */
 		this.probeSets = [];
 		engine.device.then((device) => {

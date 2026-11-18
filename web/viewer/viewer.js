@@ -65,15 +65,11 @@ export class Viewer extends EventTarget {
 		this.arrival = null;
 		/** While the networks predict: {front}, the x the predicted share's front is easing toward; else null. */
 		this.waiting = null;
-		/** The selection shown, per working-mesh vertex (setSelection), or null. */
-		this.selection = null;
 		/** A field the app supplies (setCustomField), and paint on the car (setPaint), per working-mesh vertex, or null. */
 		this.custom = null;
 		this.paint = null;
 		/** Objects the annotations draw with the car (setAnnotations), or null. */
 		this.annotations = null;
-		/** What the left button does on the car while a tool owns it (setTool), instead of turning the camera. */
-		this.tool = null;
 		this.lastUpload = 0;
 		/** Signalled once the GPU has taken in the last piece uploaded. */
 		this.uploadFence = null;
@@ -148,7 +144,6 @@ export class Viewer extends EventTarget {
 			uOrtho: { value: 0 },
 			uViewDir: { value: new THREE.Vector3() },
 			uSection: { value: 0 },
-			uSelection: { value: 0 },
 			uPaint: { value: 0 },
 			uPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
 			uArrival: { value: new THREE.Vector4() },
@@ -276,10 +271,8 @@ export class Viewer extends EventTarget {
 		this.uniforms.uFade.value = 1;
 		this.endWait();
 		// What the app laid on the last car's working mesh belongs to that car.
-		this.selection = null;
 		this.custom = null;
 		this.paint = null;
-		this.uniforms.uSelection.value = 0;
 		this.uniforms.uPaint.value = 0;
 		this.requestRender();
 	}
@@ -367,9 +360,9 @@ export class Viewer extends EventTarget {
 		const full = s.full?.ready ? s.full : null;
 		// A new working mesh still on its way: the full mesh stands in, clay until its fields arrive.
 		if (!s.working.ready) return full ? 'full' : null;
-		// The full mesh shown as the preview is, until the result arrives, the working mesh too; and a selection, paint
-		// and a custom field are carried by the working mesh only.
-		if (!full || full === s.working || this.selection || this.paint) return 'working';
+		// The full mesh shown as the preview is, until the result arrives, the working mesh too; and paint and a custom
+		// field are carried by the working mesh only.
+		if (!full || full === s.working || this.paint) return 'working';
 		if (!this.panes.every((pane) => full.has(pane.field))) return 'working';
 		if (this.lod.layer !== full) this.resetLod(full);
 		if (moving && (s.fullFraction < 1 || !this.lod.fullWhileMoving)) return 'working';
@@ -404,19 +397,6 @@ export class Viewer extends EventTarget {
 			u.uPlane.value.set(...n, section.offset);
 		}
 		this.placePlane();
-		this.requestRender();
-	}
-
-	/**
-	 * Show a selection on the car: `selected` is, per working-mesh vertex, the share of the area around it that is
-	 * selected (0 to 1). Faces outside fade toward clay and the selection's edge is drawn. null shows none. The working
-	 * mesh is drawn while a selection shows, since only it carries the shares. After changing the array in place, call
-	 * again with it.
-	 */
-	setSelection(selected) {
-		this.selection = selected;
-		this.uniforms.uSelection.value = selected ? 1 : 0;
-		this.attachToWorking('selected', selected);
 		this.requestRender();
 	}
 
@@ -458,7 +438,6 @@ export class Viewer extends EventTarget {
 
 	/** Every per-vertex array the app supplies, on a working mesh just placed. */
 	attachAllToWorking() {
-		this.attachToWorking('selected', this.selection);
 		this.attachToWorking('custom', this.custom);
 		this.attachToWorking('paint', this.paint?.colour, 4, true);
 		this.attachToWorking('paintCover', this.paint?.cover, 1, true);
@@ -891,67 +870,17 @@ export class Viewer extends EventTarget {
 		};
 	}
 
-	/**
-	 * Give the left button on the car to a tool (painting, drawing a lasso) instead of the camera, or back with null.
-	 * The tool gets {clientX, clientY} at `down`, `move` and `up`; the right button still pans and the wheel zooms.
-	 */
-	setTool(tool) {
-		this.tool = tool;
-		this.controls.mouseButtons.LEFT = tool ? -1 : THREE.MOUSE.ROTATE;
-		this.canvas.style.cursor = tool ? 'crosshair' : '';
-	}
-
-	/** The world length one CSS pixel spans at `point` in the view. */
-	worldPerPixel(point) {
-		const camera = this.camera;
-		const { h } = this.paneSize();
-		if (camera.isOrthographicCamera) return (camera.top - camera.bottom) / camera.zoom / h;
-		const depth = camera.position.distanceTo(new THREE.Vector3(...point));
-		return (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * depth) / h;
-	}
-
-	/**
-	 * Where the car's surface is seen at each pixel of the view: world x, y, z and 1, or 0 where no surface is, as
-	 * {width, height, data} in drawing-buffer pixels from the bottom left, with `toPixel(clientX, clientY)`.
-	 */
-	async readSurface() {
-		const renderer = this.renderer;
-		const { W, H } = this.paneSize();
-		const target = new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType });
-		renderer.setRenderTarget(target);
-		renderer.setClearColor(0x000000, 0);
-		renderer.clear();
-		renderer.render(this.pickScene, this.camera);
-		renderer.setRenderTarget(null);
-		const data = new Float32Array(W * H * 4);
-		await renderer.readRenderTargetPixelsAsync(target, 0, 0, W, H, data);
-		target.dispose();
-		const rect = this.canvas.getBoundingClientRect();
-		const scale = W / rect.width;
-		return { width: W, height: H, data, toPixel: (x, y) => [Math.floor((x - rect.left) * scale), H - 1 - Math.floor((y - rect.top) * scale)] };
-	}
-
 	bindPointer() {
 		const el = this.canvas;
 		let down = null;
 		let tapTimer = 0;
-		let using = false;
 		el.addEventListener('pointerdown', (e) => {
 			down = { x: e.clientX, y: e.clientY, button: e.button };
-			if (!this.tool || e.button !== 0) return;
-			using = true;
-			el.setPointerCapture(e.pointerId);
-			this.tool.down({ clientX: e.clientX, clientY: e.clientY });
-		});
-		el.addEventListener('pointerup', (e) => {
-			if (!using) return;
-			using = false;
-			this.tool?.up({ clientX: e.clientX, clientY: e.clientY });
 		});
 		// A single click waits for a possible second one, so a double-click (pivot) never also counts as a click. What it
 		// hit is picked at once, with the camera as it was clicked: the view may move during the wait (a view key).
 		el.addEventListener('click', (e) => {
-			if (this.tool || !down || down.button !== 0 || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
+			if (!down || down.button !== 0 || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
 			clearTimeout(tapTimer);
 			if (e.detail > 1) return;
 			const { clientX, clientY } = e;
@@ -963,12 +892,10 @@ export class Viewer extends EventTarget {
 		});
 		el.addEventListener('dblclick', async (e) => {
 			clearTimeout(tapTimer);
-			if (this.tool) return;
 			const hit = await this.pick(e.clientX, e.clientY);
 			if (hit) this.focus(hit.point);
 		});
 		el.addEventListener('pointermove', (e) => {
-			if (using) return this.tool?.move({ clientX: e.clientX, clientY: e.clientY });
 			if (!this.hoverPicking || e.buttons !== 0 || e.pointerType === 'touch') return;
 			this.pointer = { clientX: e.clientX, clientY: e.clientY };
 			this.hover(this.pointer);

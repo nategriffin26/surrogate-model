@@ -1,5 +1,5 @@
-// The dock under the 3D view: the section plot, the probe table, and panels such as the regions tool. What each
-// shows is exported from the Export menu.
+// The dock under the 3D view: the section plot, the probe table, and the panels for comparing cars and making
+// variants. What each shows is exported from the Export menu.
 
 import { h } from './dom.js';
 import { icon } from './icons.js';

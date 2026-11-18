@@ -1,10 +1,9 @@
 // Variants of a car: its geometry changed on the page and predicted again. A variant stretches the car along an axis,
-// raises or lowers the body on its wheels, or moves a region of it with the surface around the region following. It
-// is made from the simplified working mesh the car is drawn with (about 600,000 triangles) and predicted there by the
-// engine's quick prediction, in a second or two. The car itself is predicted unchanged on the same mesh, once, and a
-// variant is compared with that (`comparedAs`), so the difference between them is the change alone. Each variant
-// opens as a case beside its car, its surface kept in the workspace under variants/ with the prediction as cell
-// arrays.
+// or raises or lowers the body on its wheels. It is made from the simplified working mesh the car is drawn with (about
+// 600,000 triangles) and predicted there by the engine's quick prediction, in a second or two. The car itself is
+// predicted unchanged on the same mesh, once, and a variant is compared with that (`comparedAs`), so the difference
+// between them is the change alone. Each variant opens as a case beside its car, its surface kept in the workspace
+// under variants/ with the prediction as cell arrays.
 //
 // A car and its open variants are one study, shown as one table whoever made the rows: the Variants tab and the
 // assistant both call make_variant, and read_study reads the table.
@@ -15,23 +14,18 @@ import { finite, oneOf, round } from './checks.js';
 import { coefficient, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { signed } from './format.js';
-import { icon } from './icons.js';
-import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
 
-const KINDS = ['stretch', 'ride_height', 'move'];
-const KIND_LABELS = { stretch: 'Stretch', ride_height: 'Ride height', move: 'Move region' };
+const KINDS = ['stretch', 'ride_height'];
+const KIND_LABELS = { stretch: 'Stretch', ride_height: 'Ride height' };
 /** What each change does, said once, in its control's tooltip. */
 const KIND_TITLES = {
 	stretch: 'The whole car scales along the axis, its wheels with it',
 	ride_height: 'The body moves up or down and the wheels stay on the ground: the axles are found where the tyres touch it, and the wheels taken as DrivAerML\'s, 0.318 m in radius',
-	move: 'The selection or a saved region moves, and the surface around it follows over the falloff, measured along the surface',
 };
 const AXES = ['x', 'y', 'z'];
 /** What a stretch along each axis changes. */
 const DIMENSIONS = { x: 'length', y: 'width', z: 'height' };
-/** Which way a region moves along each axis. */
-const DIRECTIONS = { x: 'Downstream', y: 'Away from the centre plane, on each side', z: 'Up' };
 /** DrivAerML's wheels, the same on every car of the set: 0.318 m from where the tyre meets the ground to the axle. */
 const WHEEL_RADIUS = 0.318;
 /** Vertices within this height of the lowest are where the tyres touch the ground. */
@@ -44,20 +38,17 @@ const CONTACT = 0.005;
 const WHEEL_GAP = [0.01, 0.12];
 const TYRE_SIDE = [0.03, 0.13];
 /** Bounds on a change: beyond them the surface would describe another car rather than a variant of this one. */
-const LIMITS = { percent: 20, offset_mm: 200, falloff_mm: 1000 };
-const FALLOFF_MM = 100;
+const LIMITS = { percent: 20, offset_mm: 200 };
 const PREDICTED_ON = 'Each variant is predicted on the simplified working mesh, about 600,000 triangles, and so is its car, unchanged: differences between them are the change alone.';
 
 const CHANGE_SCHEMA = {
 	type: 'object',
-	description: 'One change. stretch: the car scaled along an axis by percent: x (length) about its middle, y (width) about its centre plane, z (height) from the ground up. ride_height: the body moved up (positive) or down by offset_mm, the wheels staying on the ground. move: the faces of a region (region_id, or the selection when it is left out) moved by offset_mm along an axis (x downstream, z up, y away from the centre plane on each side), the surface around them following over falloff_mm measured along the surface.',
+	description: 'One change. stretch: the car scaled along an axis by percent: x (length) about its middle, y (width) about its centre plane, z (height) from the ground up. ride_height: the body moved up (positive) or down by offset_mm, the wheels staying on the ground.',
 	properties: {
 		kind: { type: 'string', enum: KINDS },
-		axis: { type: 'string', enum: AXES, description: 'stretch and move.' },
+		axis: { type: 'string', enum: AXES, description: 'stretch.' },
 		percent: { type: 'number', description: `stretch: the change in size, %, from −${LIMITS.percent} to ${LIMITS.percent}.` },
-		offset_mm: { type: 'number', description: `ride_height and move: how far, mm, from −${LIMITS.offset_mm} to ${LIMITS.offset_mm}.` },
-		region_id: { type: 'integer', description: 'move: a saved region; default the selection.' },
-		falloff_mm: { type: 'number', description: `move: how far along the surface the faces around the region follow it, mm; default ${FALLOFF_MM}.` },
+		offset_mm: { type: 'number', description: `ride_height: how far, mm, from −${LIMITS.offset_mm} to ${LIMITS.offset_mm}.` },
 	},
 	required: ['kind'],
 	additionalProperties: false,
@@ -138,115 +129,6 @@ function rideHeight(points, offset) {
 	}
 }
 
-/**
- * Move the vertices of the faces in `mask` by `offset` (m) along an axis, along y away from the centre plane on each
- * side, and the vertices around them by less the farther along the surface they lie, to nothing at `falloff` (m).
- */
-function moveRegion(points, indices, mask, axis, offset, falloff) {
-	const inside = new Uint8Array(points.length / 3);
-	for (let f = 0; f < mask.length; f++) {
-		if (mask[f]) inside[indices[3 * f]] = inside[indices[3 * f + 1]] = inside[indices[3 * f + 2]] = 1;
-	}
-	const distance = surfaceDistances(points, indices, inside, falloff);
-	const k = AXES.indexOf(axis);
-	for (let v = 0; v < inside.length; v++) {
-		const weight = fade(distance[v], 0, falloff);
-		if (weight === 0) continue;
-		points[3 * v + k] += (k === 1 ? Math.sign(points[3 * v + 1]) : 1) * offset * weight;
-	}
-}
-
-/**
- * Each vertex's distance along the surface from the nearest vertex of `sources`, up to `limit`, and Infinity beyond:
- * Dijkstra over the mesh's edges. Along the surface rather than straight, so a moved bumper does not drag a wheel or
- * a panel on the far side of a gap.
- */
-function surfaceDistances(points, indices, sources, limit) {
-	const count = sources.length;
-	// Each vertex's neighbours, compressed: the edges of every triangle, both ways.
-	const start = new Uint32Array(count + 1);
-	for (const v of indices) start[v + 1] += 2;
-	for (let v = 0; v < count; v++) start[v + 1] += start[v];
-	const neighbours = new Uint32Array(start[count]);
-	const filled = start.slice(0, count);
-	for (let t = 0; t < indices.length; t += 3) {
-		const a = indices[t], b = indices[t + 1], c = indices[t + 2];
-		neighbours[filled[a]++] = b;
-		neighbours[filled[a]++] = c;
-		neighbours[filled[b]++] = c;
-		neighbours[filled[b]++] = a;
-		neighbours[filled[c]++] = a;
-		neighbours[filled[c]++] = b;
-	}
-	const distance = new Float32Array(count).fill(Infinity);
-	const frontier = new Frontier();
-	for (let v = 0; v < count; v++) {
-		if (!sources[v]) continue;
-		distance[v] = 0;
-		frontier.push(0, v);
-	}
-	while (frontier.size) {
-		const [d, v] = frontier.pop();
-		if (d > distance[v]) continue;
-		for (let k = start[v]; k < start[v + 1]; k++) {
-			const u = neighbours[k];
-			const next = d + Math.hypot(points[3 * u] - points[3 * v], points[3 * u + 1] - points[3 * v + 1], points[3 * u + 2] - points[3 * v + 2]);
-			if (next < distance[u] && next < limit) {
-				distance[u] = next;
-				frontier.push(next, u);
-			}
-		}
-	}
-	return distance;
-}
-
-/** A binary min-heap of vertices by distance. A vertex may be in it twice; the nearer entry comes out first. */
-class Frontier {
-	keys = [];
-	ids = [];
-
-	get size() {
-		return this.keys.length;
-	}
-
-	push(key, id) {
-		const { keys, ids } = this;
-		let i = keys.length;
-		keys.push(key);
-		ids.push(id);
-		while (i > 0) {
-			const parent = (i - 1) >> 1;
-			if (keys[parent] <= key) break;
-			keys[i] = keys[parent];
-			ids[i] = ids[parent];
-			i = parent;
-		}
-		keys[i] = key;
-		ids[i] = id;
-	}
-
-	pop() {
-		const { keys, ids } = this;
-		const top = [keys[0], ids[0]];
-		const key = keys.pop(), id = ids.pop();
-		if (keys.length) {
-			let i = 0;
-			for (;;) {
-				let child = 2 * i + 1;
-				if (child >= keys.length) break;
-				if (child + 1 < keys.length && keys[child + 1] < keys[child]) child++;
-				if (keys[child] >= key) break;
-				keys[i] = keys[child];
-				ids[i] = ids[child];
-				i = child;
-			}
-			keys[i] = key;
-			ids[i] = id;
-		}
-		return top;
-	}
-}
-
 /** A surface for the engine from points and the triangles of a mesh, each array its own buffer, as the engine takes them. */
 function surfaceOf(name, points, indices) {
 	return { name, points, connectivity: Uint32Array.from(indices), offsets: Uint32Array.from({ length: indices.length / 3 + 1 }, (_, i) => 3 * i) };
@@ -263,8 +145,6 @@ function describe(change) {
 			return `${DIMENSIONS[change.axis]} ${plus(change.percent)} %`;
 		case 'ride_height':
 			return `ride height ${plus(change.offset_mm)} mm`;
-		case 'move':
-			return `${change.region} ${plus(change.offset_mm)} mm in ${change.axis}`;
 		default:
 			throw new Error(`Unknown change ${change.kind}`);
 	}
@@ -277,8 +157,8 @@ const rounded = (values) => Object.fromEntries(Object.entries(values).map(([key,
 
 // ---- the operations and the tab ---------------------------------------------------------------------------------------
 
-/** app: { session, engine, workspace, regions, update, run }. The variant operations, the study export and the Variants tab. */
-export function createVariants({ session, engine, workspace, regions, update, run }) {
+/** app: { session, engine, workspace, update, run }. The variant operations, the study export and the Variants tab. */
+export function createVariants({ session, engine, workspace, update, run }) {
 	const view = session.view;
 	/** Per car, its unchanged prediction while it is being made, so it is asked for once. */
 	const baselines = new WeakMap();
@@ -298,8 +178,8 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		return baselines.get(root);
 	}
 
-	/** A change from the operation's arguments, checked, with the faces of a move's region picked on `base`. */
-	function checkChange(change, i, base) {
+	/** A change from the operation's arguments, checked. */
+	function checkChange(change, i) {
 		const name = `changes[${i}]`;
 		const kind = oneOf(`${name}.kind`, change?.kind, KINDS);
 		const within = (key, low, high) => {
@@ -312,28 +192,15 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 				return { kind, axis: oneOf(`${name}.axis`, change.axis, AXES), percent: within('percent', -LIMITS.percent, LIMITS.percent) };
 			case 'ride_height':
 				return { kind, offset_mm: within('offset_mm', -LIMITS.offset_mm, LIMITS.offset_mm) };
-			case 'move': {
-				const saved = session.regions.map((r) => `${r.id} (${r.name})`).join(', ') || 'none';
-				const region = change.region_id === undefined ? null : session.regions.find((r) => r.id === change.region_id);
-				if (change.region_id !== undefined && !region) throw new Error(`There is no saved region ${change.region_id}. Saved regions: ${saved}.`);
-				const terms = region ? [{ op: 'replace', rule: { kind: 'region', region_id: region.id } }] : view.selection?.terms;
-				if (!terms) throw new Error(`${name} moves a region: select faces first, or give region_id. Saved regions: ${saved}.`);
-				const mask = regions.maskOf(base, terms);
-				const faces = mask.reduce((sum, m) => sum + m, 0);
-				if (!faces) throw new Error(`The ${region ? `region ${region.name}` : 'selection'} picks no faces of ${base.name}.`);
-				const falloff = change.falloff_mm === undefined ? FALLOFF_MM : within('falloff_mm', 0, LIMITS.falloff_mm);
-				return { kind, region: region?.name ?? 'selection', ...(region ? { region_id: region.id } : {}), faces, axis: oneOf(`${name}.axis`, change.axis, AXES), offset_mm: within('offset_mm', -LIMITS.offset_mm, LIMITS.offset_mm), falloff_mm: falloff, mask };
-			}
 			default:
 				throw new Error(`Unknown change ${kind}`);
 		}
 	}
 
-	/** Change `points` as `change` says; what the study keeps of the change. */
-	function apply({ mask, ...change }, points, base) {
+	/** Change `points` as `change` says. */
+	function apply(change, points) {
 		if (change.kind === 'stretch') stretch(points, change.axis, 1 + change.percent / 100);
-		else if (change.kind === 'ride_height') rideHeight(points, change.offset_mm / 1000);
-		else moveRegion(points, base.result.mesh.indices, mask, change.axis, change.offset_mm / 1000, change.falloff_mm / 1000);
+		else rideHeight(points, change.offset_mm / 1000);
 		return change;
 	}
 
@@ -350,11 +217,11 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		if (!base) throw new Error('No case is on screen. Open a file or an example first.');
 		if (base.status !== 'ready') throw new Error(`Case ${base.id} (${base.name}) is ${base.status}; a variant is made from a result.`);
 		if (!Array.isArray(changes) || changes.length === 0) throw new Error('changes must list at least one change, e.g. [{"kind": "stretch", "axis": "x", "percent": 5}].');
-		const checked = changes.map((change, i) => checkChange(change, i, base));
+		const checked = changes.map((change, i) => checkChange(change, i));
 		const root = base.variant?.root ?? base;
 		const { mesh } = base.result;
 		const points = Float32Array.from(mesh.positions);
-		const made = [...(base.variant?.changes ?? []), ...checked.map((change) => apply(change, points, base))];
+		const made = [...(base.variant?.changes ?? []), ...checked.map((change) => apply(change, points))];
 		const label = unique(name?.trim() || `${stemOf(root)}, ${made.map(describe).join(', ')}`);
 		const [result] = await Promise.all([engine.predictQuick(surfaceOf(label, points, mesh.indices)), baselineOf(root)]);
 		const path = `variants/${label}.vtp`;
@@ -413,7 +280,7 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 
 	defineOperation({
 		name: 'make_variant',
-		description: 'Make a variant of a car and predict it: its surface changed (stretched along an axis, the ride height raised or lowered, or a region moved with the surface around it following) and predicted on the simplified working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
+		description: 'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the simplified working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -452,9 +319,6 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 
 	let kind = 'stretch';
 	let stretchAxis = 'x';
-	let moveAxis = 'z';
-	/** The saved region a move takes, or null for the selection. */
-	let regionId = null;
 	let making = false;
 
 	const segmented = (label, options, chosen, choose) => {
@@ -464,22 +328,14 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 	};
 	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]), () => kind, (k) => (kind = k));
 	const stretchAxes = segmented('Along', AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]), () => stretchAxis, (a) => (stretchAxis = a));
-	const moveAxes = segmented('Along', AXES.map((a) => [a, a, DIRECTIONS[a]]), () => moveAxis, (a) => (moveAxis = a));
 	const number = (value, label) => h('input', { class: 'number', type: 'text', inputmode: 'decimal', value, 'aria-label': label, spellcheck: 'false' });
 	const unit = (text) => h('span', { class: 'unit' }, text);
 	const percent = number('5', 'Change in size, %');
 	const height = number('-20', 'Ride height change, mm');
-	const distance = number('20', 'Distance, mm');
-	const falloff = number(String(FALLOFF_MM), 'Falloff along the surface, mm');
-
-	const regionList = h('div', { class: 'menu-list', role: 'menu' });
-	const regionButton = h('button', { type: 'button', class: 'tool' });
-	const regionMenu = menu(regionButton, regionList);
 
 	const parts = {
 		stretch: h('span', { class: 'variants-part' }, stretchAxes.el, percent, unit('%')),
 		ride_height: h('span', { class: 'variants-part' }, height, unit('mm')),
-		move: h('span', { class: 'variants-part' }, regionMenu.el, moveAxes.el, distance, unit('mm'), h('span', { class: 'variants-label' }, 'falloff'), falloff, unit('mm')),
 	};
 	const make = h('button', { type: 'submit', class: 'button' }, 'Make variant');
 	const form = h('form', { class: 'variants-form', onsubmit: (e) => submit(e) }, kinds.el, ...Object.values(parts), make);
@@ -496,9 +352,7 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		e.preventDefault();
 		problem.hidden = true;
 		const value = (input) => Number(input.value.trim().replace('\u2212', '-'));
-		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: value(percent) }
-			: kind === 'ride_height' ? { kind, offset_mm: value(height) }
-				: { kind, axis: moveAxis, offset_mm: value(distance), falloff_mm: value(falloff), ...(regionId !== null ? { region_id: regionId } : {}) };
+		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: value(percent) } : { kind, offset_mm: value(height) };
 		making = true;
 		render();
 		try {
@@ -514,18 +368,8 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 
 	function render() {
 		const c = session.active;
-		for (const control of [kinds, stretchAxes, moveAxes]) control.update();
+		for (const control of [kinds, stretchAxes]) control.update();
 		for (const [k, part] of Object.entries(parts)) part.hidden = k !== kind;
-		if (regionId !== null && !session.regions.some((r) => r.id === regionId)) regionId = null;
-		regionButton.replaceChildren(regionId === null ? 'Selection' : session.regions.find((r) => r.id === regionId).name, icon('chevron'));
-		const pick = (id) => () => {
-			regionId = id;
-			regionMenu.close();
-			render();
-		};
-		regionList.replaceChildren(
-			h('button', { type: 'button', role: 'menuitem', class: 'menu-item', 'aria-checked': String(regionId === null), onclick: pick(null) }, 'Selection'),
-			...session.regions.map((r) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', 'aria-checked': String(regionId === r.id), onclick: pick(r.id) }, r.name)));
 		make.disabled = making || !c?.result;
 		make.textContent = making ? 'Predicting…' : 'Make variant';
 		const { root, variants } = c?.result ? studyOf(c) : { root: null, variants: [] };

@@ -4,7 +4,7 @@
 
 /**
  * @typedef {Object} Operation
- * @property {string} name         snake_case, verb first, as the assistant will call it: `cut_section`, `measure_region`.
+ * @property {string} name         snake_case, verb first, as the assistant will call it: `set_section`, `read_comparison`.
  * @property {string} description  For the assistant: what it does, when to use it, what it returns. One to three sentences.
  * @property {object} parameters   JSON Schema (type "object") of the arguments, each property with a description and unit.
  * @property {boolean | ((args: object, context: OperationContext) => boolean)} [confirm]

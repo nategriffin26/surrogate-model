@@ -1,18 +1,19 @@
 // The model's page: one diagram of how the model works, read top to bottom. At the top the whole model in one line;
-// below it a section for each step, drawn on the open car with a point the reader moves. Everything comes from the
-// model card (`engine.model`), the training cars' file, the open car's result and `engine.explain` at the point, so a
-// retrained model changes the page without a change here.
+// below it a section for each step, drawn on one reference car with a point the reader moves. Everything comes from
+// the model card (`engine.model`), the training cars' file, the reference car's result and `engine.explain` at the
+// point, so a retrained model changes the page without a change here.
 //
-// The page has its own viewer for the car it draws on, and takes its pictures of the car's fields from it.
+// The page is a reference, not a view of the workbench: it loads its car, a bundled example, itself, whatever is open
+// there, and keeps it for the session. It has its own viewer for that car and takes its pictures of the car from it.
 
 import { h } from '../dom.js';
 import { EXAMPLES } from '../examples.js';
 import { defaultMaps } from '../fields.js';
+import { loadResult } from '../../engine/result.js';
 import { Surface } from '../../viewer/surface.js';
 import { createAccuracy } from './accuracy.js';
 import { countWord } from './charts.js';
 import { copied, loadCopy, shareValues } from './copy.js';
-import { createDrag } from './drag.js';
 import { arrowDefinition } from './drawings.js';
 import { inputGroups } from './groups.js';
 import { CAMERA, createInputs, requestAt } from './inputs.js';
@@ -25,8 +26,11 @@ import { createSpread } from './spread.js';
 import { caseStats } from './stats.js';
 import { loadTrainingCars } from './training.js';
 
+/** The car the page draws on: DrivAerML run 1, kept out of training, with its CFD. */
+const REFERENCE = EXAMPLES.find((example) => example.id === 'run_1');
+
 /**
- * Where the page starts on a car: the working-mesh vertex facing up nearest a point on the hood, three tenths of the
+ * Where the page starts on the car: the working-mesh vertex facing up nearest a point on the hood, three tenths of the
  * way out on the side the side pictures show.
  */
 function hoodRequest({ mesh: { positions, normals }, geometry: { bounds }, lookups: { yCenter } }) {
@@ -46,178 +50,120 @@ function hoodRequest({ mesh: { positions, normals }, geometry: { bounds }, looku
 }
 
 /**
- * The colour maps the pictures use: Cp on the tool's shared scale, the difference from CFD on this car's, and the
- * spread and the error's size on one scale that holds both.
+ * The colour maps the pictures use, from the car alone: Cp on the tool's default scale, the difference from CFD on the
+ * car's own, and the spread and the error's size on one scale that holds both.
  */
-function picturesMaps(mesh, shared) {
+function picturesMaps(mesh) {
 	const defaults = defaultMaps(mesh);
-	const cp = shared?.cp ?? defaults.cp;
-	const spread = { ...defaults.sigma, hi: Math.max(defaults.sigma.hi, defaults.error?.hi ?? 0) };
-	return { cp, error: defaults.error ?? null, spread };
+	const spread = { ...defaults.sigma, hi: Math.max(defaults.sigma.hi, defaults.error.hi) };
+	return { cp: defaults.cp, error: defaults.error, spread };
 }
 
-/** What the page shows for the open case, by its status. */
-function caseState(c) {
-	if (!c) return 'none';
-	switch (c.status) {
-		case 'queued':
-		case 'loading':
-		case 'analysing':
-			return 'waiting';
-		case 'ready':
-			return 'ready';
-		case 'failed':
-			return 'failed';
-		default:
-			throw new Error(`Unknown status ${c.status}`);
-	}
+/** Resolves once `host` is shown: the page's viewer draws nothing while it is hidden. */
+function whenShown(host) {
+	return new Promise((resolve) => {
+		if (!host.hidden) return resolve();
+		const watch = new MutationObserver(() => {
+			if (host.hidden) return;
+			watch.disconnect();
+			resolve();
+		});
+		watch.observe(host, { attributes: true, attributeFilter: ['hidden'] });
+	});
 }
 
-export function mountModelView(host, { engine, session }) {
-	const notice = h('div', { class: 'case-notice', role: 'status' });
+export function mountModelView(host, { engine }) {
+	const notice = h('div', { class: 'page-notice', role: 'status' });
 	const title = h('h1');
-	const page = h('div', { class: 'model-page', 'data-case': 'none' },
+	const page = h('div', { class: 'model-page', 'data-state': 'loading' },
 		arrowDefinition(),
 		h('header', { class: 'model-top' }, title),
 		notice);
 	host.append(page);
 
-	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(
-		([card, training]) => build(card, training),
-		(error) => page.append(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
-	);
-
-	function build(card, training) {
-		// Counts any words may name: {inputs}, {networks}, {networksWord}.
-		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length) });
+	// Asked for at once and held as an outcome, so it may fail before the words that report it are read.
+	const reference = loadResult(new URL(`../../examples/${REFERENCE.id}`, import.meta.url).href).then((result) => ({ result }), (error) => ({ error }));
+	const fail = (message) => {
+		page.dataset.state = 'failed';
+		notice.replaceChildren(message);
+	};
+	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(([card, training]) => {
+		// Values any words may name: {inputs}, {networks}, {networksWord}, and {car}, the reference car.
+		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length), car: REFERENCE.label });
 		copied(title, 'page.title');
+		notice.replaceChildren(copied(h('p'), 'page.notice.waiting'));
+		reference.then(({ result, error }) => (error
+			? fail(copied(h('p', { class: 'point-failure', role: 'alert' }), 'page.notice.failed', { error: error.message }))
+			: build(card, training, result)));
+	}, (error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)));
+
+	function build(card, training, result) {
 		const groups = inputGroups(card);
-		/** Per case: the point shown on it, and the numbers of the latest point asked about and of the latest shown. */
-		const points = new WeakMap();
-		const tickets = new WeakMap();
-		const view = { case: null, caseView: null, surface: null, opening: null };
+		/** The numbers of the latest point asked about and of the latest shown. */
+		const tickets = { asked: 0, shown: 0 };
 
-		function ask(request) {
-			const c = view.case;
-			if (c) explain(c, request);
-		}
-
-		/** Ask about a point on a case. Answers are shown in the order asked; one overtaken by a later answer is dropped. */
-		async function explain(c, request) {
-			const ticket = (tickets.get(c)?.asked ?? 0) + 1;
-			tickets.set(c, { asked: ticket, shown: tickets.get(c)?.shown ?? 0 });
+		/** Ask about a point on the car. Answers are shown in the order asked; one overtaken by a later answer is dropped. */
+		async function explain(request) {
+			const ticket = ++tickets.asked;
 			const point = { explanation: null, marks: [], failure: null };
 			try {
-				point.explanation = await engine.explain(c.result, request.point, request.normal);
-				point.marks = measure(card.columns, c.result.lookups, point.explanation);
+				point.explanation = await engine.explain(result, request.point, request.normal);
+				point.marks = measure(card.columns, result.lookups, point.explanation);
 			} catch (error) {
 				point.failure = error.message;
 			}
-			const order = tickets.get(c);
-			if (ticket < order.shown) return;
-			order.shown = ticket;
-			points.set(c, point);
-			if (c === view.case && view.caseView) for (const part of parts) part.setPoint(point);
+			if (ticket < tickets.shown) return;
+			tickets.shown = ticket;
+			for (const part of parts) part.setPoint(point);
 		}
 
-		const inputs = createInputs({ card, groups, engine, ask });
+		const inputs = createInputs({ card, groups, engine, ask: explain });
 		const parts = [
 			createOverview({ card, groups, training }),
-			createPointwise({ card, groups, training }),
+			createPointwise({ card, training }),
 			inputs,
 			createNetworks({ card, groups }),
 			createAccuracy({ card }),
 			createSpread({ card }),
-			createDrag({ card, groups, training }),
 		];
 		page.append(h('div', { class: 'model-body' }, parts.map((part) => part.el)));
-		const viewer = inputs.viewer;
-
-		/** Draw the page on a ready case: its car in the page's viewer, its pictures, its numbers, then its point. */
-		async function open(c) {
-			const result = c.result;
-			// The page's own copy of the mesh's fields, so its pictures can put the error where the spread was.
-			const mesh = { ...result.mesh };
-			const surface = new Surface(mesh);
-			view.surface?.dispose();
-			view.surface = surface;
-			viewer.show(surface);
-			viewer.resize();
-			viewer.moveTo(viewer.framing(CAMERA), false);
-			inputs.stencil.setCar(result);
-			const maps = picturesMaps(result.mesh, session.view.maps);
-			const stats = result.mesh.cfd ? caseStats(engine.workingCells(result), result.geometry.bounds, result.lookups.yCenter) : null;
-			if (!(await whenDrawn(viewer, surface))) return;
-			const side = (field, map) => ({ field, map, view: 'side' });
-			const below = (field, map) => ({ field, map, view: 'below' });
-			const wanted = {
-				claySide: side('none', null), fieldSide: side('cp', maps.cp),
-				sigmaSide: side('sigma', maps.spread), sigmaBelow: below('sigma', maps.spread),
-				...(stats ? {
-					cfdSide: side('cfd', maps.cp), cpSide: side('cp', maps.cp), errorSide: side('error', maps.error),
-					cfdBelow: below('cfd', maps.cp), cpBelow: below('cp', maps.cp), errorBelow: below('error', maps.error),
-				} : {}),
-			};
-			const taken = takePictures(viewer, Object.values(wanted));
-			const pictures = Object.fromEntries(Object.keys(wanted).map((id, i) => [id, taken[i]]));
-			if (stats) {
-				// The error's size, drawn through the spread's colour map so the two pictures compare directly.
-				surface.working.setFields({ sigma: Float32Array.from(mesh.cp, (cp, v) => Math.abs(cp - mesh.cfd[v])) });
-				if (!(await whenDrawn(viewer, surface))) return;
-				[pictures.missSide, pictures.missBelow] = takePictures(viewer, [side('sigma', maps.spread), below('sigma', maps.spread)]);
-			}
-			if (view.case !== c) return;
-			view.caseView = { result, pictures, stats, maps, surface, cutter: inputs.stencil.car.cutter };
-			for (const part of parts) part.setCase(view.caseView);
-			if (points.has(c)) for (const part of parts) part.setPoint(points.get(c));
-			if (!tickets.has(c)) explain(c, hoodRequest(result));
-		}
-
-		/** Bring the page up to date with the open case while it is shown. */
-		function sync() {
-			const c = session.active;
-			const state = caseState(c);
-			page.dataset.case = state;
-			showNotice(c, state);
-			if (host.hidden || state !== 'ready' || c === view.case) return;
-			view.case = c;
-			view.caseView = null;
-			open(c).catch((error) => {
-				page.dataset.case = 'failed';
-				notice.replaceChildren(h('p', { class: 'point-failure', role: 'alert' }, error.message));
-			});
-		}
-
-		session.addEventListener('change', ({ detail: { what, case: c } }) => {
-			// The exact numbers of an analysed file replace the sampled ones: same car, new forces.
-			if (what === 'numbers' && c === view.case && view.caseView) {
-				view.caseView = { ...view.caseView, result: c.result };
-				for (const part of parts) part.setCase(view.caseView);
-				return;
-			}
-			if (what === 'active' || what === 'status' || what === 'cases') sync();
-		});
-		new MutationObserver(sync).observe(host, { attributes: true, attributeFilter: ['hidden'] });
-		sync();
+		// The car is in hand: the figures show, so the page's viewer has its size when it draws the car's pictures.
+		page.dataset.state = 'ready';
+		notice.replaceChildren();
+		whenShown(host).then(() => draw(parts, inputs, result)).then(
+			() => explain(hoodRequest(result)),
+			(error) => fail(h('p', { class: 'point-failure', role: 'alert' }, error.message)),
+		);
 	}
 
-	function showNotice(c, state) {
-		switch (state) {
-			case 'none':
-				notice.replaceChildren(copied(h('p'), 'page.notice.none'),
-					h('div', { class: 'notice-actions' }, EXAMPLES.map((example) => copied(h('button', { type: 'button', class: 'button', onclick: () => session.openExample(example.id, example.label) }), 'page.notice.open', { example: example.label }))));
-				return;
-			case 'waiting':
-				notice.replaceChildren(copied(h('p'), 'page.notice.waiting', { car: c.name }));
-				return;
-			case 'failed':
-				notice.replaceChildren(h('p', { class: 'point-failure', role: 'alert' }, c.error));
-				return;
-			case 'ready':
-				notice.replaceChildren();
-				return;
-			default:
-				throw new Error(`Unknown case state ${state}`);
-		}
+	/** Draw the car in the page's viewer, take its pictures, and give the parts the car, its pictures and its numbers. */
+	async function draw(parts, inputs, result) {
+		const viewer = inputs.viewer;
+		// The page's own copy of the mesh's fields, so its pictures can put the error where the spread was.
+		const mesh = { ...result.mesh };
+		const surface = new Surface(mesh);
+		viewer.show(surface);
+		viewer.resize();
+		viewer.moveTo(viewer.framing(CAMERA), false);
+		inputs.stencil.setCar(result);
+		const maps = picturesMaps(result.mesh);
+		const stats = caseStats(engine.workingCells(result), result.geometry.bounds, result.lookups.yCenter);
+		await whenDrawn(viewer, surface);
+		const side = (field, map) => ({ field, map, view: 'side' });
+		const below = (field, map) => ({ field, map, view: 'below' });
+		const wanted = {
+			claySide: side('none', null), fieldSide: side('cp', maps.cp),
+			sigmaSide: side('sigma', maps.spread), sigmaBelow: below('sigma', maps.spread),
+			cfdSide: side('cfd', maps.cp), cpSide: side('cp', maps.cp), errorSide: side('error', maps.error),
+			cfdBelow: below('cfd', maps.cp), cpBelow: below('cp', maps.cp), errorBelow: below('error', maps.error),
+		};
+		const taken = takePictures(viewer, Object.values(wanted));
+		const pictures = Object.fromEntries(Object.keys(wanted).map((id, i) => [id, taken[i]]));
+		// The error's size, drawn through the spread's colour map so the two pictures compare directly.
+		surface.working.setFields({ sigma: Float32Array.from(mesh.cp, (cp, v) => Math.abs(cp - mesh.cfd[v])) });
+		await whenDrawn(viewer, surface);
+		[pictures.missSide, pictures.missBelow] = takePictures(viewer, [side('sigma', maps.spread), below('sigma', maps.spread)]);
+		const car = { result, pictures, stats, maps, surface, cutter: inputs.stencil.car.cutter };
+		for (const part of parts) part.setCar(car);
 	}
 }
