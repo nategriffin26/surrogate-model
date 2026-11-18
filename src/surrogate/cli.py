@@ -71,7 +71,7 @@ DEFAULT_SEED = 42
 # twenty that fit the spread; the two examples written in Chrome.
 MEASURED_ON = "an Apple M5 Pro"
 PREPROCESS_SECONDS_PER_CAR = 21
-TRAIN_SECONDS = {("mps", True): 465, ("mps", False): 150, ("cpu", False): 1066}
+TRAIN_SECONDS = {("mps", True): 465, ("mps", False): 150, ("cpu", True): 2052, ("cpu", False): 1066}
 EXAMPLES_SECONDS = 40
 
 

@@ -79,7 +79,7 @@ uv run surrogate reproduce   # each step below whose output is not current, then
 | Step | Writes | Time on an Apple M5 Pro |
 | :--- | :--- | :--- |
 | `uv run surrogate preprocess` | `data/processed/`: 120,000 cells of each car, drawn by area, and their inputs | 4 min |
-| `uv run surrogate train` | `artifacts/`: the five networks and their spread factor (`ensemble.pt`, 3.2 MB), the ablations, and `metrics.json`, which holds the numbers in the results table | 8 min on the GPU |
+| `uv run surrogate train` | `artifacts/`: the five networks and their spread factor (`ensemble.pt`, 3.2 MB), the ablations, and `metrics.json`, which holds the numbers in the results table | 8 min on the GPU, 34 min on the CPU |
 | `uv run surrogate export` | `web/model/`: the networks for the browser, and the training cars the Model page draws | seconds |
 | `uv run surrogate examples` | `web/examples/`: runs 1 and 500, analysed by the browser engine in headless Chrome | 40 s |
 
