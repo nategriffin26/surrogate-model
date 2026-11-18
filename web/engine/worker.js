@@ -21,13 +21,14 @@
  */
 
 import { addCellArrays, readSurface } from './vtp.js';
-import { measureCells, frontalArea } from './geometry.js';
+import { boundsOf, measureCells, frontalArea } from './geometry.js';
 import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { ensembleStatistics, loadEnsemble, networkActivations } from './network.js';
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint } from './meshes.js';
 import { cfdDrag, evenPicks, shapeCoverage, SurfaceTally } from './analysis.js';
+import { describePolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
 
 /** Helpers: every core but the one the page needs. */
 const HELPERS = Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
@@ -79,8 +80,9 @@ let turn = Promise.resolve();
 /** The analysis running, if any. */
 let running = null;
 /**
- * The car analysed last: its file, polygons and lookups for `explain`, and once every polygon is
- * predicted, that prediction for `exportVtp`. Let go when its analysis is aborted or the next starts.
+ * The car analysed last: its file, polygons, lookups and predictions so far, with an index of its
+ * polygons for `explain` and `polygonAt`. `complete` once every polygon is predicted, for
+ * `exportVtp`. Let go when its analysis is aborted or the next starts.
  */
 let lastCar = null;
 /** The lookups `explain` was last given for a result whose polygons are not held, made ready to use. */
@@ -104,6 +106,9 @@ self.onmessage = ({ data }) => {
     }
     case 'explain':
       explain(data);
+      break;
+    case 'polygonAt':
+      answerPolygonAt(data);
       break;
     case 'export':
       exportVtp(data);
@@ -257,8 +262,9 @@ async function analyze(current, file) {
       mesh,
       lookups: lookupsOf(car.context, ensemble.features),
     };
-    lastCar = { id: current.id, file, context: car.context, cells, average: car.average, working, prediction: null };
+    lastCar = { id: current.id, file, surface, cells, context: car.context, predicted, index: null, complete: false };
     post({ type: 'result', result });
+    lastCar.index = indexPolygons(surface, cells);
 
     const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
     // The background prediction is the rest of this analysis: the next one waits for it.
@@ -269,7 +275,7 @@ async function analyze(current, file) {
     }).catch((error) => {
       if (!(error instanceof Aborted)) console.error(error);
     });
-    if (complete && lastCar?.id === current.id) lastCar.prediction = { cp: predicted.cp, sigma: predicted.sigma };
+    if (complete && lastCar?.id === current.id) lastCar.complete = true;
   } catch (error) {
     if (error instanceof Aborted || current.aborted) return;
     post({ type: 'failed', message: describeFailure(error, file) });
@@ -336,9 +342,9 @@ async function predictBatch(current, runners, cells, order, counted) {
   return { cells: order, models, fields: ensembleStatistics(models, count, runners.spreadScale), seconds: (performance.now() - started) / 1000 };
 }
 
-/** The contract's mesh fields only (the working mesh also carries `sourcePoint`). */
+/** The contract's mesh fields only (the working mesh also carries `sourcePoint`), with its bounds. */
 function displayMesh({ sourceTriangles, positions, normals, indices, cfd }) {
-  return { sourceTriangles, positions, normals, indices, ...(cfd && { cfd }) };
+  return { sourceTriangles, positions, normals, indices, bounds: boundsOf(positions), ...(cfd && { cfd }) };
 }
 
 /**
@@ -432,28 +438,43 @@ async function predictPoints(current, { gpu, pool, networks }, { centers, normal
  */
 async function completeSurface(current, runners, post, job) {
   const { surface, car, shape, envelope, working, batches, predicted, showFull, affordable } = job;
-  const { cells, average } = car;
+  const { cells } = car;
+  const { points, connectivity, offsets } = surface;
   const cellCount = cells.areas.length;
+  const pointCount = points.length / 3;
   let predictedCount = batches.reduce((sum, batch) => sum + batch.cells.length, 0);
 
-  let nearest = null;
+  // The full mesh's fields, kept current as polygons are predicted: each file point holds the
+  // area-weighted mean of its polygons predicted so far, or until the first one its nearest
+  // working-mesh vertex's value. A `fullFields` posts a copy, so the worker stays free for picks.
+  let field = null;
+  const accumulate = (c, cp, sigma) => {
+    const area = cells.areas[c];
+    for (let i = offsets[c]; i < offsets[c + 1]; i++) {
+      const p = connectivity[i];
+      const share = area / (field.area[p] + area);
+      field.cp[p] += (cp - field.cp[p]) * share;
+      field.sigma[p] += (sigma - field.sigma[p]) * share;
+      field.area[p] += area;
+    }
+  };
   let lastSent = 0;
   const send = () => {
-    const done = predictedCount < cellCount ? predicted.done : undefined;
-    const cp = average.all(predicted.cp, done);
-    const sigma = average.all(predicted.sigma, done);
-    for (let p = 0; p < cp.length; p++) {
-      if (Number.isNaN(cp[p])) {
-        cp[p] = working.cp[nearest[p]];
-        sigma[p] = working.sigma[nearest[p]];
-      }
-    }
+    const cp = field.cp.slice();
+    const sigma = field.sigma.slice();
     post({ type: 'fullFields', fields: { cp, sigma }, fraction: predictedCount / cellCount }, [cp.buffer, sigma.buffer]);
     lastSent = performance.now();
   };
+  let nearest = null;
   if (showFull) {
-    nearest = await nearestWorkingVertices(runners.pool, surface.points, working.positions);
+    nearest = await nearestWorkingVertices(runners.pool, points, working.positions);
     checkpoint(current);
+    field = { cp: new Float32Array(pointCount), sigma: new Float32Array(pointCount), area: new Float32Array(pointCount) };
+    for (let p = 0; p < pointCount; p++) {
+      field.cp[p] = working.cp[nearest[p]];
+      field.sigma[p] = working.sigma[nearest[p]];
+    }
+    for (const batch of batches) batch.cells.forEach((c, j) => accumulate(c, batch.fields.cp[j], batch.fields.sigma[j]));
     send();
   }
   if (!affordable) return false;
@@ -465,7 +486,7 @@ async function completeSurface(current, runners, post, job) {
         batch.fields.cp[j], batch.fields.sigma[j], surface.cfd?.[c]);
     });
   }
-  const { connectivity, offsets } = surface;
+  await requestsTurn();
   let order;
   if (nearest) {
     const variation = edgeVariation(working);
@@ -473,7 +494,9 @@ async function completeSurface(current, runners, post, job) {
   } else {
     order = Uint32Array.from({ length: cellCount }, (_, c) => c);
   }
-  const remaining = order.filter((c) => !predicted.done[c]);
+  await requestsTurn();
+  const remaining = new Uint32Array(cellCount - predictedCount);
+  for (let i = 0, k = 0; i < cellCount; i++) if (!predicted.done[order[i]]) remaining[k++] = order[i];
 
   await predictPoints(current, runners, cells, remaining, (start, size, chunk) => {
     const fields = ensembleStatistics(chunk, size, runners.spreadScale);
@@ -484,6 +507,7 @@ async function completeSurface(current, runners, post, job) {
       predicted.done[c] = 1;
       exact.add(cells.areas[c], cells.centers[3 * c], cells.normals[3 * c], chunk, i, size,
         fields.cp[i], fields.sigma[i], surface.cfd?.[c]);
+      if (field) accumulate(c, fields.cp[i], fields.sigma[i]);
     }
     predictedCount += size;
     if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
@@ -507,6 +531,11 @@ async function nearestWorkingVertices(pool, points, workingPositions) {
       .then((result) => nearest.set(result, start));
   }));
   return nearest;
+}
+
+/** Lets requests already waiting (picks, explanations) run before the next long step. */
+function requestsTurn() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** For each working-mesh vertex, the largest change of Cp along any of its edges. */
@@ -574,12 +603,12 @@ function lookupsOf({ layout, ...lookups }, definition) {
 /**
  * Everything the networks are told at a point on a result's surface, and their answers. `vertex` is
  * the working-mesh vertex the page found nearest the point. While this worker holds the polygons of
- * the result's file (the one analysed last), the networks are asked at the polygon around that
- * vertex whose centre is nearest the point, with its normal, as in training and in the analysis.
- * Otherwise they are asked at the vertex itself, with its polygon-averaged normal, from the lookups
- * the page sends with the first request about each result.
+ * the result's file (the one analysed last), the networks are asked at the polygon `polygonAt`
+ * finds, with its normal, as in training and in the analysis. Otherwise they are asked at the vertex
+ * itself, with its polygon-averaged normal, from the lookups the page sends with the first request
+ * about each result.
  */
-async function explain({ id, point, analysis, model, lookups, vertex }) {
+async function explain({ id, point, normal, analysis, model, lookups, vertex }) {
   try {
     const { ensemble, layout } = await engine;
     if (model !== ensemble.weightsSha256) {
@@ -593,9 +622,9 @@ async function explain({ id, point, analysis, model, lookups, vertex }) {
     }
     let site;
     let context;
-    if (lastCar && lastCar.id === analysis) {
+    const cell = lastCar?.id === analysis ? polygonAt(lastCar, point, normal) : -1;
+    if (cell >= 0) {
       const { cells } = lastCar;
-      const cell = nearestPolygon(lastCar, vertex.index, point);
       site = { at: 'polygon', index: cell, position: cells.centers.slice(3 * cell, 3 * cell + 3), normal: cells.normals.slice(3 * cell, 3 * cell + 3) };
       context = lastCar.context;
     } else {
@@ -616,24 +645,21 @@ async function explain({ id, point, analysis, model, lookups, vertex }) {
       sigma: sigma[0],
       activations,
     };
-    self.postMessage({ type: 'explanation', id, explanation });
+    self.postMessage({ type: 'answer', id, answer: explanation });
   } catch (error) {
-    self.postMessage({ type: 'explanationFailed', id, message: error.message });
+    self.postMessage({ type: 'answerFailed', id, message: error.message });
   }
 }
 
-/** Of the file polygons around the file point working-mesh vertex `vertex` sits on, the one whose centre is nearest `point`. */
-function nearestPolygon({ cells, average, working }, vertex, point) {
-  let cell = -1;
-  let best = Infinity;
-  for (const c of average.around(working.sourcePoint.subarray(vertex, vertex + 1)).cells) {
-    const distance = (cells.centers[3 * c] - point[0]) ** 2 + (cells.centers[3 * c + 1] - point[1]) ** 2 + (cells.centers[3 * c + 2] - point[2]) ** 2;
-    if (distance < best) {
-      best = distance;
-      cell = c;
-    }
+/** The `FilePolygon` under a point picked on the car analysed last; null once that car is let go. */
+async function answerPolygonAt({ id, analysis, point, normal }) {
+  try {
+    const { ensemble } = await engine;
+    const cell = lastCar?.id === analysis ? polygonAt(lastCar, point, normal) : -1;
+    self.postMessage({ type: 'answer', id, answer: cell < 0 ? null : describePolygon(lastCar, ensemble, cell) });
+  } catch (error) {
+    self.postMessage({ type: 'answerFailed', id, message: error.message });
   }
-  return cell;
 }
 
 /**
@@ -643,11 +669,11 @@ function nearestPolygon({ cells, average, working }, vertex, point) {
 async function exportVtp({ id, analysis }) {
   const car = lastCar;
   try {
-    if (car?.id !== analysis || !car.prediction) {
+    if (car?.id !== analysis || !car.complete) {
       throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse its file again.');
     }
     let reported = 0;
-    const arrays = { CpPredicted: car.prediction.cp, CpSpread: car.prediction.sigma };
+    const arrays = { CpPredicted: car.predicted.cp, CpSpread: car.predicted.sigma };
     const vtp = await addCellArrays(car.file, arrays, (fraction) => {
       if (fraction >= reported + 0.01) {
         reported = fraction;

@@ -56,6 +56,7 @@
  * @property {Float32Array} positions  (V, 3)
  * @property {Float32Array} normals    (V, 3) unit, pointing out of the car
  * @property {Uint32Array} indices     (T, 3) wound counter-clockwise seen from outside
+ * @property {number[]} bounds         [xmin, xmax, ymin, ymax, zmin, zmax] of `positions`
  * @property {Float32Array} [cp]       (V) mean Cp of the networks; absent until predicted
  * @property {Float32Array} [sigma]    (V) spread σ(Cp): the networks' standard deviation × `ModelCard.spreadScale`
  * @property {Float32Array} [cfd]      (V) CFD Cp, only when the file carried it
@@ -77,11 +78,17 @@
  * @property {(result: Result, point: number[], normal: number[]) => Promise<Explanation>} explain
  *   For a result this engine analysed or one `loadResult` read: everything the model was told at a
  *   surface point and what each network answered. For the file analysed last, while the engine holds
- *   its polygons, the networks are asked at the file polygon nearest `point` that does not face away
- *   from `normal`, as in the analysis. Otherwise (a bundled example, an earlier file) they are asked at
- *   the working-mesh vertex nearest `point` that does not face away from `normal`, with the vertex's
- *   normal, the area-weighted mean of the polygon normals around it. `Explanation.at` says which.
+ *   its polygons, the networks are asked at the polygon `polygonAt` finds, as in the analysis.
+ *   Otherwise (a bundled example, an earlier file) they are asked at the working-mesh vertex nearest
+ *   `point` that does not face away from `normal`, with the vertex's normal, the area-weighted mean
+ *   of the polygon normals around it. `Explanation.at` says which.
  *   Rejects for a result computed with other network weights than the engine runs.
+ * @property {(result: Result, point: number[], normal: number[]) => Promise<FilePolygon | null>} polygonAt
+ *   The file polygon under `point`, a point picked on the drawn surface whose normal there is
+ *   `normal`: of the polygons not facing away from `normal`, the one whose surface is nearest `point`.
+ *   For the file analysed last, from its result until the next analysis starts or its `signal` is
+ *   aborted; null at once for any other result (a bundled example, an earlier file). A few
+ *   milliseconds, also while the rest of the surface is being predicted.
  * @property {(result: Result) => boolean} canExportVtp  Whether `exportVtp` can run for `result`: true
  *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
  *   engine holds the last file's prediction only); never for a bundled example, nor on a device too
@@ -132,6 +139,16 @@
  *   [input, hidden 1, hidden 2, hidden 3]. `input` is `features` standardized and clipped by that
  *   network's own scaling (what its first layer reads); each hidden layer is its output after GELU.
  *
+ * @typedef {Object} FilePolygon  One polygon of the analysed file.
+ * @property {number} index          its index among the file's polygons
+ * @property {Float32Array} corners  (K, 3) its corners, in the file's order
+ * @property {number[]} center       its centre, where the networks are asked
+ * @property {number[]} normal       its outward unit normal
+ * @property {number} cp             the networks' mean Cp there, the value `exportVtp` writes for it.
+ *   Before the background prediction reaches the polygon, the networks are asked there on demand
+ *   on the CPU, which agrees with the GPU's value to about 1e-6.
+ * @property {number} sigma          spread σ(Cp) there, likewise
+ *
  * @typedef {Object} ModelCard  What the model is and how it scored, from training (`export_web.py`).
  * @property {{ name: string, family: string, freestreamSpeed: number, yawDegrees: number, wheels: string,
  *              source: string }} dataset  the training data: its name, car family, freestream speed in
@@ -181,6 +198,7 @@
  */
 
 import { MeshoptDecoder } from '../vendor/meshoptimizer/meshopt_decoder.mjs';
+import { boundsOf } from './geometry.js';
 
 /** Fields are stored to within half this step of Cp, far finer than the colour scale can show. */
 const FIELD_STEP = 1 / 1024;
@@ -349,6 +367,7 @@ export async function unpackResult(summary, buffer) {
         throw new Error(`This example stores its mesh as "${stream.encoding}", which this page cannot read.`);
     }
   }
+  mesh.bounds = boundsOf(mesh.positions);
 
   const { streams: lookupStreams, voxels, ...lookups } = summary.lookups;
   lookups.voxels = voxels.map((grid) => ({ ...grid }));
@@ -364,11 +383,21 @@ export async function unpackResult(summary, buffer) {
   return { ...summary, mesh, lookups };
 }
 
-/** Fetch a bundled example: `<base>.json` and `<base>.bin`. */
-export async function loadResult(base) {
-  const [summary, buffer] = await Promise.all([
-    fetch(`${base}.json`).then((response) => response.json()),
-    fetch(`${base}.bin`).then((response) => response.arrayBuffer()),
-  ]);
-  return unpackResult(summary, buffer);
+/**
+ * Fetch and decode a bundled example, `<base>.json` and `<base>.bin`, in a worker of its own so the
+ * page keeps drawing while the mesh decodes (100 ms and more for a car); the arrays come back
+ * transferred, not copied.
+ * @param {string} base  absolute URL of the example, without its extension
+ * @returns {Promise<Result>}
+ */
+export function loadResult(base) {
+  const worker = new Worker(new URL('./example-worker.js', import.meta.url), { type: 'module' });
+  return new Promise((resolve, reject) => {
+    worker.onmessage = ({ data }) => (data.result ? resolve(data.result) : reject(new Error(data.message)));
+    worker.onerror = (event) => {
+      event.preventDefault();
+      reject(new Error(event.message));
+    };
+    worker.postMessage(base);
+  }).finally(() => worker.terminate());
 }

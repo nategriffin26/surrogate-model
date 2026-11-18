@@ -113,7 +113,8 @@ export function measureCells(surface) {
   return { centers, normals, areas, bounds: boundsOf(centers), surfaceArea, enclosedVolume: Math.abs(signedVolume) / 3, flip };
 }
 
-function boundsOf(xyz) {
+/** [xmin, xmax, ymin, ymax, zmin, zmax] of points stored x, y, z, x, y, z, ... */
+export function boundsOf(xyz) {
   const bounds = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
   for (let i = 0; i < xyz.length; i += 3) {
     for (let k = 0; k < 3; k++) {

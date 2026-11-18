@@ -10,12 +10,14 @@ export function createEngine() {
   let nextId = 1;
   /**
    * Analyses the page has not let go, by id: those waiting their turn in the worker, the one it runs,
-   * and the last one, whose car the worker holds (for `explain` and, once `complete`, `exportVtp`).
+   * and the last one, whose car the worker holds (for `explain` and `polygonAt`, and once `complete`,
+   * `exportVtp`).
    */
   /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, complete: boolean, release: () => void }>} */
   const analyses = new Map();
+  /** `explain` and `polygonAt` requests awaiting the worker's answer, by id. */
   /** @type {Map<number, { resolve: Function, reject: Function }>} */
-  const explanations = new Map();
+  const questions = new Map();
   /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
   const exports = new Map();
   /** Set when the worker cannot run at all: every analysis fails with it. */
@@ -41,11 +43,11 @@ export function createEngine() {
         model.reject(unavailable);
         for (const current of analyses.values()) finish(current, unavailable);
         return;
-      case 'explanation':
-      case 'explanationFailed': {
-        const request = explanations.get(data.id);
-        explanations.delete(data.id);
-        if (data.type === 'explanation') request.resolve(data.explanation);
+      case 'answer':
+      case 'answerFailed': {
+        const request = questions.get(data.id);
+        questions.delete(data.id);
+        if (data.type === 'answer') request.resolve(data.answer);
         else request.reject(new Error(data.message));
         return;
       }
@@ -108,8 +110,8 @@ export function createEngine() {
     device.reject(error);
     model.reject(error);
     for (const current of analyses.values()) finish(current, error);
-    for (const request of [...explanations.values(), ...exports.values()]) request.reject(error);
-    explanations.clear();
+    for (const request of [...questions.values(), ...exports.values()]) request.reject(error);
+    questions.clear();
     exports.clear();
   };
 
@@ -142,16 +144,27 @@ export function createEngine() {
   }
 
   function explain(result, point, normal) {
-    const id = nextId++;
     const vertex = nearestVertex(result.mesh, point, normal);
-    const message = { type: 'explain', id, point, analysis: analysed.get(result.lookups), model: result.model, vertex };
+    const message = { type: 'explain', point, normal, analysis: analysed.get(result.lookups), model: result.model, vertex };
     if (result.lookups !== lookupsSent) {
       message.lookups = result.lookups;
       lookupsSent = result.lookups;
     }
+    return ask(message);
+  }
+
+  function polygonAt(result, point, normal) {
+    const analysis = analysed.get(result.lookups);
+    // The worker holds the polygons of the last analysis from its result until the next one starts.
+    if (!analyses.get(analysis)?.settled) return Promise.resolve(null);
+    return ask({ type: 'polygonAt', analysis, point, normal });
+  }
+
+  function ask(message) {
+    const id = nextId++;
     return new Promise((resolve, reject) => {
-      explanations.set(id, { resolve, reject });
-      worker.postMessage(message);
+      questions.set(id, { resolve, reject });
+      worker.postMessage({ ...message, id });
     });
   }
 
@@ -175,7 +188,7 @@ export function createEngine() {
     });
   }
 
-  return { analyze, explain, canExportVtp, exportVtp, device: device.promise, model: model.promise };
+  return { analyze, explain, polygonAt, canExportVtp, exportVtp, device: device.promise, model: model.promise };
 }
 
 /**

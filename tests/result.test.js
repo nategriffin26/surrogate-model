@@ -1,6 +1,6 @@
-// Round trip of web/engine/result.js's pack format on a synthetic mesh.
-// Run with: deno test --allow-read tests/result.test.js
-import { packResult, unpackResult } from '../web/engine/result.js';
+// Round trip of web/engine/result.js's pack format on a synthetic mesh, and `loadResult` on a bundled
+// example. Run with: deno test --allow-read tests/result.test.js
+import { loadResult, packResult, unpackResult } from '../web/engine/result.js';
 
 /** A wavy 3 m x 1 m sheet on a 1 cm grid, with smooth pressure-like fields on its vertices. */
 function wavySheet(withCfd) {
@@ -30,7 +30,28 @@ function wavySheet(withCfd) {
   }
   const mesh = { sourceTriangles: 1234567, positions, normals, indices: Uint32Array.from(indices), cp, sigma };
   if (withCfd) mesh.cfd = cfd;
-  return { source: { name: 'sheet.vtp', hasCfd: withCfd }, forces: { cdP: 0.27 }, mesh };
+  return { source: { name: 'sheet.vtp', hasCfd: withCfd }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
+}
+
+const RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak', 'sectionArea'];
+const VOXEL_SUMS = ['area', 'normalX', 'normalY', 'normalZ'];
+
+/** `SurfaceLookups` with small rasters and one voxel grid of irregular values. */
+function lookups() {
+  const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
+  const grid = { scale: 0.25, origin: [-1, -1, -0.5], shape: [3, 4, 5] };
+  VOXEL_SUMS.forEach((name, k) => { grid[name] = values(60, 10 + k); });
+  return {
+    definition: { count: 191 },
+    bounds: [-0.7, 2.3, -0.5, 0.5, -0.1, 0.1],
+    yCenter: 0,
+    ...Object.fromEntries(RASTERS.map((name, k) => [name, values(50 + k, k)])),
+    voxels: [grid],
+  };
+}
+
+function sameValues(a, b) {
+  return a.constructor === b.constructor && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
 }
 
 function assert(condition, message) {
@@ -55,6 +76,13 @@ Deno.test('a packed result comes back within the stated precision', async () => 
   const raw = ['positions', 'normals', 'indices', 'cp', 'sigma', 'cfd'].reduce((sum, k) => sum + result.mesh[k].byteLength, 0);
   assert(bytes < raw / 4, `packed to ${bytes} bytes from ${raw}`);
   assert(back.forces.cdP === 0.27 && back.source.name === 'sheet.vtp' && back.mesh.sourceTriangles === 1234567, 'summary changed');
+  const bounds = [0, 1, 2].flatMap((axis) => {
+    const lane = result.mesh.positions.filter((_, i) => i % 3 === axis);
+    return [Math.min(...lane), Math.max(...lane)];
+  });
+  assert(back.mesh.bounds.every((value, i) => Math.abs(value - bounds[i]) < 1e-4), `bounds ${back.mesh.bounds} are not ${bounds}`);
+  for (const name of RASTERS) assert(sameValues(back.lookups[name], result.lookups[name]), `lookup ${name} changed`);
+  for (const name of VOXEL_SUMS) assert(sameValues(back.lookups.voxels[0][name], result.lookups.voxels[0][name]), `voxel ${name} changed`);
   assert(new Set(match).size === match.length && !match.includes(undefined), 'vertices do not map one to one');
 
   for (let v = 0; v < match.length; v++) {
@@ -88,4 +116,17 @@ Deno.test('a packed result comes back within the stated precision', async () => 
 Deno.test('a result without CFD comes back without CFD', async () => {
   const { back } = await roundTrip(wavySheet(false));
   assert(!('cfd' in back.mesh) && back.mesh.cp && back.mesh.sigma, 'fields changed');
+});
+
+Deno.test('loadResult decodes a bundled example in a worker to what unpackResult gives', async () => {
+  const base = new URL('../web/examples/run_1', import.meta.url);
+  const summary = JSON.parse(await Deno.readTextFile(new URL(`${base}.json`)));
+  const direct = await unpackResult(summary, (await Deno.readFile(new URL(`${base}.bin`))).slice().buffer);
+  const loaded = await loadResult(base.href);
+  for (const name of ['positions', 'normals', 'indices', 'cp', 'sigma', 'cfd']) {
+    assert(sameValues(loaded.mesh[name], direct.mesh[name]), `mesh ${name} differs`);
+  }
+  assert(loaded.mesh.bounds.every((value, i) => value === direct.mesh.bounds[i]), 'mesh bounds differ');
+  for (const name of RASTERS) assert(sameValues(loaded.lookups[name], direct.lookups[name]), `lookup ${name} differs`);
+  assert(JSON.stringify(loaded.forces) === JSON.stringify(direct.forces), 'forces differ');
 });

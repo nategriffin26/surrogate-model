@@ -92,7 +92,7 @@ def _write_vtp(surface: pv.PolyData, path: Path, *, mode: str = "binary", encode
 
 
 def _run_engine(mode: str, path: Path, out_dir: Path, model: Path | None = None) -> dict:
-    """Run the engine's modules on `path`; `model` is the model directory (engine) or a feature definition (features)."""
+    """Run the engine's modules on `path`; `model` is the model directory (engine, pick) or a feature definition (features)."""
     out_dir.mkdir(exist_ok=True)
     command = [*RUNTIME, str(RUNNER), mode, str(path), str(out_dir)] + ([str(model)] if model else [])
     subprocess.run(command, check=True, cwd=REPO, timeout=300)
@@ -294,7 +294,54 @@ def test_drag_by_facing_follows_its_definition(car: pv.PolyData, tmp_path: Path)
     _assert_drag_by_facing(outcome["exact"]["forces"], expected)
 
 
+def _assert_polygon(polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMesh, cp: np.ndarray, sigma: np.ndarray) -> None:
+    assert polygon["index"] == c
+    np.testing.assert_array_equal(np.reshape(polygon["corners"], (-1, 3)), mesh.get_cell(c).points.astype(np.float32))
+    np.testing.assert_allclose(polygon["center"], surface.centers[c], atol=1e-6)
+    np.testing.assert_allclose(polygon["normal"], surface.normals[c], atol=1e-5)
+    assert polygon["cp"] == pytest.approx(cp[c], abs=1e-4)
+    assert polygon["sigma"] == pytest.approx(sigma[c], abs=1e-4)
+
+
+@requires_runtime
+def test_polygon_at_gives_the_polygon_under_a_pick(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `polygonAt` or `explain` on the file analysed last choosing another polygon than the
+    one under the point, outlining it with other corners than the file's, or giving other values
+    than the prediction there, before or after the background prediction reaches it."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    probes = _run_engine("analysis", path, tmp_path / "out")["probes"]
+    reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    mesh, surface = pv.read(path), read_vtp_surface(path)
+    for probe in probes:
+        assert probe["explained"] == probe["target"]
+        for polygon in (probe["early"], probe["late"]):
+            _assert_polygon(polygon, probe["target"], mesh, surface, reference.cp_mean, reference.cp_std)
+
+
+@requires_runtime
+def test_polygons_asked_on_demand_match_the_reference(car: pv.PolyData, model_dir: Path, tmp_path: Path) -> None:
+    """Catches the networks asked on demand, at a polygon the background prediction has not reached,
+    giving other values than the prediction there."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    picks = _run_engine("pick", path, tmp_path / "out", model_dir)["picks"]
+    reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    mesh, surface = pv.read(path), read_vtp_surface(path)
+    for pick in picks:
+        _assert_polygon(pick["polygon"], pick["target"], mesh, surface, reference.cp_mean, reference.cp_std)
+
+
 RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"
+
+
+@requires_runtime
+@pytest.mark.skipif(not RUN_1.is_file(), reason="needs DrivAerML run 1 in data/raw")
+def test_a_pick_on_run_1_takes_a_few_milliseconds(tmp_path: Path) -> None:
+    """Catches the polygon lookup on a real 8.8M-polygon file slowing back down (a scan of every
+    polygon took 75 ms a pick; asking the networks a block at a time, 10 ms) or missing the polygon
+    under the point."""
+    picks = _run_engine("pick", RUN_1, tmp_path / "out", REPO / "web/model")["picks"]
+    assert [pick["polygon"]["index"] for pick in picks] == [pick["target"] for pick in picks]
+    assert np.percentile([pick["seconds"] for pick in picks], 95) < 0.010
 
 
 @pytest.mark.skipif(not RUN_1.is_file(), reason="needs DrivAerML run 1 in data/raw")

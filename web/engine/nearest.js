@@ -33,8 +33,11 @@ export function buildPointGrid(positions) {
   return { positions, origin: min, cell, shape, starts, order };
 }
 
-/** Index of the grid's point nearest to (x, y, z), searching shells of buckets outward. */
-export function nearestPoint(grid, x, y, z) {
+/**
+ * Index of the grid's point nearest to (x, y, z), searching shells of buckets outward; only points
+ * `accepts` admits count when it is given. -1 when it admits none.
+ */
+export function nearestPoint(grid, x, y, z, accepts) {
   const { positions, origin, cell, shape, starts, order } = grid;
   const cx = clamp(Math.floor((x - origin[0]) / cell), shape[0]);
   const cy = clamp(Math.floor((y - origin[1]) / cell), shape[1]);
@@ -53,6 +56,7 @@ export function nearestPoint(grid, x, y, z) {
           const bucket = (bx * shape[1] + by) * shape[2] + bz;
           for (let s = starts[bucket]; s < starts[bucket + 1]; s++) {
             const i = order[s];
+            if (accepts && !accepts(i)) continue;
             const dx = positions[3 * i] - x, dy = positions[3 * i + 1] - y, dz = positions[3 * i + 2] - z;
             const distance = dx * dx + dy * dy + dz * dz;
             if (distance < bestDistance) {
@@ -67,6 +71,21 @@ export function nearestPoint(grid, x, y, z) {
     if (best >= 0 && Math.sqrt(bestDistance) <= ring * cell) break;
   }
   return best;
+}
+
+/** Calls `visit(i)` for every grid point within `radius` of (x, y, z), and some a little farther. */
+export function pointsWithin(grid, x, y, z, radius, visit) {
+  const { origin, cell, shape, starts, order } = grid;
+  const [x0, y0, z0] = [x, y, z].map((value, k) => clamp(Math.floor((value - radius - origin[k]) / cell), shape[k]));
+  const [x1, y1, z1] = [x, y, z].map((value, k) => clamp(Math.floor((value + radius - origin[k]) / cell), shape[k]));
+  for (let bx = x0; bx <= x1; bx++) {
+    for (let by = y0; by <= y1; by++) {
+      for (let bz = z0; bz <= z1; bz++) {
+        const bucket = (bx * shape[1] + by) * shape[2] + bz;
+        for (let s = starts[bucket]; s < starts[bucket + 1]; s++) visit(order[s]);
+      }
+    }
+  }
 }
 
 function clamp(index, size) {
