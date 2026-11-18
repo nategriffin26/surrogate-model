@@ -1,6 +1,6 @@
 # Web app
 
-`uv run surrogate app` serves Surrogate Model at `http://127.0.0.1:8740/` (setup is in the [README](../README.md#setup)). The tool is for an engineer who has a geometry and no CFD run for it.
+`uv run surrogate app` serves Surrogate Model at `http://127.0.0.1:8740/` (setup is in the [README](../README.md#run-it)). The tool is for an engineer who has a geometry and no CFD run for it.
 
 ## Result view
 

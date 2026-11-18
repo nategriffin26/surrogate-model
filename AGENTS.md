@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML cars and Surrogate Model, a browser tool for working with its predictions. The repository is a take-home submission: its reviewers read the code, the tests and the documents, and the author has to be able to explain every part. Read `README.md` first; it holds the commands, the repository layout, the model's inputs and the measured results. `docs/` holds the web app, the assistant, how the inputs are built with the further results, and the demo outline.
+A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML cars and Surrogate Model, a browser tool for working with its predictions. The repository is a take-home submission: its reviewers read the code, the tests and the documents, and the author has to be able to explain every part. `README.md` holds setup and the commands to run, retrain and test. `docs/model.md` holds the approach, the input table, the measured results and the limitations; `docs/development.md` holds the reproduce steps, the tests and the per-file repository layout; `docs/web-app.md`, `docs/assistant.md` and `docs/demo-outline.md` describe the tool, its assistant and the customer demo.
 
 ## Rules
 
@@ -24,7 +24,7 @@ A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML car
 
 ## Changing the model
 
-After a change to the inputs or a retraining, in this order: `uv run surrogate preprocess` (inputs changed), `uv run surrogate train`, the same change in `web/engine/features.js`, and in `web/engine/lookups.js` when the change is to the grids the inputs read (inputs changed), `uv run surrogate export`, `uv run surrogate examples`, `uv run pytest`, then the README's input table and results and `docs/model.md` from `artifacts/metrics.json`. `uv run surrogate` shows which of these outputs are not current. The tests fail while a bundled example was computed with other weights. The Model page (`web/app/model/`) names each group of inputs by the kind of its first input (`groups.js`); a new group stops the page with an error naming it until `groups.js` has words for it.
+After a change to the inputs or a retraining, in this order: `uv run surrogate preprocess` (inputs changed), `uv run surrogate train`, the same change in `web/engine/features.js`, and in `web/engine/lookups.js` when the change is to the grids the inputs read (inputs changed), `uv run surrogate export`, `uv run surrogate examples`, `uv run pytest`, then the input table, results and limitations in `docs/model.md` from `artifacts/metrics.json`. `uv run surrogate` shows which of these outputs are not current. The tests fail while a bundled example was computed with other weights. The Model page (`web/app/model/`) names each group of inputs by the kind of its first input (`groups.js`); a new group stops the page with an error naming it until `groups.js` has words for it.
 
 Choose between designs on cross-validation over the ten training cars. Seeds 42, 43 and 44 of the shipped networks span `0.0003` in CV $R^2$ and `0.0051` in CV $C_{d,p}$ MAE (`docs/model.md`); a difference of that size between two single runs is not a finding, so compare on three seeds before concluding anything.
 
@@ -39,7 +39,7 @@ Choose between designs on cross-validation over the ten training cars. Seeds 42,
 
 ## Documentation
 
-- A change is finished when the documents that describe it are true: `README.md` (commands, layout, input table, results), the files in `docs/`, this file, `data/README.md`, and the docstring at the top of each module touched.
+- A change is finished when the documents that describe it are true: `README.md` (setup and commands), `docs/model.md` (input table, results, limitations), `docs/development.md` (reproduce steps, tests, layout), the other files in `docs/`, this file, `data/README.md`, and the docstring at the top of each module touched.
 - Describe what the code does now. Delete a statement that is no longer true; do not mark it as old, and do not record history, plans or the discussion behind a change. The git log is the history.
 - Every number is copied from `artifacts/metrics.json`, `web/examples/*.json` or a script named beside it, in the same change that moves it.
 - Keep them short. A sentence no reader would act on is removed, and a stale statement found while working elsewhere is fixed or deleted in that change.
