@@ -14,7 +14,16 @@ import pyvista as pv
 from surrogate.features import SurfaceContext
 from surrogate.metrics import regional_r2_breakdown, surface_field_metrics
 from surrogate.model import SurrogateEnsemble
+from surrogate.progress import QUIET, Progress, Step
 from surrogate.surface import compute_pressure_forces, read_vtp_surface
+
+# The steps of `run_vtp_inference`, with their seconds for run 1 (8.8M cells) on MEASURED_ON's GPU.
+INFERENCE_STEPS = [
+    Step("Reading the file", 1, "stage", 6),
+    Step("Building lookups", 1, "stage", 34),
+    Step("Predicting", 8_828_095, "cells", 21),
+    Step("Integrating forces", 1, "stage", 1),
+]
 
 
 @dataclass(frozen=True)
@@ -75,22 +84,28 @@ def _compute_drag_buildup(
     return curve
 
 
-def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble) -> InferenceResult:
-    """Predict every cell of the `.vtp` surface file at `vtp_path`, with the numbers `InferenceResult` holds."""
+def run_vtp_inference(vtp_path: str | Path, ensemble: SurrogateEnsemble, progress: Progress = QUIET) -> InferenceResult:
+    """Predict every cell of the `.vtp` surface file at `vtp_path`, with the numbers `InferenceResult` holds,
+    reporting INFERENCE_STEPS on `progress`."""
     t_start = time.perf_counter()
     path = Path(vtp_path)
 
     # Solver arrays are stripped inside the reader; `surf.cp` is kept aside for comparison only.
+    progress.step("Reading the file", detail=path.name)
     surf = read_vtp_surface(path)
     t_read = time.perf_counter() - t_start
 
+    progress.step("Building lookups", detail=f"{surf.n_cells:,} cells")
     t0 = time.perf_counter()
     context = SurfaceContext.from_surface(surf)
     t_context = time.perf_counter() - t0
 
+    progress.step("Predicting", count=surf.n_cells)
     t0 = time.perf_counter()
-    pred = ensemble.predict_query_points(context, surf.centers, surf.normals)
+    pred = ensemble.predict_query_points(context, surf.centers, surf.normals, progress=progress)
     t_predict = time.perf_counter() - t0
+
+    progress.step("Integrating forces")
 
     forces = ensemble.integrated_forces(
         pred, surf.normals, surf.areas, total_area=surf.total_area, frontal_area=surf.frontal_area

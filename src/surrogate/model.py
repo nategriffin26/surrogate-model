@@ -13,6 +13,7 @@ import torch
 from torch import nn
 
 from surrogate.features import SurfaceContext, extract_query_features
+from surrogate.progress import QUIET, Progress
 from surrogate.surface import compute_pressure_forces
 
 # Each input is standardised by the training cells' mean and standard deviation, then clipped to this many
@@ -186,8 +187,10 @@ class SurrogateEnsemble:
         query_normals: np.ndarray,
         *,
         chunk: int = 250_000,
+        progress: Progress = QUIET,
     ) -> EnsemblePrediction:
-        """Extract the geometric features at `query_centers` and run the ensemble, chunk by chunk.
+        """Extract the geometric features at `query_centers` and run the ensemble, chunk by chunk, counting
+        each chunk's cells done on `progress`.
 
         A whole file is millions of cells, so the feature matrices of at most `FEATURE_THREADS`
         chunks exist at a time.
@@ -205,6 +208,7 @@ class SurrogateEnsemble:
                 group = starts[first : first + FEATURE_THREADS]
                 for start, features in zip(group, pool.map(features_at, group), strict=True):
                     per_fold[:, start : start + chunk] = self._predict_per_fold(features, chunk)
+                    progress.advance(len(features))
         return self._summarize(per_fold)
 
     def integrated_forces(

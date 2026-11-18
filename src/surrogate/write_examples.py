@@ -23,12 +23,15 @@ from functools import partial
 from http.server import ThreadingHTTPServer
 
 from surrogate.dataset import HOLDOUT_RUNS, surface_path
+from surrogate.progress import Progress, Step
 from surrogate.server import DEFAULT_MODEL, REPO, WEB_ROOT, AssistantConfig, ToolRequestHandler
 
 CHROME = os.environ.get("CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 SECONDS_PER_FILE = 300
 EXAMPLES = WEB_ROOT / "examples"
 BUNDLED = {f"run_{run}": surface_path(REPO / "data/raw", run) for run in HOLDOUT_RUNS}
+# Both examples, analysed in Chrome in about 40 s on MEASURED_ON.
+EXAMPLES_STEPS = [Step("Analysing in headless Chrome", len(BUNDLED), "car", 40)]
 
 # The page Chrome opens: it analyses each source in turn and posts the example's two files back.
 WRITER_PAGE = """<!doctype html><meta charset="utf-8"><script type="module">
@@ -61,8 +64,10 @@ try {
 class ExampleWriter(ToolRequestHandler):
     """The tool's files, the writer page, the source surfaces, and a place to post the examples to."""
 
-    def __init__(self, *args: object, outcome: dict[str, str], done: threading.Event, **kwargs: object) -> None:
-        self.outcome, self.done = outcome, done
+    def __init__(
+        self, *args: object, outcome: dict[str, str], done: threading.Event, progress: Progress, **kwargs: object
+    ) -> None:
+        self.outcome, self.done, self.progress = outcome, done, progress
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
@@ -85,25 +90,31 @@ class ExampleWriter(ToolRequestHandler):
         if self.path.startswith("/written/"):
             path = EXAMPLES / self.path.removeprefix("/written/")
             path.write_bytes(body)
-            print(f"Wrote {path} ({len(body) / 1e6:.1f} MB)", flush=True)
+            self.progress.note(f"Wrote {path.relative_to(REPO)} ({len(body) / 1e6:.1f} MB)")
+            if path.suffix == ".bin":  # an example's second and last file
+                self.progress.advance()
         else:
             self.outcome[self.path.removeprefix("/")] = body.decode()
             self.done.set()
         self._send(200, b"", "text/plain")
 
 
-def write_all_examples() -> None:
-    """Analyse each bundled source in headless Chrome and write its example to `web/examples/`."""
+def write_all_examples(progress: Progress) -> None:
+    """Analyse each bundled source in headless Chrome and write its example to `web/examples/`, reporting
+    EXAMPLES_STEPS on `progress`."""
     EXAMPLES.mkdir(parents=True, exist_ok=True)
     outcome: dict[str, str] = {}
     done = threading.Event()
     # Writing examples needs no assistant, so its route stays off whatever key this machine holds.
     no_assistant = AssistantConfig(key=None, model=DEFAULT_MODEL, enabled=False)
-    handler = partial(ExampleWriter, outcome=outcome, done=done, directory=str(WEB_ROOT), assistant=no_assistant)
+    handler = partial(
+        ExampleWriter, outcome=outcome, done=done, progress=progress, directory=str(WEB_ROOT), assistant=no_assistant
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/writer.html"
     timeout = SECONDS_PER_FILE * len(BUNDLED)
+    progress.step("Analysing in headless Chrome")
     with tempfile.TemporaryDirectory() as profile:
         chrome = subprocess.Popen(
             [CHROME, "--headless", "--enable-unsafe-webgpu", f"--user-data-dir={profile}", "--no-first-run", url],

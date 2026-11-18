@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +49,7 @@ for idx, (tr_runs, te_runs) in enumerate(jobs):
     for r in te_runs:
         feats = np.load(pdir / f"run_{r}.npz")["features"]
         saved[f"job{idx}_run{r}"] = np.asarray(booster.predict(feats), dtype=np.float32)
+    print("MODEL_DONE", flush=True)
 
 np.savez(out_path, **saved)
 """
@@ -58,9 +60,10 @@ def lightgbm_predictions(
     train_runs: tuple[int, ...],
     car_folds: tuple[tuple[int, int], ...],
     holdout_runs: tuple[int, ...],
+    on_model: Callable[[], object],
 ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
     """Each training car's prediction by the model of the fold that held it out, and the holdout cars'
-    prediction by a model trained on every car of `train_runs`."""
+    prediction by a model trained on every car of `train_runs`. `on_model` is called as each model is done."""
     jobs: list[tuple[list[int], list[int]]] = [
         ([r for r in train_runs if r not in val_pair], list(val_pair)) for val_pair in car_folds
     ]
@@ -71,7 +74,16 @@ def lightgbm_predictions(
         payload = json.dumps(
             {"processed_dir": str(processed_dir), "out_path": str(out_path), "jobs": jobs, "rounds": BOOST_ROUNDS}
         )
-        subprocess.run([sys.executable, "-c", _WORKER_CODE, payload], check=True)
+        command = [sys.executable, "-c", _WORKER_CODE, payload]
+        with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as worker:
+            assert worker.stdout is not None
+            for line in worker.stdout:
+                if line.strip() == "MODEL_DONE":
+                    on_model()
+                else:
+                    sys.stderr.write(line)
+        if worker.returncode != 0:
+            raise subprocess.CalledProcessError(worker.returncode, command)
         with np.load(out_path) as data:
             raw_preds = {k: np.asarray(data[k], dtype=np.float32) for k in data.files}
 

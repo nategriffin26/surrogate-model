@@ -1,5 +1,5 @@
 """The `surrogate` command: `predict` on the small synthetic car, `fetch` against a local stand-in for the
-dataset's server, and the messages a copy without data gets from `status` and `reproduce`."""
+dataset's server, and the messages a copy without data gets from `status`, `train` and `reproduce`."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import pyvista as pv
+import torch
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
 
@@ -69,7 +70,8 @@ def test_predict_compares_with_cfd_only_when_the_file_carries_it(
     tmp_path: Path, checkpoint: Path, capsys: pytest.CaptureFixture[str], synthetic_car: Callable[[], pv.PolyData]
 ) -> None:
     """Catches a summary that reports agreement with CFD for a file without `CpMeanTrim`, or omits it for
-    one with, and a JSON summary that cannot be written (NumPy values json cannot encode)."""
+    one with, a JSON summary that cannot be written (NumPy values json cannot encode), and a status line
+    written into captured output with the carriage returns and escape codes only a terminal can use."""
     car = synthetic_car()
     car.save(tmp_path / "with_cfd.vtp")
     car.clear_data()
@@ -81,8 +83,11 @@ def test_predict_compares_with_cfd_only_when_the_file_carries_it(
     cli.main(["predict", str(tmp_path / "geometry_only.vtp"), "--json", str(geometry_only_json), "--device", "cpu"])
     geometry_only = capsys.readouterr().out
 
-    assert "CFD agreement" in with_cfd and "no CpMeanTrim" not in with_cfd
-    assert "CFD agreement" not in geometry_only and "no CpMeanTrim" in geometry_only
+    assert "Error" in with_cfd and "against CFD" in with_cfd and "no CpMeanTrim" not in with_cfd
+    assert "against CFD" not in geometry_only and "no CpMeanTrim" in geometry_only
+    for printed in (with_cfd, geometry_only):
+        assert "Building lookups" in printed
+        assert "\r" not in printed and "\x1b" not in printed
     summary = json.loads((tmp_path / "with_cfd.json").read_text())
     assert summary["has_ground_truth"] is True and "r2" in summary["ground_truth_metrics"]
     assert len(summary["forces"]["cd_p_per_fold"]) == 3
@@ -118,6 +123,9 @@ class StandIn:
                 pass
 
             def do_HEAD(self) -> None:
+                if self.path not in stand_in.files:
+                    self.send_error(404)
+                    return
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(stand_in.files[self.path])))
                 self.end_headers()
@@ -203,6 +211,34 @@ def test_fetch_starts_over_when_the_server_ignores_the_range(tmp_path: Path, sta
     assert _fetched(tmp_path, 1).read_bytes() == whole
 
 
+def test_predict_takes_a_run_number_and_fetches_its_file(
+    tmp_path: Path,
+    stand_in: StandIn,
+    checkpoint: Path,
+    capsys: pytest.CaptureFixture[str],
+    synthetic_car: Callable[[], pv.PolyData],
+) -> None:
+    """Catches a run number read as a path, its file fetched elsewhere than where `surface_path` puts it,
+    and a car outside the training set announced as a training car."""
+    car_file = tmp_path / "car.vtp"
+    synthetic_car().save(car_file)
+    stand_in.files["/run_250/boundary_250.vtp"] = car_file.read_bytes()
+    cli.main(["predict", "250", "--device", "cpu"])
+    printed = capsys.readouterr().out
+    assert (tmp_path / "data/raw/holdout/run_250/boundary_250.vtp").read_bytes() == car_file.read_bytes()
+    assert "run 250, which the model was not trained on" in printed and "against CFD" in printed
+
+
+def test_predict_names_a_run_the_dataset_lacks(
+    stand_in: StandIn, checkpoint: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catches a missing run reported as a lost connection or a traceback."""
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["predict", "167"])
+    assert stopped.value.code == 1
+    assert "DrivAerML has no run 167" in capsys.readouterr().err
+
+
 @pytest.fixture
 def empty_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """This repository as a fresh clone has it: the model and the tool, no DrivAerML files, nothing preprocessed."""
@@ -230,3 +266,30 @@ def test_reproduce_without_data_stops_before_any_step(empty_copy: None, capsys: 
     captured = capsys.readouterr()
     assert "uv run surrogate fetch" in captured.err
     assert captured.out == ""
+
+
+def test_train_without_data_names_the_download(empty_copy: None, capsys: pytest.CaptureFixture[str]) -> None:
+    """Catches training on a fresh clone failing without saying which data it needs and how to get it."""
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["train"])
+    assert stopped.value.code == 1
+    captured = capsys.readouterr()
+    assert "uv run surrogate fetch" in captured.err and "uv run surrogate preprocess" in captured.err
+    assert captured.out == ""
+
+
+def test_train_compares_networks_weight_for_weight(tmp_path: Path, dummy_ensemble: SurrogateEnsemble) -> None:
+    """Catches a checkpoint that differs only outside its networks (the training cars' recorded bounds)
+    reported as other networks, and a network one rounding step away reported as the same."""
+    dummy_ensemble.save(tmp_path / "before.pt")
+    before = (tmp_path / "before.pt").read_bytes()
+    dummy_ensemble.training_envelope = {**dummy_ensemble.training_envelope, "train_runs": [80]}
+    dummy_ensemble.save(tmp_path / "bounds.pt")
+    with torch.no_grad():
+        weight = next(dummy_ensemble.folds[1].model.parameters())
+        weight[0, 0] = torch.nextafter(weight[0, 0], torch.tensor(float("inf")))
+    dummy_ensemble.save(tmp_path / "nudged.pt")
+
+    assert "byte for byte" in cli.compare_checkpoints(before, before)
+    assert "weight for weight" in cli.compare_checkpoints(before, (tmp_path / "bounds.pt").read_bytes())
+    assert "networks differ" in cli.compare_checkpoints(before, (tmp_path / "nudged.pt").read_bytes())

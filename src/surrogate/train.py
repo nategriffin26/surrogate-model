@@ -36,6 +36,7 @@ from surrogate.model import (
     PointNetGlobalMLP,
     SurrogateEnsemble,
 )
+from surrogate.progress import Progress, Step
 from surrogate.surface import compute_pressure_forces
 
 # Five folds of two validation cars each; no fold splits a car's cells.
@@ -51,8 +52,42 @@ LEARNING_RATE = 5e-3
 # The PointNet ablation: the width of its whole-car vector and its number of gradient steps.
 POINTNET_DIM = 64
 POINTNET_STEPS = 600
-# Each block of inputs as the README's results table names it.
+# Each block of inputs as the results table in docs/model.md names it.
 BLOCK_NAMES = {"local": "position and facing", "surface": "nearby surface", "slices": "slices across the car"}
+
+
+def _staircase_label(n_blocks: int) -> str:
+    """The ablation on the first `n_blocks` blocks of inputs, as the results table names it."""
+    blocks = BLOCKS[:n_blocks]
+    name = BLOCK_NAMES[blocks[-1]]
+    label = f"{name.capitalize()} only" if n_blocks == 1 else f"+ {name}"
+    return f"{label} ({_width(blocks)})"
+
+
+def _staircase_step(n_blocks: int) -> str:
+    label = _staircase_label(n_blocks)
+    return f"Ablation, {label[:1].lower()}{label[1:]}"
+
+
+def training_steps(run_ablations: bool) -> list[Step]:
+    """The steps of `train_and_evaluate`, each with its seconds on MEASURED_ON's GPU at 120,000 cells a car
+    and 30 epochs."""
+    steps = [
+        Step("Loading the cars", 1, "stage", 2),
+        Step("Shipped networks", len(CAR_FOLDS), "network", 55),
+        Step("Spread factor", len(CAR_FOLDS) * (len(CAR_FOLDS) - 1), "network", 160),
+        Step("Holdout cars", 1, "stage", 4),
+    ]
+    if not run_ablations:
+        return steps
+    return [
+        *steps,
+        *(Step(_staircase_step(n), len(CAR_FOLDS), "network", 44) for n in range(1, len(BLOCKS))),
+        Step("Ablation, PointNet", len(CAR_FOLDS) + 1, "model", 20),
+        Step("Ablation, LightGBM", len(CAR_FOLDS) + 1, "model", 140),
+        # Per fold: four networks on 2 cars, two on 4, four on 6 and one on 8.
+        Step("Learning curve", 11 * len(CAR_FOLDS), "network", 520),
+    ]
 
 
 def _load_processed_dataset(
@@ -76,6 +111,11 @@ def _others(held_out: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(r for r in ALLOWED_TRAIN_RUNS if r not in held_out)
 
 
+def _held_out(runs: tuple[int, ...]) -> str:
+    *first, last = map(str, runs)
+    return f"runs {', '.join(first)} and {last} held out"
+
+
 def _select_columns(features: np.ndarray, blocks: tuple[str, ...]) -> np.ndarray:
     return np.concatenate([features[:, getattr(FEATURE_COLUMNS, b)] for b in blocks], axis=1)
 
@@ -95,7 +135,9 @@ def _fit_mlp_fold(
     epochs: int,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> FoldModel:
+    """One network on the cells of `train_runs`, counting each epoch on `progress` as a share of a network."""
     torch.manual_seed(seed + fold_index)
     x_mean = x_train.mean(axis=0).astype(np.float32)
     x_std = (x_train.std(axis=0) + 1e-6).astype(np.float32)
@@ -124,6 +166,7 @@ def _fit_mlp_fold(
             loss.backward()
             optimizer.step()
             scheduler.step()
+        progress.advance(1 / epochs)
 
     model.eval()
     return FoldModel(
@@ -159,12 +202,14 @@ def _train_folds(
     epochs: int,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> tuple[list[FoldModel], dict[int, np.ndarray]]:
     """One network per fold of CAR_FOLDS on the inputs of `blocks`, and each training car's prediction by
     the network that did not see it."""
     folds: list[FoldModel] = []
     out_of_fold: dict[int, np.ndarray] = {}
     for fold_index, val_pair in enumerate(CAR_FOLDS):
+        progress.describe(_held_out(val_pair))
         train_runs = _others(val_pair)
         fold = _fit_mlp_fold(
             np.concatenate([_select_columns(arrays_by_run[r]["features"], blocks) for r in train_runs], axis=0),
@@ -175,6 +220,7 @@ def _train_folds(
             epochs=epochs,
             seed=seed,
             device=device,
+            progress=progress,
         )
         folds.append(fold)
         for r in val_pair:
@@ -236,8 +282,8 @@ def _summarize_predictions(
     }
 
 
-def _print_scores(label: str, cv: dict[str, Any]) -> None:
-    print(f"{label}: CV R² {cv['mean_r2']:.4f} (worst car {cv['worst_car_r2']:.4f}), Cd,p MAE {cv['cd_p_mae']:.4f}")
+def _scores(label: str, cv: dict[str, Any]) -> str:
+    return f"{label}: CV R² {cv['mean_r2']:.4f} (worst car {cv['worst_car_r2']:.4f}), Cd,p MAE {cv['cd_p_mae']:.4f}"
 
 
 def _run_pointnet_global_ablation(
@@ -246,11 +292,13 @@ def _run_pointnet_global_ablation(
     *,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> dict[str, Any]:
     """The PointNet ablation on the same car folds, and trained on all ten cars for the holdout cars: each
     cell's position and facing, with a whole-car vector of POINTNET_DIM learned from the car's cells."""
 
     def _fit_and_eval(tr_runs: tuple[int, ...], te_runs: tuple[int, ...]) -> dict[int, np.ndarray]:
+        progress.describe(_held_out(te_runs))
         torch.manual_seed(seed)
         x_cat = np.concatenate([arrays_by_run[r]["features"][:, FEATURE_COLUMNS.local] for r in tr_runs])
         y_cat = np.concatenate([arrays_by_run[r]["cp"] for r in tr_runs])
@@ -290,6 +338,7 @@ def _run_pointnet_global_ablation(
             loss.backward()
             opt.step()
             sched.step()
+            progress.advance(1 / POINTNET_STEPS)
 
         net.eval()
         preds: dict[int, np.ndarray] = {}
@@ -343,6 +392,7 @@ def _fit_spread_scale(
     epochs: int,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> float:
     """Factor that turns the fold models' standard deviation into a one-sigma error.
 
@@ -357,6 +407,7 @@ def _fit_spread_scale(
         models: list[FoldModel] = []
         for inner_idx, inner_pair in enumerate(p for p in CAR_FOLDS if p != held_pair):
             tr_runs = _others(held_pair + inner_pair)
+            progress.describe(_held_out(held_pair + inner_pair))
             models.append(
                 _fit_mlp_fold(
                     np.concatenate([arrays_by_run[r]["features"] for r in tr_runs], axis=0),
@@ -367,6 +418,7 @@ def _fit_spread_scale(
                     epochs=epochs,
                     seed=seed + 100 * (outer_idx + 1),
                     device=device,
+                    progress=progress,
                 )
             )
         for r in held_pair:
@@ -477,22 +529,24 @@ def _input_staircase(
     epochs: int,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> dict[str, dict[str, Any]]:
     """Five networks on the first block of inputs, then on the first two; the shipped ensemble on all three
     closes the staircase."""
     ablations: dict[str, dict[str, Any]] = {}
     for n_blocks in range(1, len(BLOCKS)):
         blocks = BLOCKS[:n_blocks]
-        folds, out_of_fold = _train_folds(arrays_by_run, blocks, epochs=epochs, seed=seed, device=device)
+        label = _staircase_label(n_blocks)
+        progress.step(_staircase_step(n_blocks))
+        folds, out_of_fold = _train_folds(
+            arrays_by_run, blocks, epochs=epochs, seed=seed, device=device, progress=progress
+        )
         cv = _summarize_predictions(ALLOWED_TRAIN_RUNS, out_of_fold, arrays_by_run, meta_by_run)
         ensemble = _ensemble(folds, envelope, device)
         holdout_preds = {
             r: ensemble.predict_features(_select_columns(arrays_by_run[r]["features"], blocks)).cp_mean
             for r in HOLDOUT_RUNS
         }
-        name = BLOCK_NAMES[blocks[-1]]
-        label = f"{name.capitalize()} only" if n_blocks == 1 else f"+ {name}"
-        label = f"{label} ({_width(blocks)})"
         ablations[f"{'_'.join(blocks)}_mlp"] = {
             "label": label,
             "blocks": list(blocks),
@@ -500,7 +554,7 @@ def _input_staircase(
             "cv": cv,
             "holdout": _summarize_predictions(HOLDOUT_RUNS, holdout_preds, arrays_by_run, meta_by_run),
         }
-        _print_scores(label, cv)
+        progress.note(_scores(label, cv))
     return ablations
 
 
@@ -511,19 +565,24 @@ def _other_learners(
     *,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> dict[str, dict[str, Any]]:
     """A learned whole-car vector beside position and facing, and boosted trees on every input."""
-    pointnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, seed=seed, device=device)
+    progress.step("Ablation, PointNet")
+    pointnet = _run_pointnet_global_ablation(arrays_by_run, meta_by_run, seed=seed, device=device, progress=progress)
     pointnet_label = f"PointNet whole-car vector ({POINTNET_DIM}) + {BLOCK_NAMES['local']}"
-    _print_scores(pointnet_label, pointnet["cv"])
+    progress.note(_scores(pointnet_label, pointnet["cv"]))
 
-    cv_preds, holdout_preds = lightgbm_predictions(processed_dir, ALLOWED_TRAIN_RUNS, CAR_FOLDS, HOLDOUT_RUNS)
+    progress.step("Ablation, LightGBM")
+    cv_preds, holdout_preds = lightgbm_predictions(
+        processed_dir, ALLOWED_TRAIN_RUNS, CAR_FOLDS, HOLDOUT_RUNS, on_model=progress.advance
+    )
     lightgbm = {
         "cv": _summarize_predictions(ALLOWED_TRAIN_RUNS, cv_preds, arrays_by_run, meta_by_run),
         "holdout": _summarize_predictions(HOLDOUT_RUNS, holdout_preds, arrays_by_run, meta_by_run),
     }
     lightgbm_label = f"LightGBM, {BOOST_ROUNDS} trees, all inputs ({FEATURE_COLUMNS.total_dim})"
-    _print_scores(lightgbm_label, lightgbm["cv"])
+    progress.note(_scores(lightgbm_label, lightgbm["cv"]))
 
     return {
         "pointnet_global_64d": {"label": pointnet_label, "blocks": ["local"], "learner": "pointnet", **pointnet},
@@ -538,6 +597,7 @@ def _learning_curve(
     epochs: int,
     seed: int,
     device: torch.device,
+    progress: Progress,
 ) -> dict[str, dict[str, float]]:
     """Accuracy on unseen cars against the number of cars trained on, which says whether more CFD
     runs would still help. For each fold's held-out pair, single networks are trained on 2, 4, 6 and
@@ -555,6 +615,7 @@ def _learning_curve(
         }
         for n_cars, groups in subsets.items():
             for group_idx, cars in enumerate(groups):
+                progress.describe(f"trained on {n_cars} cars, {_held_out(held_pair)}")
                 model = _fit_mlp_fold(
                     np.concatenate([arrays_by_run[r]["features"] for r in cars], axis=0),
                     np.concatenate([arrays_by_run[r]["cp"] for r in cars], axis=0),
@@ -564,6 +625,7 @@ def _learning_curve(
                     epochs=round(epochs * 8 / n_cars),
                     seed=seed + 10 * fold_idx + group_idx,
                     device=device,
+                    progress=progress,
                 )
                 preds = {r: _predict_single_fold(model, arrays_by_run[r]["features"], device) for r in held_pair}
                 per_car = _summarize_predictions(held_pair, preds, arrays_by_run, meta_by_run)["per_car"]
@@ -587,16 +649,21 @@ def train_and_evaluate(
     seed: int,
     run_ablations: bool,
     device: torch.device,
+    progress: Progress,
 ) -> dict[str, Any]:
     """Train the shipped ensemble on `processed_dir`, fit its spread, evaluate it in cross-validation and on
     the holdout cars, run the ablations and the learning curve when `run_ablations`, and write
-    `ensemble.pt` and `metrics.json` to `artifacts_dir`."""
+    `ensemble.pt` and `metrics.json` to `artifacts_dir`. Reports `training_steps` on `progress`."""
+    progress.step("Loading the cars")
     arrays_by_run, meta_by_run = _load_processed_dataset(processed_dir)
 
+    progress.step("Shipped networks")
     start = time.perf_counter()
-    folds, out_of_fold = _train_folds(arrays_by_run, BLOCKS, epochs=epochs, seed=seed, device=device)
+    folds, out_of_fold = _train_folds(arrays_by_run, BLOCKS, epochs=epochs, seed=seed, device=device, progress=progress)
     train_sec = time.perf_counter() - start
     cv_summary = _summarize_predictions(ALLOWED_TRAIN_RUNS, out_of_fold, arrays_by_run, meta_by_run)
+    shipped_label = f"Shipped: five networks, all inputs ({FEATURE_COLUMNS.total_dim})"
+    progress.note(_scores(shipped_label, cv_summary))
     regions = regional_r2_breakdown(
         np.concatenate([arrays_by_run[r]["cp"] for r in ALLOWED_TRAIN_RUNS]),
         np.concatenate([out_of_fold[r] for r in ALLOWED_TRAIN_RUNS]),
@@ -604,19 +671,19 @@ def train_and_evaluate(
         np.concatenate([arrays_by_run[r]["normals"] for r in ALLOWED_TRAIN_RUNS]),
     )
 
-    spread_scale = _fit_spread_scale(arrays_by_run, epochs=epochs, seed=seed, device=device)
+    progress.step("Spread factor")
+    spread_scale = _fit_spread_scale(arrays_by_run, epochs=epochs, seed=seed, device=device, progress=progress)
+    progress.note(f"Spread factor {spread_scale:.2f}")
+
+    progress.step("Holdout cars", detail=f"runs {' and '.join(map(str, HOLDOUT_RUNS))}")
     envelope = _build_training_envelope(arrays_by_run, meta_by_run)
     ensemble = _ensemble(folds, envelope, device, spread_scale)
     envelope["cv_mean_cp_std"] = _training_mean_spread(ensemble, arrays_by_run)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint = artifacts_dir / "ensemble.pt"
-    ensemble.save(checkpoint)
-    shipped_label = f"Shipped: five networks, all inputs ({FEATURE_COLUMNS.total_dim})"
-    _print_scores(shipped_label, cv_summary)
-    print(f"Spread factor {spread_scale:.2f}; wrote {checkpoint} ({train_sec:.0f} s for the five networks)")
+    ensemble.save(artifacts_dir / "ensemble.pt")
 
     holdout_summary, calibration_bins, coverage = _evaluate_holdout(ensemble, arrays_by_run, meta_by_run)
-    print(f"Holdout: R² {holdout_summary['mean_r2']:.4f}, Cd,p MAE {holdout_summary['cd_p_mae']:.4f}")
+    progress.note(f"Holdout cars: R² {holdout_summary['mean_r2']:.4f}, Cd,p MAE {holdout_summary['cd_p_mae']:.4f}")
 
     shipped = {
         "label": shipped_label,
@@ -629,9 +696,11 @@ def train_and_evaluate(
     if run_ablations:
         ablations = {
             "constant_baseline": _constant_baseline(arrays_by_run, meta_by_run),
-            **_input_staircase(arrays_by_run, meta_by_run, envelope, epochs=epochs, seed=seed, device=device),
+            **_input_staircase(
+                arrays_by_run, meta_by_run, envelope, epochs=epochs, seed=seed, device=device, progress=progress
+            ),
             "shipped_mlp_ensemble": shipped,
-            **_other_learners(processed_dir, arrays_by_run, meta_by_run, seed=seed, device=device),
+            **_other_learners(processed_dir, arrays_by_run, meta_by_run, seed=seed, device=device, progress=progress),
         }
 
     report: dict[str, Any] = {
@@ -651,10 +720,11 @@ def train_and_evaluate(
         "ablations": ablations,
     }
     if run_ablations:
-        report["learning_curve"] = _learning_curve(arrays_by_run, meta_by_run, epochs=epochs, seed=seed, device=device)
+        progress.step("Learning curve")
+        report["learning_curve"] = _learning_curve(
+            arrays_by_run, meta_by_run, epochs=epochs, seed=seed, device=device, progress=progress
+        )
         curve = ", ".join(f"{n} cars {c['r2']:.4f}" for n, c in report["learning_curve"].items())
-        print(f"Learning curve, R² on cars not trained on: {curve}")
-    metrics_path = artifacts_dir / "metrics.json"
-    metrics_path.write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Wrote {metrics_path}")
+        progress.note(f"Learning curve, R² on cars not trained on: {curve}")
+    (artifacts_dir / "metrics.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
