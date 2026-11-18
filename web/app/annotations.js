@@ -1,7 +1,7 @@
 // Annotations: what the assistant lays on a car to show something. A field of their own colours the car as Pressure
 // does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines, arrows, boxes and
-// planes mark places in 3D. Everything is drawn in named layers that belong to the case, listed in the Layers menu
-// among the view tools, where each can be hidden or removed, and kept while other cases are shown.
+// planes mark places in 3D. Everything is drawn in named layers that belong to the case, kept while other cases are
+// shown; the strip above the view lists the case's layers, where each is shown, hidden or removed (toolbar.js).
 // Every action is an operation, so a call from the assistant, a line of Python and a control do the same thing;
 // Python sends its arrays as typed arrays, never as JSON.
 //
@@ -10,14 +10,11 @@
 
 import { Annotations, rgbOf } from '../viewer/annotations.js';
 import { finite, oneOf, round, triple } from './checks.js';
-import { h } from './dom.js';
 import { evaluate } from './expression.js';
 import { MAPS, addField, faceMean, removeField } from './fields.js';
 import { count, niceTicks } from './format.js';
-import { icon } from './icons.js';
-import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
-import { RAMPS, rampCss } from './ramps.js';
+import { RAMPS } from './ramps.js';
 
 /** Colours by name: the theme's ink and accents, with orange bright enough to stand out on the car. */
 const PALETTE = {
@@ -48,14 +45,6 @@ const DEFAULT_NAMES = {
 	box: 'Boxes',
 	plane: 'Planes',
 	paint: 'Paint',
-};
-const KIND_WORDS = {
-	labels: ['label', 'labels'],
-	points: ['point', 'points'],
-	lines: ['line', 'lines'],
-	arrows: ['arrow', 'arrows'],
-	box: ['box', 'boxes'],
-	plane: ['plane', 'planes'],
 };
 
 /**
@@ -235,12 +224,12 @@ function statistics(values, areas) {
 // ---- the annotations as the app holds them ---------------------------------------------------------------------------------
 
 /**
- * context: { session, engine, viewer, view, overlay, update, run }. Defines the annotation operations and returns what
- * the rest of the app reads: `apply(c)` lays case c's annotations on the viewer, `fields(c)` its fields' keys,
- * `paintLabels(ctx, scale)` the labels for the picture, and `layers`, the Layers menu. A field's values reach the
+ * context: { session, engine, viewer, view, overlay, update }. Defines the annotation operations and returns what the
+ * rest of the app reads: `apply(c)` lays case c's annotations on the viewer, `fields(c)` its fields' keys, `layersOf(c)`
+ * its layers in drawing order, and `paintLabels(ctx, scale)` the labels for the picture. A field's values reach the
  * viewer, the probes and the plots through its entry in fields.js.
  */
-export function createAnnotations({ session, engine, viewer, view, overlay, update, run }) {
+export function createAnnotations({ session, engine, viewer, view, overlay, update }) {
 	const drawing = new Annotations(viewer, overlay);
 	const cellsKept = new WeakMap();
 	const cellsOf = (result) => cellsKept.get(result) ?? cellsKept.set(result, engine.workingCells(result)).get(result);
@@ -263,7 +252,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	const fieldLayer = (c, key) => storeOf(c).layers.find((layer) => layer.field?.key === key) ?? null;
 	const casesWith = (key) => session.cases.filter((c) => stores.has(c) && fieldLayer(c, key));
 
-	/** Something on case c changed: the viewer, the dock and the toolbar, with its fields and Layers menu, catch up. */
+	/** Something on case c changed: the viewer, the dock and the toolbar, with its fields and layers, catch up. */
 	function changed(c, ...parts) {
 		const store = storeOf(c);
 		store.version++;
@@ -948,104 +937,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 						.layers.filter((layer) => layer.kind === 'field')
 						.map((layer) => layer.field.key)
 				: [],
+		layersOf: (c) => (c && stores.has(c) ? storeOf(c).layers : []),
 		paintLabels: (ctx, scale) => drawing.paintLabels(ctx, scale),
-		layers: createLayersMenu({ session, view, run, storeOf, stores, layerSummary }),
 	};
-}
-
-// ---- the Layers menu among the view tools -------------------------------------------------------------------------------
-
-/**
- * The Layers menu, there while the car shown has layers: each with its colour, name and what it holds, shown or hidden
- * by its eye and removed by its cross, and every one removed at once.
- */
-function createLayersMenu({ session, view, run, storeOf, stores, layerSummary }) {
-	const button = h(
-		'button',
-		{ type: 'button', class: 'tool', title: 'Layers on this car' },
-		icon('layers'),
-		h('span', { class: 'tool-label' }, 'Layers'),
-	);
-	const list = h('div', { class: 'menu-list layers-list' });
-	const layersMenu = menu(button, list, { align: 'right' });
-	const active = () => (session.active?.result ? session.active : null);
-	const layersOf = (c) => (c && stores.has(c) ? storeOf(c).layers : []);
-
-	/** A swatch of a layer's colour, or of its field's ramp. */
-	function swatch(layer) {
-		if (layer.kind !== 'field') return h('span', { class: 'layer-swatch', style: `background:${layer.colour}` });
-		const map = view.maps?.[layer.field.key];
-		return h('span', { class: 'layer-swatch ramp', style: map ? `background:${rampCss(map.ramp)}` : null });
-	}
-
-	/** What a layer holds, in a few words. */
-	function holds(layer) {
-		if (layer.kind === 'field') return layer.field.unit ? `Field, ${layer.field.unit}` : 'Field';
-		const { marks = {}, painted_faces: painted } = layerSummary(layer);
-		const parts = Object.entries(marks).map(([kind, n]) => `${count(n)} ${KIND_WORDS[kind][n === 1 ? 0 : 1]}`);
-		if (painted) parts.unshift(`${count(painted)} faces painted`);
-		return parts.join(' · ');
-	}
-
-	function render() {
-		const c = active();
-		const layers = layersOf(c);
-		layersMenu.el.hidden = layers.length === 0;
-		if (layers.length === 0) {
-			if (button.getAttribute('aria-expanded') === 'true') layersMenu.close();
-			return list.replaceChildren();
-		}
-		list.replaceChildren(
-			...layers.map((layer) => {
-				const shown = layer.kind === 'field' ? view.field === layer.field.key : layer.visible;
-				return h(
-					'div',
-					{ class: 'layer-row', 'data-layer': layer.name },
-					h(
-						'button',
-						{
-							type: 'button',
-							class: 'icon-button layer-eye',
-							'aria-pressed': String(shown),
-							title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`,
-							onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }),
-						},
-						icon(shown ? 'eye' : 'eye-off'),
-					),
-					swatch(layer),
-					h(
-						'span',
-						{ class: 'layer-text' },
-						h('span', { class: 'layer-name' }, layer.name),
-						h('span', { class: 'layer-holds' }, holds(layer)),
-					),
-					h(
-						'button',
-						{
-							type: 'button',
-							class: 'icon-button',
-							title: `Remove ${layer.name}`,
-							onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }),
-						},
-						icon('close'),
-					),
-				);
-			}),
-			h('hr', { class: 'menu-rule' }),
-			h(
-				'button',
-				{
-					type: 'button',
-					role: 'menuitem',
-					class: 'menu-item danger',
-					onclick: () => {
-						for (const layer of [...layers]) run('remove_layer', { case_id: c.id, layer: layer.name });
-					},
-				},
-				'Remove all',
-			),
-		);
-	}
-
-	return { el: layersMenu.el, render };
 }

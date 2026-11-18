@@ -504,7 +504,8 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	function draw() {
 		const site = over && current?.c === active() ? current.site : null;
 		const centre = site ? viewer.project(site.point) : null;
-		const field = drawnField();
+		// A plain car reads Pressure, as the section plots it.
+		const field = drawnField() === 'none' ? 'cp' : drawnField();
 		const reading = site ? (VALUE[field] ? VALUE[field](site) : faceValue(current.c, field, current.face)) : null;
 		preview.hidden = !centre?.visible || reading === null || reading === undefined;
 		if (preview.hidden) return;

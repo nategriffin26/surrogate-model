@@ -77,8 +77,8 @@ const fieldsOf = (c) => [
 	...annotations.fields(c),
 ];
 
-/** The field the car shows: the view's, when the case on screen has it, else pressure. */
-const shownField = () => (fieldsOf(active()).includes(view.field) ? view.field : 'cp');
+/** The field the car shows: the view's, when it is none or the case on screen has it, else pressure. */
+const shownField = () => (view.field === 'none' || fieldsOf(active()).includes(view.field) ? view.field : 'cp');
 
 /** The field the car is drawn in, which the legend shows and edits: the one shown once the case has a result, else none. */
 const drawnField = () => (active()?.result ? shownField() : 'none');
@@ -90,7 +90,7 @@ defineDisplayOperations(context);
 defineCaseOperations(context);
 defineSectionOperations(context);
 defineProbeOperations(context);
-const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
+const annotations = createAnnotations({ session, engine, viewer, view, overlay, update });
 const variants = createVariants({ session, engine, workspace, run });
 defineFileOperations(context);
 
@@ -114,17 +114,16 @@ defineExportOperations(context);
 
 const progress = createProgress({ cancel: (c) => run('close_case', { case_id: c.id }) });
 
-const toolbar = createToolbar(
-	{
-		field: (field) => run('set_field', { field }),
-		view: (name) => run('set_camera_view', { view: name }),
-		fit: () => run('fit_view', {}),
-		projection: (projection) => run('set_projection', { projection }),
-		toggle: (what) => toggle(what),
-		hasCar: () => Boolean(active()?.surface),
-	},
-	annotations.layers.el,
-);
+const toolbar = createToolbar({
+	field: (field) => run('set_field', { field }),
+	layer: (layer, visible) => run('set_layer', { case_id: active().id, layer, visible }),
+	removeLayer: (layer) => run('remove_layer', { case_id: active().id, layer }),
+	view: (name) => run('set_camera_view', { view: name }),
+	fit: () => run('fit_view', {}),
+	projection: (projection) => run('set_projection', { projection }),
+	toggle: (what) => toggle(what),
+	hasCar: () => Boolean(active()?.surface),
+});
 $('[data-toolbar]').append(toolbar.el);
 
 function toggle(what) {
@@ -420,8 +419,8 @@ function renderToolbar() {
 		projection: viewer.projection,
 		display: view.display,
 		section: enabled && view.section.on,
+		layers: enabled ? annotations.layersOf(c) : [],
 	});
-	annotations.layers.render();
 }
 
 function renderLegend() {

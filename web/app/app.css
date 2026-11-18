@@ -74,14 +74,33 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 /* ---- toolbar ---- */
 .toolbar-host { min-width: 0; border-bottom: 1px solid var(--hair); background: #fff; position: relative; z-index: 5; }
 .toolbar { display: flex; align-items: center; gap: 16px; height: 100%; padding: 0 10px 0 16px; min-width: 0; }
-.fields { display: flex; gap: 18px; min-width: 0; height: 100%; }
+/* Fields and layers scroll sideways in one row when they do not fit; a fade marks the end that is cut off. */
+.toolbar-row { display: flex; align-items: center; gap: 16px; flex: 0 1 auto; min-width: 0; height: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.toolbar-row::-webkit-scrollbar { display: none; }
+.toolbar-row[data-clipped="end"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.toolbar-row[data-clipped="start"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+.toolbar-row[data-clipped="start end"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.fields { display: flex; gap: 18px; flex: none; height: 100%; }
 .field { position: relative; display: flex; align-items: center; height: 100%; color: var(--muted); font-weight: 500; font-size: 13px; white-space: nowrap; transition: color 0.15s; }
 .field-ramp { position: absolute; left: 0; right: 0; bottom: 7px; height: 3px; border-radius: 2px; opacity: 0.25; transform: scaleY(0.67); transition: opacity 0.2s var(--ease), transform 0.2s var(--ease); }
 .field:not(:disabled):hover { color: var(--ink); }
 .field:not(:disabled):hover .field-ramp { opacity: 0.6; }
 .field[aria-checked="true"] { color: var(--heading); }
 .field[aria-checked="true"] .field-ramp { opacity: 1; transform: none; }
-.toolbar-end { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.toolbar-end { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
+/* A layer is a chip after the fields, behind a hairline: a tap shows or hides it, its cross removes it. */
+.layer-chips { display: flex; flex: none; align-items: center; gap: 6px; padding-left: 16px; border-left: 1px solid var(--hair); }
+.chip { display: inline-flex; flex: none; align-items: center; height: 26px; border: 1px solid var(--rule); border-radius: 13px; background: #fff; transition: opacity 0.15s; }
+.chip[data-hidden="true"] { opacity: 0.5; }
+.chip-toggle { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 2px 0 10px; color: var(--heading); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.chip-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+.chip-swatch { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--swatch); box-shadow: inset 0 0 0 1.5px var(--swatch); }
+.chip[data-hidden="true"] .chip-swatch { background: transparent; }
+.chip-remove { display: grid; flex: none; place-items: center; width: 24px; height: 100%; padding-right: 2px; color: var(--faint); }
+.chip-remove:hover { color: var(--ink); }
+.chip-remove .icon { width: 10px; height: 10px; }
+.field-item { display: flex; align-items: center; height: 100%; }
+.field-item .chip-remove { height: 24px; margin-left: 2px; }
 .tool-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--hair); }
 .tool { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background 0.15s, color 0.15s; }
 .tool:not(:disabled):hover { background: var(--tint); color: var(--heading); }
@@ -504,7 +523,7 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	:is(.dock-host, .dock-resizer, .topbar-end, .tool-group, .legend-tools) { display: none !important; }
 	.work { grid-template-columns: minmax(0, 1fr) 0px !important; }
 	.card-host { top: auto; }
-	.toolbar { gap: 8px; padding: 0 8px; overflow-x: auto; }
+	.toolbar { gap: 8px; padding: 0 8px; }
 	.legend { width: 220px; }
 	.legend-bar { width: 196px; }
 	.silhouette { width: 110px; }
@@ -523,6 +542,8 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	.case-tab:not([aria-selected="true"]) .case-close { display: none; }
 	.case-tab:not([aria-selected="true"]) .case-open { padding-right: 12px; }
 	.field { min-width: 40px; justify-content: center; }
+	.chip { height: 36px; border-radius: 18px; }
+	.chip-remove, .field-item .chip-remove { width: 36px; height: 36px; }
 	.tool { height: 40px; min-width: 40px; justify-content: center; }
 	.tool-quiet { display: none; }
 	/* The extremes' hit areas reach into the space around them, so the card grows no taller. */

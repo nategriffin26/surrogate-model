@@ -1,4 +1,4 @@
-/* Annotations: labels on the car, drawn like probe markers, and the Layers menu among the view tools. */
+/* Annotations: labels on the car, drawn like probe markers. */
 
 /* ---- labels on the car ---- */
 .annotation-labels { position: absolute; inset: 0; pointer-events: none; }
@@ -17,15 +17,3 @@
 	font: 500 11.5px/15px var(--body); font-variant-numeric: tabular-nums;
 }
 :is(.annotation-dot, .annotation-label).behind { opacity: 0.35; }
-
-/* ---- the Layers menu ---- */
-.layers-list { width: 300px; }
-.layer-row { display: flex; align-items: center; gap: 8px; min-height: 40px; }
-.layer-eye[aria-pressed="false"] { color: var(--faint); }
-.layer-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(13, 34, 51, 0.12); }
-.layer-swatch.ramp { width: 20px; height: 8px; border-radius: 2px; }
-.layer-text { display: grid; flex: 1; min-width: 0; }
-.layer-name, .layer-holds { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.layer-name { color: var(--heading); font-size: 13px; font-weight: 500; }
-.layer-holds { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.layer-row .icon-button { flex: none; }

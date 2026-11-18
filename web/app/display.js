@@ -39,20 +39,23 @@ export function defineDisplayOperations({ session, viewer, update }) {
 	defineOperation({
 		name: 'set_field',
 		description:
-			"Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model's networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model's calibration. `cfd`: the CFD pressure coefficient the case carries, on the pressure scale, and `error`: the predicted Cp minus it, on a case that carries CFD. `change`: on a variant, its Cp minus its car's predicted unchanged on the same mesh. Any other field is one added to the car (an annotation's array). Section plots and probe readouts follow the field. Returns the field and its colour scale.",
+			"Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model's networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model's calibration. `cfd`: the CFD pressure coefficient the case carries, on the pressure scale, and `error`: the predicted Cp minus it, on a case that carries CFD. `change`: on a variant, its Cp minus its car's predicted unchanged on the same mesh. `none`: no field, the plain car, so that paint and marks stand out; the section plot and probes then read Cp. Any other field is one added to the car (an annotation's array). Section plots and probe readouts follow the field. Returns the field and its colour scale.",
 		// The enum follows the fields added at run time.
 		get parameters() {
 			return {
 				type: 'object',
-				properties: { field: { type: 'string', enum: offeredFields(), description: 'Field to colour the car by.' } },
+				properties: {
+					field: { type: 'string', enum: [...offeredFields(), 'none'], description: 'Field to colour the car by.' },
+				},
 				required: ['field'],
 				additionalProperties: false,
 			};
 		},
 		run({ field }) {
-			view.field = offeredOn(session.withResult(), field);
+			const c = session.withResult();
+			view.field = field === 'none' ? field : offeredOn(c, field);
 			update('toolbar', 'legend', 'viewer', 'dock', 'markers');
-			return mapResult(field, view.maps[FIELDS[field].map]);
+			return field === 'none' ? { field } : mapResult(field, view.maps[FIELDS[field].map]);
 		},
 	});
 
@@ -224,7 +227,8 @@ export function defineDisplayOperations({ session, viewer, update }) {
 			return {
 				case_id: c?.id ?? null,
 				field: view.field,
-				colour_scale: view.maps ? mapResult(view.field, view.maps[FIELDS[view.field].map]) : null,
+				colour_scale:
+					view.maps && FIELDS[view.field].map ? mapResult(view.field, view.maps[FIELDS[view.field].map]) : null,
 				camera: {
 					projection: camera.projection,
 					position_m: camera.position.map((v) => round(v, 4)),

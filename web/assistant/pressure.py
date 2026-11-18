@@ -24,7 +24,7 @@ coroutines; await them.
 Drawing on the car, like plotting: every array goes to the page whole, never as JSON, so thousands of marks are one
 call. A case is coloured by a field of its own or painted; marks are drawn through `pressure.view` (the case on
 screen) or `case.view`. Each call draws into a named layer (`layer=`, made if new, added to if it exists), which the
-engineer can hide or remove from the Layers menu among the view tools.
+engineer can show, hide or remove from its chip in the strip above the car.
 
     await car.show(w.spread / np.maximum(np.abs(w.cp), 0.05), name="Spread / |Cp|", cmap="viridis", range=(0, 1))
     await car.paint(w.cp < -1, "orange", layer="Cp below -1")          # a mask per cell, or colours per cell
