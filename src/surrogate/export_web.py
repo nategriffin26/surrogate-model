@@ -16,7 +16,8 @@ is fixed in the browser's code:
   training data, `DATASET` below); `trainRuns`; `networks` (per network `trainRuns`,
   `validationRuns`, `parameters`, `layers`, its widths from input to output); `crossValidation`
   (`meanR2`, `worstCarR2`, `mae`, `relativeL2`, `dragMae`); `outsideRuns` (per run `run`, `r2`, `mae`,
-  `dragMae`); `regions` (`name`, `areaShare`, `r2`, `mae`); `comparison` (per model compared `label`,
+  `dragMae`); `spreadCoverage` (the share of the outside runs' surface whose error is within the
+  spread σ(Cp)); `regions` (`name`, `areaShare`, `r2`, `mae`); `comparison` (per model compared `label`,
   `learner`, `columnRanges`, the [start, stop) column ranges it was given, `crossValidationR2`,
   `worstCarR2`, `mae`, `dragMae`, `outsideR2`, `outsideDragMae`);
 - `weightsSha256`, the digest of `weights.bin`, which each analysis records so a stale example shows.
@@ -93,6 +94,7 @@ def model_card(payload: dict, metrics: dict) -> dict:
     return {
         "dataset": DATASET,
         "trainRuns": [int(run) for run in metrics["allowed_train_runs"]],
+        "spreadCoverage": metrics["uncertainty_coverage_holdout"]["within_1_std"],
         "networks": [
             {
                 "trainRuns": [int(run) for run in fold["train_runs"]],

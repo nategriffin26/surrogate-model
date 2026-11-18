@@ -231,6 +231,21 @@ def test_engine_geometry_features_and_networks_match_python(car: pv.PolyData, mo
 
 
 @requires_runtime
+def test_a_second_analysis_waits_for_the_first_to_end(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches an engine that abandons a car when the next file is dropped: the first car must still
+    end with its exact numbers and complete full-mesh fields, and the second start only after that."""
+    events = _run_engine("sequence", _write_vtp(car, tmp_path / "car.vtp"), tmp_path / "out")["events"]
+    for name in ("first", "second"):
+        own = [event for event in events if event["car"] == name]
+        kinds = [event["event"] for event in own]
+        assert "rejected" not in kinds, f"the {name} analysis was abandoned: {own}"
+        assert "result" in kinds and "exact" in kinds, f"the {name} analysis did not finish: {kinds}"
+        assert own[-1] == {"car": name, "event": "fullFields", "fraction": 1}, f"the {name} car's last event: {own[-1]}"
+    cars = [event["car"] for event in events]
+    assert cars == sorted(cars), "the two analyses' events interleave: one ran before the other had ended"
+
+
+@requires_runtime
 def test_features_follow_the_model_files_definition(car: pv.PolyData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Catches browser features that assume the shipped definition: with two voxel scales and two
     neighbour slices instead (125 columns) they must still match Python's column for column."""
