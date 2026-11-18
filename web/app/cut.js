@@ -5,13 +5,15 @@
 // cuts and cars overlay on one axis.
 
 import { finite, oneOf, round } from './checks.js';
+import { COMPARED, counterpart } from './compare.js';
 import { h } from './dom.js';
 import { baseName, defineExport } from './export.js';
+import { FIELDS, valueAt } from './fields.js';
 import { niceTicks, signed } from './format.js';
 import { icon } from './icons.js';
 import { defineOperation } from './operations.js';
 import { drawCursor, drawPlot, valueAlong } from './plots.js';
-import { CUT_AXES, branches, cut } from './section.js';
+import { CUT_AXES, branches, cut, interpolated } from './section.js';
 import { MAX_KEPT } from '../viewer/shaders.js';
 
 const AXIS_NAMES = ['x', 'y', 'z'];
@@ -28,14 +30,36 @@ const UNPLOTTED = '#58727f';
 /** Cuts remembered per case, beyond those plotted, before the oldest is dropped. */
 const CUTS_KEPT = 16;
 
-/** What the plot shows for each field at a cut point. Pressure is drawn with negative values up, as aerodynamicists do. */
+/**
+ * What the plot shows for each of the model's fields at a cut point: read(c) gives the reader of a point on case c.
+ * Pressure is drawn with negative values up, as aerodynamicists do.
+ */
 const QUANTITY = {
-	cp: { label: 'Cp', key: 'cp', invert: true, value: (q) => q.cp },
-	drag: { label: '−Cp nₓ', key: 'drag', invert: false, value: (q) => -q.cp * q.nx },
-	sigma: { label: 'σ', key: 'sigma', invert: false, value: (q) => q.sigma },
+	cp: { label: 'Cp', key: 'cp', invert: true, read: () => (q) => q.cp },
+	drag: { label: '−Cp nₓ', key: 'drag', invert: false, read: () => (q) => -q.cp * q.nx },
+	sigma: { label: 'σ', key: 'sigma', invert: false, read: () => (q) => q.sigma },
 };
-/** The field the section plot shows for the field on the car: itself, or Cp for a field added at run time. */
-const plottedField = (field) => (QUANTITY[field] ? field : 'cp');
+
+/**
+ * What the plot shows for a field: one of the model's, or one added at run time (a comparison's, an annotation's),
+ * read from its values at the working-mesh vertices; its reader is null on a case without it.
+ */
+function quantityOf(field) {
+	if (QUANTITY[field]) return QUANTITY[field];
+	const added = FIELDS[field];
+	return {
+		label: added.symbol,
+		key: field,
+		invert: added.map === 'cp',
+		read: (c) => {
+			const values = added.values?.(c);
+			return values ? (q) => interpolated(values, q) : null;
+		},
+	};
+}
+
+/** The field the section plot shows: the one on the car, or Cp where the car shown lacks it. */
+const plottedField = (field, c) => (FIELDS[field] && quantityOf(field).read(c) ? field : 'cp');
 
 /**
  * Position as a fraction of the car: along x, x/L from the nose; along y, 2y/W, 0 on the centreline and ±1 at the
@@ -62,10 +86,12 @@ function sectionOf(c, { axis, offset }) {
 /** Plot rows of a section on a case: per branch, rows {along, value, p} in path order, `along` on the plot's axis. */
 function sectionRows(c, plane, field, abscissa) {
 	const { along } = CUT_AXES[plane.axis];
-	const q = QUANTITY[field];
+	const read = quantityOf(field).read(c);
+	const cuts = sectionOf(c, plane).branches;
+	if (!read) return cuts.map(() => []);
 	const b = c.result.geometry.bounds;
 	const position = abscissa === 'fraction' ? (v) => FRACTIONS[along].of(b, v) : (v) => v;
-	return sectionOf(c, plane).branches.map((paths) => paths.map((path) => path.map((p) => ({ along: position(p.p[along]), value: q.value(p), p: p.p }))));
+	return cuts.map((paths) => paths.map((path) => path.map((p) => ({ along: position(p.p[along]), value: read(p), p: p.p }))));
 }
 
 /**
@@ -82,22 +108,29 @@ export function sectionStations(c, plane, count, branch) {
 
 const plotRanges = new WeakMap();
 
+/** A value range rounded outward to tidy ticks. */
+function tidy(lo, hi) {
+	const { step } = niceTicks(lo, hi, 5);
+	return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step];
+}
+
 /**
- * A field's value axis for a car: its lowest and highest value over the whole working mesh, rounded outward to tidy
- * ticks, so the axis holds still wherever the plane goes.
+ * A field's value axis for a car, held still wherever the plane goes: for the model's fields their lowest and highest
+ * value over the whole working mesh; for a field added at run time, whose extremes can sit far out on a few cells, its
+ * colour scale (`map`), as the car shows it.
  */
-function plotRange(c, field) {
+function plotRange(c, field, map) {
+	if (!QUANTITY[field]) return tidy(map.lo, map.hi);
 	const ranges = plotRanges.get(c) ?? plotRanges.set(c, {}).get(c);
 	if (ranges[field]) return ranges[field];
-	const { cp, sigma, normals } = c.result.mesh;
+	const { mesh } = c.result;
 	let lo = Infinity, hi = -Infinity;
-	for (let v = 0; v < cp.length; v++) {
-		const value = field === 'cp' ? cp[v] : field === 'sigma' ? sigma[v] : -cp[v] * normals[3 * v];
+	for (let v = 0; v < mesh.positions.length / 3; v++) {
+		const value = valueAt(mesh, field, v);
 		if (value < lo) lo = value;
 		if (value > hi) hi = value;
 	}
-	const { step } = niceTicks(lo, hi, 5);
-	ranges[field] = [Math.floor(lo / step) * step, Math.ceil(hi / step) * step];
+	ranges[field] = tidy(lo, hi);
 	return ranges[field];
 }
 
@@ -105,34 +138,39 @@ const planeLabel = ({ axis, offset }) => `${AXIS_NAMES[axis]} = ${signed(offset,
 
 /**
  * What the section plot shows: the live section and the kept ones that run along the same axis, each on the case
- * shown or on every case with a result. Series are section-major, each with its colour and label.
+ * shown or on every case with a result, and, beside Cp, what the car shown is compared with, read on its surface
+ * along the same cut (`alongside`). Series are section-major, each with its field, its colour, the name of what it
+ * shows (`source`) and its label in the key.
  */
 export function plotSeries(view, shown, cases) {
 	const s = view.section;
 	const along = CUT_AXES[s.axis].along;
+	const field = plottedField(view.field, shown);
 	const planes = [{ id: null, axis: s.axis, offset: s.offset }, ...s.kept.filter((k) => CUT_AXES[k.axis].along === along)];
 	// The car shown comes first, so its live section is plotted in the ink its line is drawn in.
 	const cars = s.cars === 'all' ? [shown, ...cases.filter((c) => c.result && c !== shown)] : [shown];
-	return planes.flatMap((plane, p) => cars.map((c, k) => ({
-		plane,
-		case: c,
-		colour: COLOURS[(p * cars.length + k) % COLOURS.length],
-		label: [planes.length > 1 ? planeLabel(plane) : null, cars.length > 1 ? c.name : null].filter(Boolean).join(' · '),
-	})));
+	const pair = field === 'cp' ? counterpart(view, cases, shown) : null;
+	// A car plotted already is not plotted again as what the car shown is compared with.
+	const alongside = pair && !cars.includes(pair.other);
+	const sectionName = (plane) => (planes.length > 1 ? planeLabel(plane) : null);
+	const series = planes.flatMap((plane) => [
+		...cars.map((c) => ({ plane, case: c, field, source: c.name, label: [sectionName(plane), cars.length > 1 ? c.name : alongside ? pair.mine : null].filter(Boolean).join(' · ') })),
+		...(alongside ? [{ plane, case: shown, field: COMPARED, alongside: true, source: pair.other?.name ?? pair.label, label: [sectionName(plane), pair.label].filter(Boolean).join(' · ') }] : []),
+	]);
+	return series.map((one, i) => ({ ...one, colour: COLOURS[i % COLOURS.length] }));
 }
 
-/** The plot's points for every series: case, section, branch, the point, its position as a fraction, the field. */
+/** The plot's points for every series: what it shows, section, branch, the point, its position as a fraction, the field. */
 export function sectionCsv(view, shown, cases) {
 	const along = CUT_AXES[view.section.axis].along;
 	const names = CUT_AXES[view.section.axis].branches;
 	const fraction = FRACTIONS[along];
-	const field = plottedField(view.field);
-	const lines = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', fraction.column, QUANTITY[field].key].join(',')];
+	const lines = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', fraction.column, quantityOf(plottedField(view.field, shown)).key].join(',')];
 	for (const series of plotSeries(view, shown, cases)) {
 		const b = series.case.result.geometry.bounds;
 		const label = `${AXIS_NAMES[series.plane.axis]}=${series.plane.offset}`;
-		sectionRows(series.case, series.plane, field, 'metres').forEach((paths, branch) => paths.forEach((path) => {
-			for (const r of path) lines.push([`"${series.case.name.replaceAll('"', '""')}"`, label, names[branch], ...r.p.map((v) => v.toFixed(6)), fraction.of(b, r.along).toFixed(6), r.value.toFixed(6)].join(','));
+		sectionRows(series.case, series.plane, series.field, 'metres').forEach((paths, branch) => paths.forEach((path) => {
+			for (const r of path) lines.push([`"${series.source.replaceAll('"', '""')}"`, label, names[branch], ...r.p.map((v) => v.toFixed(6)), fraction.of(b, r.along).toFixed(6), r.value.toFixed(6)].join(','));
 		}));
 	}
 	return lines.join('\n') + '\n';
@@ -244,7 +282,7 @@ export function defineSectionOperations({ session, update }) {
 			properties: {
 				case_id: { type: 'integer', description: 'Default the case on screen.' },
 				section_id: { type: 'integer', description: 'A kept section; default the live one.' },
-				field: { type: 'string', enum: Object.keys(QUANTITY), description: 'cp, drag (−Cp·nₓ) or sigma; default cp.' },
+				field: { type: 'string', description: 'cp, drag (−Cp·nₓ) or sigma, or a field added to the case, such as a comparison\'s compared and difference; default cp.' },
 				at_m: { type: 'array', items: { type: 'number' }, description: 'Positions along the plot axis, in metres, to read the field at.' },
 			},
 			additionalProperties: false,
@@ -252,7 +290,7 @@ export function defineSectionOperations({ session, update }) {
 		run({ case_id, section_id, field = 'cp', at_m = [] }) {
 			const c = case_id === undefined ? shown() : session.byId(case_id);
 			if (!c.result) throw new Error(`Case ${c.id} has no result yet (${c.status}).`);
-			oneOf('field', field, Object.keys(QUANTITY));
+			if (!FIELDS[field] || !quantityOf(field).read(c)) throw new Error(`Case ${c.id} has no field ${JSON.stringify(field)}. It has cp, drag, sigma${Object.keys(FIELDS).filter((key) => !QUANTITY[key] && FIELDS[key].values?.(c)).map((key) => `, ${key}`).join('')}.`);
 			at_m.forEach((x, i) => finite(`at_m[${i}]`, x));
 			let plane = view.section;
 			if (section_id !== undefined) {
@@ -393,7 +431,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const spots = [];
 		if (cursorAt !== null && enabled() && plot) {
 			for (const s of plot.series) {
-				if (s.case !== c) continue;
+				if (s.case !== c || s.alongside) continue;
 				s.rows.forEach((paths, b) => {
 					const point = pointAlong(paths, cursorAt);
 					if (point) spots.push({ point, colour: s.colour, lower: b === 1 });
@@ -421,17 +459,19 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	/** The section plot into an SVG of a given size, with its readout element. */
 	function drawSection(svg, readout, width, height) {
 		const s = view.section;
-		const field = plottedField(view.field);
-		const q = QUANTITY[field];
+		const field = plottedField(view.field, active());
+		const q = quantityOf(field);
 		const { along, branches: names } = CUT_AXES[s.axis];
-		const series = seriesNow().map((one) => ({ ...one, rows: sectionRows(one.case, one.plane, field, s.abscissa) }));
+		const series = seriesNow().map((one) => ({ ...one, rows: sectionRows(one.case, one.plane, one.field, s.abscissa) }));
 		const lines = series.flatMap((one) => one.rows.flatMap((paths, b) => paths.map((path) => ({ cls: `b${b}`, colour: one.colour, dashed: b === 1, points: path.map((r) => [r.along, r.value]) }))));
 		const cars = [...new Set(series.map((one) => one.case))];
 		const fraction = FRACTIONS[along];
 		const domain = s.abscissa === 'fraction'
 			? fraction.domain
 			: [Math.min(...cars.map((c) => c.result.geometry.bounds[2 * along])) - 0.05, Math.max(...cars.map((c) => c.result.geometry.bounds[2 * along + 1])) + 0.05];
-		const ranges = cars.map((c) => plotRange(c, field));
+		// One range per car whose field the plot reads; what the car shown is compared with is drawn on its axis.
+		const read = series.filter((one) => !one.alongside && quantityOf(one.field).read(one.case));
+		const ranges = [...new Set(read.map((one) => one.case))].map((c) => plotRange(c, field, view.maps?.[FIELDS[field].map]));
 		const label = s.abscissa === 'fraction' ? fraction.label : `${AXIS_NAMES[along]}, m`;
 		const frame = drawPlot(svg, { width, height, x: { domain, label }, y: { domain: [Math.min(...ranges.map((r) => r[0])), Math.max(...ranges.map((r) => r[1]))], label: q.label, invert: q.invert }, series: lines });
 		plot = { frame, series, readout, along, names, label };

@@ -43,6 +43,8 @@ export class Session extends EventTarget {
 			selection: null,
 			/** The probe set in use: the one clicks add to and the probe table shows; or null. */
 			probeSet: null,
+			/** What the car on screen is compared with, {with: 'cfd' or a case id, sideBySide}; or null. */
+			compare: null,
 		};
 		/** Saved regions, {id, name, terms}, which any car can be measured on. */
 		this.regions = [];

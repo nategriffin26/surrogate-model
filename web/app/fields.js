@@ -21,19 +21,21 @@ export const RESULT_FIELDS = ['cp', 'drag', 'sigma'];
 const ADDED = new Set();
 
 /**
- * Add a field the app supplies: its FIELDS entry under `key` (label, title, symbol, tip) and its colour map
- * {ramps, diverging, start}: the ramps offered, whether it diverges about zero, and the scale it starts at
- * ({ramp, lo, hi, bands}), which resetting its scale returns to.
+ * Add a field the app supplies: its FIELDS entry under `key` (label, title, symbol, tip, and `values(c)`, its value at
+ * each working-mesh vertex of case c as a Float32Array, or null where c has none) and its colour map: either the name
+ * of an existing field's map, to draw on that scale, or its own {ramps, diverging, start}: the ramps offered, whether
+ * it diverges about zero, and the scale it starts at ({ramp, lo, hi, bands}), which resetting its scale returns to.
  */
 export function addField(key, field, map) {
-	FIELDS[key] = { ...field, map: key };
-	MAPS[key] = map;
+	const own = typeof map !== 'string';
+	FIELDS[key] = { ...field, map: own ? key : map };
+	if (own) MAPS[key] = map;
 	ADDED.add(key);
 }
 
 export function removeField(key) {
+	if (FIELDS[key]?.map === key) delete MAPS[key];
 	delete FIELDS[key];
-	delete MAPS[key];
 	ADDED.delete(key);
 }
 
@@ -67,21 +69,19 @@ export function valueAt(mesh, field, v) {
 	}
 }
 
-/** The `quantile` of |value| over an even sample of about 20,000 of the mesh's vertices: ample for a 98 % range end. */
-function magnitudeQuantile(mesh, field, quantile) {
-	const count = mesh.positions.length / 3;
+/**
+ * The end of a scale spanning 98 % of `count` values (value(i) the i-th): |value| at the 98th percentile of an even
+ * sample of about 20,000 of them, rounded up to a value the legend can label cleanly.
+ */
+export function scaleEnd(count, value) {
 	const step = Math.max(1, Math.floor(count / 20000));
 	// A typed array sorts numerically and natively, several times faster than an array with a comparator.
 	const sample = new Float32Array(Math.ceil(count / step));
-	for (let v = 0, i = 0; v < count; v += step) sample[i++] = Math.abs(valueAt(mesh, field, v));
+	for (let v = 0, i = 0; v < count; v += step) sample[i++] = Math.abs(value(v));
 	sample.sort();
-	return sample[Math.floor(quantile * (sample.length - 1))];
-}
-
-/** Round a range end up to a value the legend can label cleanly. */
-function roundUp(x) {
-	const { step } = niceTicks(0, x, 4);
-	return Math.ceil(x / step - 1e-9) * step;
+	const end = sample[Math.floor(0.98 * (sample.length - 1))];
+	const { step: tick } = niceTicks(0, end, 4);
+	return Math.ceil(end / tick - 1e-9) * tick;
 }
 
 /**
@@ -89,15 +89,16 @@ function roundUp(x) {
  * spread and drag contribution span 98 % of the surface's values.
  */
 export function defaultMaps(mesh) {
+	const count = mesh.positions.length / 3;
+	const end = (field) => scaleEnd(count, (v) => valueAt(mesh, field, v));
+	const drag = end('drag');
 	const maps = {
 		cp: { ramp: 'coolwarm', lo: -0.9, hi: 0.9, bands: 0 },
-		sigma: { ramp: 'purples', lo: 0, hi: roundUp(magnitudeQuantile(mesh, 'sigma', 0.98)), bands: 0 },
-		drag: { ramp: 'tealorange', lo: 0, hi: 0, bands: 0 },
+		sigma: { ramp: 'purples', lo: 0, hi: end('sigma'), bands: 0 },
+		drag: { ramp: 'tealorange', lo: -drag, hi: drag, bands: 0 },
 	};
-	const drag = roundUp(magnitudeQuantile(mesh, 'drag', 0.98));
-	Object.assign(maps.drag, { lo: -drag, hi: drag });
 	if (mesh.cfd) {
-		const error = roundUp(magnitudeQuantile(mesh, 'error', 0.98));
+		const error = end('error');
 		maps.error = { ramp: 'coolwarm', lo: -error, hi: error, bands: 0 };
 	}
 	return maps;

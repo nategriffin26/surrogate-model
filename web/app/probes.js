@@ -105,6 +105,14 @@ async function siteAtPoint(engine, c, point, face = faceNear(c.result.mesh, poin
 	return { cell: polygon.index, corners: polygon.corners, point: polygon.center, normal: polygon.normal, cp: polygon.cp, sigma: polygon.sigma };
 }
 
+/** A field added at run time (fields.addField) on working-mesh face f of case c: the mean of its corners' values; null where the case has none. */
+function addedValue(c, field, f) {
+	const values = FIELDS[field]?.values?.(c);
+	if (!values) return null;
+	const I = c.result.mesh.indices;
+	return (values[I[3 * f]] + values[I[3 * f + 1]] + values[I[3 * f + 2]]) / 3;
+}
+
 /** Each probe's site on a case, by probe; looked up once per case. */
 const sitesOn = (c) => (c.sites ??= new WeakMap());
 
@@ -376,12 +384,12 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 }
 
 /**
- * host: the overlay over the 3D view; view: the shared view (its field is what the readout shows, its probe set the
- * one in use). run(name, args) runs an operation: a click pins its probe through `place_probe`. update(...parts)
- * redraws once probes read on another car are looked up. customValue(c, field, site) reads a field added at run
- * time at a probe site, or gives null.
+ * host: the overlay over the 3D view; view: the shared view (its probe set is the one in use). run(name, args) runs
+ * an operation: a click pins its probe through `place_probe`. update(...parts) redraws once probes read on another car
+ * are looked up. fieldIn(pane) names the field drawn in a pane of the 3D view: the readout shows the one under the
+ * cursor.
  */
-export function createProbes({ host, engine, viewer, active, session, workspace, update, run, customValue }) {
+export function createProbes({ host, engine, viewer, active, session, workspace, update, run, fieldIn }) {
 	const view = session.view;
 	const edge = s('polygon', { class: 'edge' });
 	const outline = s('svg', { class: 'cell-outline' }, s('polygon', { class: 'halo' }), edge);
@@ -439,7 +447,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 			return;
 		}
 		if (current?.c === c && holds(current.site, hit.point)) {
-			Object.assign(current, { clientX, clientY });
+			Object.assign(current, { clientX, clientY, pane: hit.pane, face: hit.face });
 			draw();
 			return;
 		}
@@ -451,7 +459,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 			pending = null;
 			const site = await siteAt(c, next.hit);
 			if (c !== active()) break;
-			current = site ? { c, site, clientX: next.clientX, clientY: next.clientY } : null;
+			current = site ? { c, site, pane: next.hit.pane, face: next.hit.face, clientX: next.clientX, clientY: next.clientY } : null;
 			draw();
 		}
 		looking = false;
@@ -468,23 +476,25 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 		const previewed = current?.c === c && Math.hypot(clientX - current.clientX, clientY - current.clientY) <= CLICK_PX;
 		const site = previewed ? current.site : await siteAt(c, hit);
 		if (!site || c !== active()) return;
-		current = { c, site, clientX, clientY };
+		current = { c, site, pane: hit.pane, face: hit.face, clientX, clientY };
 		await run('place_probe', { case_id: c.id, point: site.point });
 	}
 
-	/** The preview: outline, marker and readout, placed for the camera as it is now. */
+	/** The preview: outline, marker and readout, placed for the camera as it is now, in the pane under the cursor. */
 	function draw() {
 		const site = over && current?.c === active() ? current.site : null;
-		const centre = site && !viewer.clipped(site.point) ? viewer.project(site.point) : null;
-		const reading = site ? (VALUE[view.field] ? VALUE[view.field](site) : customValue(current.c, view.field, site)) : null;
+		const pane = current?.pane ?? 0;
+		const centre = site && !viewer.clipped(site.point) ? viewer.project(site.point, pane) : null;
+		const field = fieldIn(pane);
+		const reading = site ? (VALUE[field] ? VALUE[field](site) : addedValue(current.c, field, current.face)) : null;
 		preview.hidden = !centre?.visible || reading === null || reading === undefined;
 		if (preview.hidden) return;
 		const corners = [];
-		for (let k = 0; k < site.corners.length / 3; k++) corners.push(viewer.project(corner(site.corners, k)));
+		for (let k = 0; k < site.corners.length / 3; k++) corners.push(viewer.project(corner(site.corners, k), pane));
 		const points = corners.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 		for (const polygon of outline.children) polygon.setAttribute('points', points);
 		marker.style.transform = `translate(${centre.x}px, ${centre.y}px)`;
-		symbol.textContent = FIELDS[view.field].symbol;
+		symbol.textContent = FIELDS[field].symbol;
 		value.textContent = signed(reading, 3);
 		site.point.forEach((x, k) => (coordinates[k].textContent = signed(x, 3)));
 		// Beside the cell and its marker: on the right unless that leaves the view, centred on the marker's height.

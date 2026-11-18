@@ -9,7 +9,6 @@
 // face reaches it as the area-weighted mean of the faces around each vertex, as the model's own fields do.
 
 import { Annotations, rgbOf } from '../viewer/annotations.js';
-import { FaceIndex, VertexGrid } from '../viewer/picking.js';
 import { finite, oneOf, round, triple } from './checks.js';
 import { h, s } from './dom.js';
 import { FIELDS, MAPS, addField, removeField } from './fields.js';
@@ -55,7 +54,7 @@ const KIND_WORDS = { labels: ['label', 'labels'], points: ['point', 'points'], l
  * @property {number} width    line width, CSS px
  * @property {import('../viewer/annotations.js').Mark[]} marks
  * @property {Uint8Array | null} paint  RGBA per working-mesh face; alpha 0 leaves a face unpainted
- * @property {{ key: string, unit: string, faces: Float32Array, vertices: Float32Array, source: string } | null} field
+ * @property {{ key: string, unit: string, vertices: Float32Array, source: string } | null} field
  */
 
 /** Per case: its layers in drawing order, later on top, and a number that changes whenever they do. */
@@ -261,6 +260,12 @@ function toFaces(mesh, vertices) {
 	return faces;
 }
 
+/** Every face a layer paints in one colour, each keeping its opacity. */
+function repaint(paint, colour) {
+	const [r, g, b] = rgbOf(colour);
+	for (let i = 0; i < paint.length; i += 4) if (paint[i + 3]) paint.set([r, g, b], i);
+}
+
 /**
  * The paint of a case's visible layers, per vertex as the viewer takes it: each face the colour of the topmost layer
  * that paints it; each vertex the area-weighted colour and strength of the painted faces around it, and the share of
@@ -360,14 +365,13 @@ function statistics(values, areas) {
 /**
  * app: { session, engine, viewer, view, overlay, update, run }. Defines the annotation operations and returns what
  * the rest of the app reads: `apply(c)` lays case c's annotations on the viewer, `fields(c)` its fields' keys,
- * `customValue(c, field, site)` a field's value at a probe site, `paintLabels(ctx, scale)` the labels for the
- * picture, and `panel`, the dock's Layers tab.
+ * `paintLabels(ctx, scale)` the labels for the picture, and `panel`, the dock's Layers tab. A field's values reach
+ * the viewer, the probes and the plots through its entry in fields.js.
  */
 export function createAnnotations({ session, engine, viewer, view, overlay, update, run }) {
 	const drawing = new Annotations(viewer, overlay);
 	const cellsKept = new WeakMap();
 	const cellsOf = (result) => cellsKept.get(result) ?? cellsKept.set(result, engine.workingCells(result)).get(result);
-	const lookups = new WeakMap();
 	/** What was last handed to the viewer, so an update that changes nothing hands it nothing. */
 	let pushed = {};
 
@@ -422,7 +426,8 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	/** Make sure the field `key` is offered while any case has it, at the scale given. */
 	function offerField(key, name, unit, source, start, diverging) {
-		addField(key, { label: name, title: unit ? `${name} (${unit})` : name, symbol: name, tip: source }, { ramps: [start.ramp, ...RAMP_NAMES.filter((r) => r !== start.ramp)], diverging, start });
+		const values = (c) => (c?.result && stores.has(c) ? fieldLayer(c, key)?.field.vertices ?? null : null);
+		addField(key, { label: name, title: unit ? `${name} (${unit})` : name, symbol: name, tip: source, values }, { ramps: [start.ramp, ...RAMP_NAMES.filter((r) => r !== start.ramp)], diverging, start });
 		view.maps ??= {};
 		view.maps[key] = { ...start };
 	}
@@ -470,7 +475,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			store.layers.push(layer);
 		}
 		const source = expression !== undefined ? String(expression) : 'From Python';
-		layer.field = { key, unit: String(unit), faces, vertices, source };
+		layer.field = { key, unit: String(unit), vertices, source };
 		offerField(key, label, layer.field.unit, source, { ramp: chosen, lo, hi, bands: 0 }, diverging);
 		view.field = key;
 		changed(c, 'toolbar', 'legend', 'markers');
@@ -486,6 +491,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		const cells = cellsOf(c.result);
 		const faces = cells.areas.length;
 		const rgba = new Uint8Array(4 * faces);
+		const colour = colours === undefined ? colourOf('colour', args.colour ?? 'orange') : undefined;
 		if (colours !== undefined) {
 			rgba.set(itemColours('colours', colours, faces));
 		} else {
@@ -499,12 +505,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 				if (!ArrayBuffer.isView(mask) || mask.length !== faces) throw new Error(`mask must hold one value per face of the working mesh (${faces}); got ${mask?.length ?? JSON.stringify(mask)}.`);
 				picked = mask;
 			}
-			const [r, g, b] = rgbOf(colourOf('colour', args.colour ?? 'orange'));
+			const [r, g, b] = rgbOf(colour);
 			const opacity = args.opacity === undefined ? 1 : finite('opacity', args.opacity);
 			if (opacity <= 0 || opacity > 1) throw new Error(`opacity must be above 0 and at most 1; got ${opacity}.`);
 			for (let f = 0; f < faces; f++) if (picked[f]) rgba.set([r, g, b, Math.round(255 * opacity)], 4 * f);
 		}
-		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES.paint), by, {});
+		const layer = drawingLayer(c, nameOf(args.layer, DEFAULT_NAMES.paint), by, { colour });
 		if (!layer.paint) layer.paint = rgba;
 		else for (let f = 0; f < faces; f++) if (rgba[4 * f + 3]) layer.paint.set(rgba.subarray(4 * f, 4 * f + 4), 4 * f);
 		layer.visible = true;
@@ -532,8 +538,6 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		const shown = c?.result ? c : null;
 		const store = shown && stores.get(shown);
 		if (pushed.surface !== viewer.surface) pushed = { surface: viewer.surface };
-		const custom = store ? fieldLayer(shown, view.field)?.field.vertices ?? null : null;
-		if (custom !== pushed.custom) viewer.setCustomField((pushed.custom = custom));
 		const paint = store ? paintOf(shown) : null;
 		if (paint !== pushed.paint) viewer.setPaint((pushed.paint = paint));
 		const marks = store ? `${shown.id}:${store.version}` : null;
@@ -542,16 +546,6 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const layers = store ? store.layers.filter((layer) => layer.kind === 'drawing' && layer.visible) : [];
 			drawing.show(layers.map(({ colour, width, marks }) => ({ colour, width, marks })), shown?.result.mesh ?? null);
 		}
-	}
-
-	/** A field's value on case c at a probe site: that of the working-mesh face nearest the site's point. */
-	function customValue(c, field, site) {
-		const layer = c?.result ? fieldLayer(c, field) : null;
-		if (!layer) return null;
-		const mesh = c.result.mesh;
-		let lookup = lookups.get(mesh);
-		if (!lookup) lookups.set(mesh, (lookup = { grid: new VertexGrid(mesh.positions), faces: new FaceIndex(mesh) }));
-		return layer.field.faces[lookup.faces.faceAt(site.point, lookup.grid.nearest(site.point))];
 	}
 
 	// ---- operations ----
@@ -812,7 +806,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 
 	defineOperation({
 		name: 'set_layer',
-		description: 'Show, hide, rename or restyle a layer. Showing a field layer colours the car by its field; hiding it goes back to pressure.',
+		description: 'Show, hide, rename or restyle a layer. Showing a field layer colours the car by its field; hiding it goes back to pressure. A new colour repaints the faces the layer paints.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -848,7 +842,10 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			}
 			if (colour !== undefined || width_px !== undefined) {
 				if (layer.kind === 'field') throw new Error(`"${layer.name}" is a field; change its colours with set_colour_scale.`);
-				if (colour !== undefined) layer.colour = colourOf('colour', colour);
+				if (colour !== undefined) {
+					layer.colour = colourOf('colour', colour);
+					if (layer.paint) repaint(layer.paint, layer.colour);
+				}
 				if (width_px !== undefined) layer.width = widthOf('width_px', width_px);
 			}
 			if (visible !== undefined) {
@@ -895,7 +892,6 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	return {
 		apply,
 		fields: (c) => (c && stores.has(c) ? storeOf(c).layers.filter((layer) => layer.kind === 'field').map((layer) => layer.field.key) : []),
-		customValue,
 		paintLabels: (ctx, scale) => drawing.paintLabels(ctx, scale),
 		panel,
 	};

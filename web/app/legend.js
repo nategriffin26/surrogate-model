@@ -184,6 +184,7 @@ export function paintLegend(ctx, x, y, scale, title, map) {
 	ctx.fillStyle = '#0d2233';
 	ctx.font = font(12.5, 600);
 	ctx.textBaseline = 'top';
+	ctx.textAlign = 'left';
 	ctx.fillText(title, x + pad, y + 9 * scale);
 	const bar = document.createElement('canvas');
 	bar.width = width;

@@ -339,6 +339,7 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: rise 0.35s var(--ease) both;
 }
 .result-card.settled { animation: none; }
+.side-by-side .result-card { display: none; }
 .result-label { font-weight: 600; font-size: 12.5px; color: var(--heading); }
 .headline { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
 .symbol { color: var(--muted); font-size: 14px; font-style: italic; }
@@ -406,6 +407,22 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .histogram-controls .tool { height: 28px; }
 .histogram-readout { margin-right: 10px; color: var(--heading); font-size: 12.5px; }
 .histogram-readout:empty { display: none; }
+
+/* ---- compare ---- */
+.compare-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
+.compare-controls .tool { height: 28px; }
+.compare-controls .tool[aria-pressed="true"] { color: var(--link); background: var(--tint); }
+.compare-empty { display: flex; align-items: center; gap: 4px; padding: 10px 0; font-size: 13px; color: var(--muted); }
+.compare-empty span { margin-right: 6px; }
+.compare-table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.compare-table th { position: sticky; background: #fff; text-align: right; font-weight: 500; color: var(--muted); padding: 6px 8px; white-space: nowrap; }
+.compare-table thead tr:first-child th { top: 0; padding-bottom: 2px; color: var(--heading); }
+.compare-table thead tr:last-child th { top: 24px; border-bottom: 1px solid var(--hair); }
+.compare-table .compare-groups th[colspan] { text-align: center; }
+.compare-table th:first-child, .compare-table td.compare-name { text-align: left; padding-right: 20px; }
+.compare-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--hair); color: var(--heading); white-space: nowrap; }
+.compare-table td.compare-delta { font-weight: 600; padding-right: 20px; }
+.compare-table td.compare-name { font-weight: 500; }
 
 /* ---- regions ---- */
 .regions-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }

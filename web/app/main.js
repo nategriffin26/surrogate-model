@@ -10,6 +10,7 @@ import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
 import { VIEWS, Viewer } from '../viewer/viewer.js';
 import { createAnnotations } from './annotations.js';
+import { createComparison } from './compare.js';
 import { defineCaseOperations } from './cases.js';
 import { createSectionTool, defineSectionOperations } from './cut.js';
 import { defineDisplayOperations } from './display.js';
@@ -71,13 +72,17 @@ function mapFor(field) {
 	return { ...map, bands: bandCount(map) };
 }
 
-/** The field the car shows: the view's, when the case on screen has it, else pressure. */
-const shownField = () => (RESULT_FIELDS.includes(view.field) || annotations.fields(active()).includes(view.field) ? view.field : 'cp');
+/** The fields case c can be coloured by: the model's, then a comparison's and the annotations'. */
+const fieldsOf = (c) => [...RESULT_FIELDS, ...comparison.fields(c), ...annotations.fields(c)];
 
-/** The panes the car is drawn in: the shared field, once the case on screen has one. */
+/** The field the car shows: the view's, when the case on screen has it, else pressure. */
+const shownField = () => (fieldsOf(active()).includes(view.field) ? view.field : 'cp');
+
+/** The panes the car is drawn in: the shared field, or this car beside what it is compared with. */
 function panes() {
 	const field = active()?.result ? shownField() : 'none';
-	return [{ field, map: mapFor(field) }];
+	const sideBySide = field === 'none' ? null : comparison.panes(active(), field);
+	return (sideBySide ?? [{ field }]).map((pane) => ({ ...pane, map: mapFor(pane.field) }));
 }
 
 /** The field the legend shows and edits: the first pane drawn in colour. */
@@ -93,6 +98,7 @@ defineProbeOperations(tool);
 const regions = createRegions(tool);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
 defineHistogramOperations({ session, regions });
+const comparison = createComparison({ session, regions, update, run });
 defineExportOperations(tool);
 const files = defineFileOperations(tool);
 
@@ -154,13 +160,14 @@ const legend = createLegend({
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, customValue: (c, field, site) => annotations.customValue(c, field, site) });
+const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
 const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
 /** The dock's panel tabs; each one's `stop` undoes what it shows on the car when another tab is chosen. */
 const panels = [
 	{ name: 'regions', label: 'Regions', ...regionsPanel },
 	{ name: 'histogram', label: 'Histogram', ...createHistogramPanel({ session, regions, active: described, run }) },
+	{ name: 'compare', label: 'Compare', ...comparison.panel },
 	{ name: 'layers', label: 'Layers', ...annotations.panel },
 ];
 
@@ -174,7 +181,8 @@ const dock = createDock({
 		tab: (name) => {
 			// Painting, a lasso or a brushed range belongs to its tab; leaving it gives the car back.
 			for (const panel of panels) if (panel.name !== name) panel.stop();
-			if (name === 'section') return run('set_section', { on: true });
+			// Choosing Section turns the section on, which brings its plot up; when it is on already the tab just shows it.
+			if (name === 'section' && !view.section.on) return run('set_section', { on: true });
 			view.dock = name;
 			view.dockCollapsed = false;
 			update('toolbar', 'viewer', 'dock', 'layout');
@@ -368,7 +376,7 @@ function renderToolbar() {
 	const c = active();
 	const enabled = Boolean(c?.result);
 	toolbar.render({
-		fields: [...RESULT_FIELDS, ...annotations.fields(c)],
+		fields: fieldsOf(c),
 		field: shownField(),
 		maps: view.maps,
 		enabled,
@@ -389,7 +397,12 @@ function applyViewer() {
 	const c = active();
 	const shown = panes();
 	viewer.setPanes(shown);
+	// The one field the app supplies (fields.addField), for whichever pane draws one.
+	const supplied = (c?.result && shown.map((pane) => FIELDS[pane.field].values?.(c)).find(Boolean)) || null;
+	if (supplied !== viewer.custom) viewer.setCustomField(supplied);
 	paneLabels.replaceChildren(...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []));
+	// Two cars side by side take the whole view; the comparison table in the dock carries the card's numbers.
+	body.classList.toggle('side-by-side', shown.length > 1);
 	const s = view.section;
 	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
 	viewer.setKeptSections(c?.result && s.on ? section.keptLines() : []);

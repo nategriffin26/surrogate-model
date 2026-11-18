@@ -67,8 +67,9 @@ function nearby(mesh, axis, offset) {
 
 /**
  * The surface cut by the plane coordinate[axis] = offset. Returns polylines, each an array of points
- * {p: [x, y, z], cp, sigma, nx}, and whether it closes on itself. A point sits on a mesh edge and its fields are
- * interpolated linearly along that edge, as the GPU does when it draws the triangle.
+ * {p: [x, y, z], cp, sigma, nx, a, b, t}, and whether it closes on itself. A point sits on the mesh edge from vertex a
+ * to vertex b, a share t of the way along, and its fields are interpolated linearly along that edge, as the GPU does
+ * when it draws the triangle; any other per-vertex field is read there the same way (`interpolated`).
  */
 export function cut(mesh, axis, offset) {
 	const { positions: P, indices: I } = mesh;
@@ -88,6 +89,9 @@ export function cut(mesh, axis, offset) {
 			cp: lerp(mesh.cp),
 			sigma: lerp(mesh.sigma),
 			nx: mesh.normals[3 * a] + (mesh.normals[3 * b] - mesh.normals[3 * a]) * t,
+			a,
+			b,
+			t,
 			links: [],
 		};
 		crossings.set(key, point);
@@ -110,6 +114,9 @@ export function cut(mesh, axis, offset) {
 	else for (let t = 0; t < I.length / 3; t++) visit(t);
 	return chain(crossings);
 }
+
+/** A per-vertex field at a cut point, interpolated along its edge. */
+export const interpolated = (values, point) => values[point.a] + (values[point.b] - values[point.a]) * point.t;
 
 /** Join segments that share a crossing into polylines. */
 function chain(crossings) {
