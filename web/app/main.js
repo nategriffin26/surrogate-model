@@ -161,7 +161,7 @@ const legend = createLegend({
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
+const probes = createProbes({ host: overlay, engine, viewer, active, session, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
 defineReport({ session, engine, section, comparison, variants });
 /** The dock's panel tabs after Section and Probes. */

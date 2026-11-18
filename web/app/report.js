@@ -95,9 +95,8 @@ export function defineReport({ session, engine, section, comparison, variants })
 		const set = session.probeSets.find((x) => x.id === view.probeSet);
 		if (!set?.probes.length) return '';
 		const sites = await readSet(engine, c, set);
-		const labels = set.probes.some((p) => p.label);
-		const rows = set.probes.map((p, i) => [p.n, ...(labels ? [p.label ?? ''] : []), ...sites[i].point.map((v) => signed(v, 3)), number(sites[i].cp), number(sites[i].sigma)]);
-		return `<h2>Probes: ${escape(set.name)}</h2>${table(['Probe', ...(labels ? ['Label'] : []), 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
+		const rows = set.probes.map((p, i) => [p.n, ...sites[i].point.map((v) => signed(v, 3)), number(sites[i].cp), number(sites[i].sigma)]);
+		return `<h2>Probes: ${escape(set.name)}</h2>${table(['Probe', 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
 	}
 
 	function comparisonPart(c) {

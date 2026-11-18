@@ -404,7 +404,6 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .probe-actions .tool { height: 28px; }
 .probe-actions .icon { width: 14px; height: 14px; }
 .probe-set { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--heading); }
-.probe-table th.probe-label, .probe-table td.probe-label { text-align: left; }
 .menu-count { color: var(--faint); font-variant-numeric: tabular-nums; }
 .menu-field { padding: 4px 6px; }
 .menu-field .number { width: 100%; text-align: left; }

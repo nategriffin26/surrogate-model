@@ -5,21 +5,20 @@
 // exactly what the preview shows.
 //
 // Probes come in named sets that belong to the session, each probe a point in metres, so a set made on one car reads
-// the same places on another: every car reads each probe at its own cell nearest the point. A set grows by clicks, by
-// stations along the section, or from a CSV of points; the dock's table shows the set in use, read on the car shown.
+// the same places on another: every car reads each probe at its own cell nearest the point. A set grows by clicks or by
+// stations along the section; the dock's table shows the set in use, read on the car shown.
 
 import { VertexGrid, FaceIndex } from '../viewer/picking.js';
 import { oneOf, round, triple } from './checks.js';
 import { CUT_AXES } from './section.js';
 import { sectionStations } from './cut.js';
-import { h, s } from './dom.js';
+import { h, put, s } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
 import { signed } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
-import { normalPath } from './workspace.js';
 
 /** A probe site's value of each field the Result view shows. */
 const VALUE = { cp: (site) => site.cp, sigma: (site) => site.sigma, drag: (site) => -site.cp * site.normal[0] };
@@ -46,8 +45,6 @@ const TOUCH = matchMedia('(pointer: coarse)');
 /** Stations along a section: at most this many, and this many when none is said. */
 const MOST_STATIONS = 200;
 const STATIONS = 20;
-/** A coordinate beyond this many metres is not a point on a car: most likely millimetres. */
-const FARTHEST_M = 50;
 
 const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
 const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
@@ -128,39 +125,9 @@ export async function readSet(engine, c, set) {
 /** The probe table of a set on a case as CSV; a dropped file's probes name the file's cell, so each can be found again in the file. */
 export function probesCsv(c, set, sites) {
 	const cells = c.kind === 'file';
-	const labels = set.probes.some((p) => p.label);
-	const quote = (text) => `"${text.replaceAll('"', '""')}"`;
-	const head = ['probe', ...(labels ? ['label'] : []), ...(cells ? ['cell'] : []), ...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key))];
-	const rows = set.probes.map((p, i) => [p.n, ...(labels ? [quote(p.label ?? '')] : []), ...(cells ? [sites[i].cell ?? ''] : []), ...COLUMNS.map((col) => col.read(sites[i]).toFixed(6))]);
+	const head = ['probe', ...(cells ? ['cell'] : []), ...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key))];
+	const rows = set.probes.map((p, i) => [p.n, ...(cells ? [sites[i].cell ?? ''] : []), ...COLUMNS.map((col) => col.read(sites[i]).toFixed(6))]);
 	return [head, ...rows].map((r) => r.join(',')).join('\n') + '\n';
-}
-
-/**
- * Points from CSV text: a header naming x, y and z (x_m and the like) and optionally a label (label, name or tap), or
- * no header and the columns x, y, z or label, x, y, z. Commas, tabs or semicolons separate; coordinates are metres.
- */
-export function parsePoints(text) {
-	const rows = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => line.split(/[,;\t]/).map((cell) => cell.trim().replace(/^"(.*)"$/, '$1')));
-	if (rows.length === 0) throw new Error('The CSV is empty.');
-	const numeric = (cell) => cell !== '' && Number.isFinite(Number(cell.replace('\u2212', '-')));
-	let columns;
-	let body = rows;
-	if (!rows[0].every(numeric) && !(rows[0].length === 4 && rows[0].slice(1).every(numeric))) {
-		const head = rows[0].map((cell) => cell.toLowerCase());
-		const find = (pattern) => head.findIndex((name) => pattern.test(name));
-		columns = { x: find(/^x(_m)?$/), y: find(/^y(_m)?$/), z: find(/^z(_m)?$/), label: find(/^(label|name|tap)$/) };
-		if (columns.x < 0 || columns.y < 0 || columns.z < 0) throw new Error(`The CSV's header (${rows[0].join(', ')}) needs columns named x, y and z.`);
-		body = rows.slice(1);
-	} else {
-		columns = rows[0].length >= 4 && !numeric(rows[0][0]) ? { label: 0, x: 1, y: 2, z: 3 } : { label: -1, x: 0, y: 1, z: 2 };
-	}
-	return body.map((row, i) => {
-		const point = ['x', 'y', 'z'].map((axis) => Number((row[columns[axis]] ?? '').replace('\u2212', '-')));
-		if (!point.every(Number.isFinite)) throw new Error(`Row ${i + 1} of the points has no number for x, y or z: ${row.join(', ')}.`);
-		if (point.some((v) => Math.abs(v) > FARTHEST_M)) throw new Error(`Row ${i + 1} lies ${Math.max(...point.map(Math.abs))} m from the origin. Give the points in metres.`);
-		const label = columns.label >= 0 ? row[columns.label] : '';
-		return { point, ...(label ? { label } : {}) };
-	});
 }
 
 /** The first "Set n" no set is named. */
@@ -171,7 +138,6 @@ function freeSetName(sets) {
 /** A probe as operations report it, read on a case. */
 const probeResult = (p, site) => ({
 	number: p.n,
-	...(p.label ? { label: p.label } : {}),
 	...(site.cell === null ? {} : { cell: site.cell }),
 	point_m: site.point.map((v) => round(v, 5)),
 	normal: site.normal.map((v) => round(v, 4)),
@@ -179,8 +145,8 @@ const probeResult = (p, site) => ({
 	sigma: round(site.sigma),
 });
 
-/** app: { session, engine, workspace, update }. Probe sets as operations, and the probe table as an export. */
-export function defineProbeOperations({ session, engine, workspace, update }) {
+/** app: { session, engine, update }. Probe sets as operations, and the probe table as an export. */
+export function defineProbeOperations({ session, engine, update }) {
 	const view = session.view;
 	let nextSet = 1;
 	const target = (case_id) => {
@@ -206,7 +172,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 		if (session.probeSets.some((x) => x.name === label)) throw new Error(`A probe set is already named ${JSON.stringify(label)}. Choose another name.`);
 		return label;
 	};
-	/** A new set in use, holding probes at `points` ({point, label?}) snapped to the cells of case c. */
+	/** A new set in use, holding probes at `points` ([x, y, z] each) snapped to the cells of case c. */
 	async function addSet(name, points, c) {
 		const set = { id: nextSet++, name: freeName(name), probes: [], next: 1 };
 		await addProbes(set, points, c);
@@ -217,9 +183,9 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 	}
 	/** Probes at points, each at the centre of its cell on case c, which is where any other car looks for it. */
 	async function addProbes(set, points, c) {
-		const sites = await Promise.all(points.map(({ point }) => siteAtPoint(engine, c, point)));
-		return sites.map((site, i) => {
-			const probe = { n: set.next++, point: site.point, ...(points[i].label ? { label: points[i].label } : {}) };
+		const sites = await Promise.all(points.map((point) => siteAtPoint(engine, c, point)));
+		return sites.map((site) => {
+			const probe = { n: set.next++, point: site.point };
 			sitesOn(c).set(probe, site);
 			set.probes.push(probe);
 			return probe;
@@ -243,7 +209,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 			const at = triple('point', point);
 			if (set_id === undefined && !session.probeSets.some((x) => x.id === view.probeSet)) await addSet(freeSetName(session.probeSets), [], c);
 			const set = chosen(set_id);
-			const [probe] = await addProbes(set, [{ point: at }], c);
+			const [probe] = await addProbes(set, [at], c);
 			update('dock', 'layout', 'markers');
 			return { set_id: set.id, ...probeResult(probe, sitesOn(c).get(probe)) };
 		},
@@ -271,33 +237,14 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 			const points = sectionStations(c, plane, count, b);
 			if (points.length === 0) throw new Error('The section cuts no outer surface there. Move it onto the car.');
 			const axis = ['x', 'y', 'z'][plane.axis];
-			const set = await addSet(name ?? `${axis} = ${signed(plane.offset, 3)} m, ${CUT_AXES[plane.axis].branches[b].toLowerCase()}`, points.map((point) => ({ point })), c);
-			return { ...setSummary(set), probes: set.probes.map((p) => probeResult(p, sitesOn(c).get(p))) };
-		},
-	});
-
-	defineOperation({
-		name: 'import_probes',
-		description: `Make a probe set from a CSV file in the workspace: a header naming x, y and z (x_m and the like) and optionally label, name or tap; or no header and the columns x, y, z or label, x, y, z. Coordinates are metres; each probe sits at the surface cell nearest its point on the case. The set comes into use.`,
-		parameters: {
-			type: 'object',
-			properties: { path: { type: 'string', description: 'The CSV\'s path in the workspace.' }, name: { type: 'string', description: 'Name of the set; default the file\'s name.' }, case_id: caseId },
-			required: ['path'],
-			additionalProperties: false,
-		},
-		async run({ path, name, case_id }) {
-			const c = target(case_id);
-			const file = workspace.file(normalPath(path));
-			if (!file) throw new Error(`There is no file "${path}" in the workspace.`);
-			const points = parsePoints(await file.blob.text());
-			const set = await addSet(name ?? file.path.split('/').pop().replace(/\.[^.]+$/, ''), points, c);
+			const set = await addSet(name ?? `${axis} = ${signed(plane.offset, 3)} m, ${CUT_AXES[plane.axis].branches[b].toLowerCase()}`, points, c);
 			return { ...setSummary(set), probes: set.probes.map((p) => probeResult(p, sitesOn(c).get(p))) };
 		},
 	});
 
 	defineOperation({
 		name: 'list_probes',
-		description: 'The probe sets, and the probes of one (default the set in use) read on a case: each one\'s number, label, cell, centre, normal, Cp and σ.',
+		description: 'The probe sets, and the probes of one (default the set in use) read on a case: each one\'s number, cell, centre, normal, Cp and σ.',
 		parameters: { type: 'object', properties: { case_id: caseId, set_id: setId }, additionalProperties: false },
 		async run({ case_id, set_id }) {
 			const sets = session.probeSets.map(setSummary);
@@ -369,7 +316,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 		name: 'probes',
 		label: 'Probes',
 		format: 'CSV',
-		title: 'The probe table of the set in use: number, label, file cell, position, Cp and σ',
+		title: 'The probe table of the set in use: number, file cell, position, Cp and σ',
 		unavailable: () => (session.probeSets.find((x) => x.id === view.probeSet)?.probes.length ? null : 'There are no probes in use. Click the car to place one.'),
 		make: async (c) => {
 			const set = chosen();
@@ -385,7 +332,7 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
  * are looked up. fieldIn(pane) names the field drawn in a pane of the 3D view: the readout shows the one under the
  * cursor.
  */
-export function createProbes({ host, engine, viewer, active, session, workspace, update, run, fieldIn }) {
+export function createProbes({ host, engine, viewer, active, session, update, run, fieldIn }) {
 	const view = session.view;
 	const edge = s('polygon', { class: 'edge' });
 	const outline = s('svg', { class: 'cell-outline' }, s('polygon', { class: 'halo' }), edge);
@@ -515,7 +462,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 			marker.hidden = !site;
 			if (!site) return;
 			const p = viewer.project(site.point);
-			marker.firstChild.textContent = set.probes[i].label ?? set.probes[i].n;
+			marker.firstChild.textContent = set.probes[i].n;
 			marker.hidden = !p.visible;
 			marker.style.transform = `translate(${p.x}px, ${p.y}px)`;
 		});
@@ -532,14 +479,12 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 		// Placing a probe is a click or a tap on the car, which no control in the tab shows.
 		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`);
 		const sites = known(c, set);
-		const labels = set.probes.some((p) => p.label);
 		const remove = (n) => run('remove_probe', { number: n });
 		return h('div', { class: 'probes' },
 			h('table', { class: 'probe-table' },
-				h('thead', {}, h('tr', {}, h('th', {}, '#'), labels ? h('th', { class: 'probe-label' }, 'Label') : null, COLUMNS.map((col) => h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null)), h('th', {}))),
+				h('thead', {}, h('tr', {}, h('th', {}, '#'), COLUMNS.map((col) => h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null)), h('th', {}))),
 				h('tbody', {}, set.probes.map((p, i) => h('tr', { 'data-probe': p.n },
 					h('td', { class: 'probe-n' }, p.n),
-					labels ? h('td', { class: 'probe-label' }, p.label ?? '') : null,
 					COLUMNS.map((col) => h('td', { class: 'num' }, sites[i] ? signed(col.read(sites[i]), 3) : '')),
 					h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove probe ${p.n}`, onclick: () => remove(p.n) }, icon('close'))))))));
 	}
@@ -550,16 +495,6 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	const setList = h('div', { class: 'menu-list', role: 'menu' });
 	const setButton = h('button', { type: 'button', class: 'tool probe-set', title: 'The probe set in use' });
 	const sets = menu(setButton, setList);
-	const picker = h('input', { type: 'file', accept: '.csv,.txt,text/csv', hidden: true });
-	picker.addEventListener('change', async () => {
-		const file = picker.files[0];
-		picker.value = '';
-		if (!file) return;
-		// Kept in the workspace, so the set can be made again from it and the assistant can read it.
-		const path = workspace.freePath(`probes/${file.name}`);
-		workspace.write(path, file, 'engineer');
-		await quietly(run('import_probes', { path }));
-	});
 	const naming = h('input', { class: 'number probe-set-name', type: 'text', 'aria-label': 'Set name', spellcheck: 'false' });
 	naming.addEventListener('keydown', (e) => {
 		if (e.key === 'Escape') return renderSets();
@@ -571,11 +506,10 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	function renderSets(renaming = false) {
 		const set = inUse();
 		const item = (label, onclick, extra = {}) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick, ...extra }, label);
-		setList.replaceChildren(
+		put(setList,
 			...session.probeSets.map((x) => item([x.name, h('span', { class: 'menu-count' }, String(x.probes.length))], () => { sets.close(); quietly(run('use_probe_set', { set_id: x.id })); }, { role: 'menuitemradio', 'aria-checked': String(x === set) })),
 			session.probeSets.length ? h('hr', { class: 'menu-rule' }) : null,
 			item('New set', () => { sets.close(); quietly(run('use_probe_set', { name: freeSetName(session.probeSets) })); }),
-			item('Import CSV…', () => { sets.close(); picker.click(); }),
 			set && !renaming ? item('Rename', () => { renderSets(true); naming.value = set.name; naming.focus(); naming.select(); }) : null,
 			set && renaming ? h('div', { class: 'menu-field' }, naming) : null,
 			set ? item(`Delete ${set.name}`, () => { sets.close(); quietly(run('delete_probe_set', { set_id: set.id })); }, { class: 'menu-item danger' }) : null);
@@ -602,7 +536,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	});
 
 	const clear = h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('clear_probes', {})) }, icon('close'), 'Clear');
-	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, picker, stations.el, clear);
+	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, stations.el, clear);
 
 	/** The dock's header for the probes, brought up to date: the set in use and what can be done with it. */
 	function actions() {
