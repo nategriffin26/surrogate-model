@@ -88,8 +88,8 @@ export function mountModelPage(host, { engine }) {
 		notice.replaceChildren(message);
 	};
 	Promise.all([engine.model, loadTrainingCars(), loadCopy()]).then(([card, training]) => {
-		// Values any words may name: {inputs}, {networks}, {networksWord}, and {car}, the reference car.
-		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length), car: REFERENCE.label });
+		// Values any words may name: {inputs}, {networks}, {networksWord}, {cars}, the training cars, and {car}, the reference car.
+		shareValues({ inputs: card.columns.length, networks: card.networks.length, networksWord: countWord(card.networks.length), cars: card.trainRuns.length, car: REFERENCE.label });
 		copied(title, 'page.title');
 		notice.replaceChildren(copied(h('p'), 'page.notice.waiting'));
 		reference.then(({ result, error }) => (error
