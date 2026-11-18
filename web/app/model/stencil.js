@@ -54,6 +54,7 @@ void main() {
 // A disc in the mark's colour inside a white rim (style 0), a ring around a white middle (1), or the handle: a white
 // disc with an ink ring and core on a soft shadow (2).
 const DOT_FRAGMENT = /* glsl */ `
+const vec3 SHADOW = vec3(0.05, 0.13, 0.2);  // the handle's soft shadow, in linear light
 uniform float uOpacity;
 uniform float uPixelRatio;
 varying vec3 vColor;
@@ -72,7 +73,7 @@ void main() {
 		float core = 1.0 - smoothstep(2.0 * px, 3.0 * px, r);
 		color = mix(vec3(1.0), vColor, max(ring, core));
 		cover = max(disc, shadow);
-		color = mix(vec3(0.05, 0.13, 0.2), color, disc / max(cover, 1e-3));
+		color = mix(SHADOW, color, disc / max(cover, 1e-3));
 	} else {
 		cover = 1.0 - smoothstep(edge - px, edge, r);
 		float ink = 1.0 - smoothstep(edge - 2.5 * px, edge - 1.5 * px, r);
@@ -84,7 +85,8 @@ void main() {
 	#include <colorspace_fragment>
 }`;
 
-const TINT_VERTEX = /* glsl */ `
+// The car's surface, lifted a little along its normals so the rings drawn on it are not lost in it.
+const RING_VERTEX = /* glsl */ `
 uniform float uLift;
 varying vec3 vWorld;
 void main() {
@@ -172,7 +174,7 @@ export class Stencil {
 				uStrength: { value: new Array(SIZES).fill(1) },
 				uLift: { value: 0.002 },
 			},
-			vertexShader: TINT_VERTEX, fragmentShader: RING_FRAGMENT, transparent: true, depthWrite: false,
+			vertexShader: RING_VERTEX, fragmentShader: RING_FRAGMENT, transparent: true, depthWrite: false,
 			polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
 		});
 	}
@@ -278,7 +280,7 @@ export class Stencil {
 		this.release();
 		this.object = group;
 		this.point = point.position;
-		this.viewer.setMarkers(group);
+		this.viewer.setOverlay(group);
 	}
 
 	addDots(group, dots) {
@@ -299,10 +301,10 @@ export class Stencil {
 	clear() {
 		this.release();
 		this.point = null;
-		this.viewer.setMarkers(null);
+		this.viewer.setOverlay(null);
 	}
 
-	/** Free what the last drawing made; materials, the cones and the car's ringed surface are kept. */
+	/** Free what the last drawing made; materials, the cone and the car's ringed surface are kept. */
 	release() {
 		if (!this.object) return;
 		const freed = new Set();

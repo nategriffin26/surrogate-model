@@ -1,5 +1,5 @@
 // The flat views of the invented body: the body from the side, one slice end-on, the surface around the cell close
-// up, the networks and their answer, and the 107 numbers as one grid. Each view owns an <svg>, sizes itself to its
+// up, the networks and their answer, and the model's inputs as one grid. Each view owns an <svg>, sizes itself to its
 // width in pixels (so text keeps one size) and redraws from the cell's state (`primer.js`). Lengths in metres.
 
 import { signed } from '../format.js';
@@ -412,7 +412,7 @@ export function networkMarkup(width, { cps, cp }, layers) {
 	return { markup: out, height: key + 8 };
 }
 
-// ---- the 107 numbers ----
+// ---- the inputs as one grid ----
 /**
  * The numbers as one grid of `cell`-pixel squares, a block per group: position (two columns: distances, facing),
  * nearby surface (a row per size, a column per read), slices (a row per read, a column per station, ahead on the

@@ -89,7 +89,7 @@ function drawNetwork(canvas, { card, groups, layers, cp }) {
  * @param {{ card: import('../../engine/result.js').ModelCard, groups: import('./groups.js').InputGroup[] }} options
  */
 export function createNetworks({ card, groups }) {
-	const canvas = h('canvas', { class: 'network-canvas', role: 'img', 'aria-label': text('networks.network.caption') });
+	const canvas = h('canvas', { class: 'network-canvas', role: 'img', 'aria-label': text('networks.network.label') });
 	const state = { network: 0, point: null };
 	const runs = card.trainRuns;
 	const cpCells = card.networks.map(() => h('span', { class: 'fold-cp num' }));
@@ -107,24 +107,16 @@ export function createNetworks({ card, groups }) {
 	cpCells[k]));
 
 	const network = card.networks[0];
-	const trainedOn = network.trainRuns.length;
-	const heldOut = network.validationRuns.length;
-	const counts = {
-		networks: card.networks.length, networksWord: countWord(card.networks.length),
-		trainedOn, trainedOnWord: countWord(trainedOn), heldOut, heldOutWord: countWord(heldOut),
-	};
 
-	const el = section('networks', counts,
+	const el = section('networks', { heldOut: network.validationRuns.length },
 		h('div', { class: 'networks-layout' },
 			h('figure', { class: 'figure' },
-				copied(h('figcaption'), 'networks.network.caption'),
 				h('div', { class: 'network-holder' }, canvas, copied(h('span', { class: 'network-output' }), 'networks.network.output')),
 				copied(h('p', { class: 'small-number num' }), 'networks.network.note', {
-					layers: network.layers.join(' → '), activation: card.activation, weights: count(parameters(network.layers)),
+					layers: network.layers.join(' → '), weights: count(parameters(network.layers)),
 				})),
 			h('figure', { class: 'figure' },
-				copied(h('figcaption'), 'networks.folds.caption'),
-				h('div', { class: 'folds', role: 'radiogroup', 'aria-label': text('networks.folds.caption') },
+				h('div', { class: 'folds', role: 'radiogroup', 'aria-label': text('networks.folds.label') },
 					h('div', { class: 'fold-row fold-head' }, h('span'), runs.map((run) => h('span', { class: 'fold-run num' }, run)), copied(h('span', { class: 'fold-cp' }), 'networks.folds.cp')),
 					foldRows),
 				h('p', { class: 'fold-key copy-block' },

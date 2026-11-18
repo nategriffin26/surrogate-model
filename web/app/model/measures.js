@@ -4,19 +4,17 @@
 // car.
 
 /**
- * @typedef {{ type: 'reading', layer: string, at: number[], columns: number[], hollow: boolean, station?: number }} Reading
+ * @typedef {{ type: 'reading', layer: string, at: number[], hollow: boolean, station?: number }} Reading
  *   a place an input measured to; `hollow` for a slice read where the slice holds no body near the point's place
  *   (outboard it then reads the centre plane, above and below the ground); `station` a slice read's
- * @typedef {{ type: 'guide', layer: string, from: number[], to: number[], columns: number[] }} Guide
+ * @typedef {{ type: 'guide', layer: string, from: number[], to: number[] }} Guide
  *   a distance measured from the point itself: to a face of the car's bounding box, or to the centre plane
- * @typedef {{ type: 'hairline', layer: 'slice', station: number, from: number[], to: number[], ground: boolean,
- *   columns: number[] }} Hairline
+ * @typedef {{ type: 'hairline', layer: 'slice', station: number, from: number[], to: number[], ground: boolean }} Hairline
  *   a slice's read from its station on the point's fore-aft line to where it ends; `ground` for a read above or
  *   below where the slice holds no body, which runs to the ground
  * @typedef {{ type: 'stations', layer: 'slice', from: number[], to: number[] }} Stations
  *   the point's fore-aft line from the first station to the last
- * @typedef {{ type: 'neighbourhood', layer: 'surface', at: number[], scale: number, normal: number[],
- *   columns: number[] }} Neighbourhood
+ * @typedef {{ type: 'neighbourhood', layer: 'surface', at: number[], scale: number, normal: number[] }} Neighbourhood
  *   one size of nearby surface: the surface within about `scale` of the point (weighted by a Gaussian that fades
  *   with distance), and its mean normal
  * @typedef {Reading | Guide | Hairline | Stations | Neighbourhood} Mark
@@ -63,12 +61,11 @@ export function measure(columns, { yCenter, bounds }, { position, features }) {
 		const key = `${column.kind}:${at.join()}`;
 		const slice = column.kind === 'slice';
 		const hollow = slice && (column.read === 'outboard' ? Math.abs(features[i] + Math.abs(sy)) < SAME : empty(column));
-		if (!readings.has(key)) readings.set(key, { type: 'reading', layer: column.kind, at, columns: [], hollow, ...(slice ? { station: column.station } : {}) });
-		readings.get(key).columns.push(i);
+		if (!readings.has(key)) readings.set(key, { type: 'reading', layer: column.kind, at, hollow, ...(slice ? { station: column.station } : {}) });
 		if (slice) {
-			marks.push({ type: 'hairline', layer: 'slice', station: column.station, from: place, to: at, ground: hollow && column.read !== 'outboard', columns: [i] });
+			marks.push({ type: 'hairline', layer: 'slice', station: column.station, from: place, to: at, ground: hollow && column.read !== 'outboard' });
 		} else if (!column.offset.some(Boolean)) {
-			marks.push({ type: 'guide', layer: column.kind, from: position, to: at, columns: [i] });
+			marks.push({ type: 'guide', layer: column.kind, from: position, to: at });
 		}
 	});
 	marks.push(...readings.values());
@@ -82,10 +79,9 @@ export function measure(columns, { yCenter, bounds }, { position, features }) {
 	const sizes = new Map();
 	columns.forEach((column, i) => {
 		if (column.kind !== 'surface') return;
-		if (!sizes.has(column.scale)) sizes.set(column.scale, { type: 'neighbourhood', layer: 'surface', at: position, scale: column.scale, normal: [], columns: [] });
+		if (!sizes.has(column.scale)) sizes.set(column.scale, { type: 'neighbourhood', layer: 'surface', at: position, scale: column.scale, normal: [] });
 		const size = sizes.get(column.scale);
 		if (column.part === 'whole' && size.normal.length < 3) size.normal.push(features[i]);
-		size.columns.push(i);
 	});
 	marks.push(...sizes.values());
 	return marks;

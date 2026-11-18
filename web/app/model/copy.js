@@ -5,10 +5,6 @@
 // a `.copy-block` whose words are all hidden hides with them (model.css).
 
 let words = null;
-/** The placeholder values each element was filled with, so new words can fill it again. */
-const filling = new WeakMap();
-/** Figures drawn as markup, redrawn whole when words change. */
-const redraws = new Set();
 /** Values every placeholder may use, anywhere on the page: the model's counts. */
 const shared = {};
 
@@ -27,7 +23,7 @@ export async function loadCopy() {
 
 /**
  * The words at `key` with their placeholders filled from `own` and the shared values: as a list of strings and nodes,
- * since a placeholder may stand for a node (a symbol with a subscript). A value given as a function is called each time.
+ * since a placeholder may stand for a node (a symbol with a subscript).
  * Null when the words are empty or a placeholder fills with an empty string: words naming nothing are not shown.
  */
 function fill(key, own) {
@@ -42,8 +38,7 @@ function fill(key, own) {
 		const exact = name in values;
 		if (!exact && !(lower in values)) continue;
 		parts.push(words[key].slice(last, match.index));
-		let value = exact ? values[name] : values[lower];
-		if (typeof value === 'function') value = value();
+		const value = exact ? values[name] : values[lower];
 		if (value === '') return null;
 		if (value instanceof Node) parts.push(value.cloneNode(true));
 		else parts.push(exact ? String(value) : String(value).replace(/^./, (c) => c.toUpperCase()));
@@ -52,6 +47,9 @@ function fill(key, own) {
 	parts.push(words[key].slice(last));
 	return parts;
 }
+
+/** Whether copy.json holds words at `key`. */
+export const hasCopy = (key) => key in words;
 
 /** The words at `key` as one string, placeholders filled, or '' when not shown: for text drawn where no element can carry them. */
 export function text(key, values = {}) {
@@ -62,7 +60,6 @@ export function text(key, values = {}) {
 /** Give `element` the words at `key`, and mark it as theirs. Returns the element. */
 export function copied(element, key, values = {}) {
 	element.dataset.copy = key;
-	filling.set(element, values);
 	const parts = fill(key, values);
 	element.replaceChildren(...(parts ?? []));
 	element.toggleAttribute('hidden', !parts);
@@ -77,20 +74,3 @@ export function markup(tag, key, values = {}, attributes = '') {
 	return `<${tag} data-copy="${key}"${attributes ? ` ${attributes}` : ''}${filled === '' ? ' hidden' : ''}>${filled}</${tag}>`;
 }
 
-/** Call `redraw` whenever words change: for a figure drawn as markup, which `setCopy` cannot fill in place. */
-export function onCopyChange(redraw) {
-	redraws.add(redraw);
-}
-
-/**
- * New words for `key`: every element on the page showing words is filled again, since a value may hold another's
- * words (a group's name inside a model's), and every figure drawn as markup is redrawn.
- */
-export function setCopy(key, value) {
-	if (!(key in words)) throw new Error(`The Model page has no words for “${key}” in copy.json.`);
-	words[key] = value;
-	for (const element of document.querySelectorAll('[data-copy]')) {
-		if (filling.has(element)) copied(element, element.dataset.copy, filling.get(element));
-	}
-	for (const redraw of redraws) redraw();
-}

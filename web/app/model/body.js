@@ -70,6 +70,7 @@ function outlinePoint(p, theta) {
 	return [p.half * Y * (1 - p.lean * Math.max(0, T) ** 2), (p.top + p.bottom) / 2 + ((p.top - p.bottom) / 2) * T];
 }
 
+/** Points taken round an outline before they are spaced evenly along it. */
 const FINE = 1024;
 
 /**
@@ -110,6 +111,7 @@ export function sideOutline(step = 0.01) {
 
 /** The longest edge of a cell; the slices' 2 cm raster needs every cell smaller than its step. */
 const CELL = 0.014;
+/** Points round the outline at which neighbouring rings are compared when the step between them is chosen. */
 const MATCH = 64;
 
 /** `count` points round the outline at x; at an end of the body, the point the outlines close to, repeated. */

@@ -1,6 +1,6 @@
-// Where an axis-aligned plane cuts the car's surface: the outlines the drawings show and the slice the sections read at
-// a station. The triangles are bucketed once along each axis, so a cut visits only the triangles that reach its plane
-// and keeps up with a point dragged across the car.
+// Where an axis-aligned plane cuts the car's surface: the outline the overview's close-up shows and the slice the
+// stencil draws at a station. The triangles are bucketed along an axis on its first cut, so a cut visits only the
+// triangles that reach its plane and keeps up with a point dragged across the car.
 
 /** Cuts kept per car; a drag across the whole car visits fewer distinct planes than this. */
 const KEPT = 96;
@@ -8,14 +8,13 @@ const KEPT = 96;
 export class SurfaceCutter {
 	/**
 	 * @param {import('../../engine/result.js').DisplayMesh} mesh
-	 * @param {number} step  bucket size in metres, the raster step of the sections
+	 * @param {number} step  bucket size in metres, the raster step of the slices
 	 */
-	constructor({ positions, normals, indices }, step) {
+	constructor({ positions, indices }, step) {
 		this.positions = positions;
-		this.normals = normals;
 		this.indices = indices;
 		this.step = step;
-		this.buckets = { 0: this.bucket(0), 1: this.bucket(1), 2: this.bucket(2) };
+		this.buckets = {};
 		this.kept = new Map();
 	}
 
@@ -47,19 +46,18 @@ export class SurfaceCutter {
 	}
 
 	/**
-	 * The surface where coordinate `axis` (0 for x, 1 for y, 2 for z) equals `value`, as segments: `positions` and the
-	 * surface `normals` at their ends, six floats per segment each.
-	 * @returns {{ positions: Float32Array, normals: Float32Array }}
+	 * The surface where coordinate `axis` (0 for x, 1 for y, 2 for z) equals `value`, as segments: `positions`, six
+	 * floats per segment.
+	 * @returns {{ positions: Float32Array }}
 	 */
 	cut(axis, value) {
 		const key = `${axis}:${value}`;
 		const kept = this.kept.get(key);
 		if (kept) return kept;
-		const { positions: P, normals: N, indices: I } = this;
-		const { lo, bins, start, ids } = this.buckets[axis];
+		const { positions: P, indices: I } = this;
+		const { lo, bins, start, ids } = (this.buckets[axis] ??= this.bucket(axis));
 		const bin = Math.floor((value - lo) / this.step);
 		const points = [];
-		const normals = [];
 		if (bin >= 0 && bin < bins) {
 			const d = [0, 0, 0];
 			const v = [0, 0, 0];
@@ -76,14 +74,11 @@ export class SurfaceCutter {
 					const a = k, b = (k + 1) % 3;
 					if ((d[a] >= 0) === (d[b] >= 0)) continue;
 					const s = d[a] / (d[a] - d[b]);
-					for (let c = 0; c < 3; c++) {
-						points.push(P[3 * v[a] + c] + s * (P[3 * v[b] + c] - P[3 * v[a] + c]));
-						normals.push(N[3 * v[a] + c] + s * (N[3 * v[b] + c] - N[3 * v[a] + c]));
-					}
+					for (let c = 0; c < 3; c++) points.push(P[3 * v[a] + c] + s * (P[3 * v[b] + c] - P[3 * v[a] + c]));
 				}
 			}
 		}
-		const cut = { positions: Float32Array.from(points), normals: Float32Array.from(normals) };
+		const cut = { positions: Float32Array.from(points) };
 		this.kept.set(key, cut);
 		if (this.kept.size > KEPT) this.kept.delete(this.kept.keys().next().value);
 		return cut;

@@ -1,4 +1,4 @@
-// The spread: the five networks disagree where the model is unsure. The reference car's spread σ(Cp) beside its actual
+// The spread: the networks disagree where the model is unsure. The reference car's spread σ(Cp) beside its actual
 // error on one colour scale, and the error against the spread over cells grouped by spread.
 
 import { h, s } from '../dom.js';

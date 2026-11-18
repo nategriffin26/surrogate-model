@@ -1,12 +1,12 @@
-// Why the model reads one point at a time: ten cars are ten examples for a model that reads a whole car, and ten
-// times the cells sampled from each for a model that reads a point and the shape around it.
+// Why the model reads one point at a time: the training cars are as many examples for a model that reads a whole
+// car, and that many times the cells sampled from each for a model that reads a point and the shape around it.
 
 import { h } from '../dom.js';
 import { count } from '../format.js';
 import { countWord, section } from './charts.js';
 import { copied } from './copy.js';
 import { locator } from './overview.js';
-import { trainingCar } from './training.js';
+import { trainingCarDots, trainingCarImage } from './training.js';
 
 /**
  * @param {{ card: import('../../engine/result.js').ModelCard, training: { cars: object[] } }} options
@@ -33,8 +33,8 @@ export function createPointwise({ card, training }) {
 	return {
 		el,
 		setCar({ maps }) {
-			wholeCars.replaceChildren(...training.cars.map((car) => h('span', { class: 'example' }, trainingCar(car, maps.cp, 'solid'))));
-			cells.replaceChildren(trainingCar(training.cars[0], maps.cp, 'dots'));
+			wholeCars.replaceChildren(...training.cars.map((car) => h('span', { class: 'example' }, trainingCarImage(car, maps.cp))));
+			cells.replaceChildren(trainingCarDots(training.cars[0], maps.cp));
 		},
 		setPoint() {},
 	};

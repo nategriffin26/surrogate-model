@@ -5,7 +5,7 @@
  * Regions of the surface, in the order the chart lists them, each named at `accuracy.regions.<id>` in copy.json.
  * Wheels first: every other region leaves them out.
  */
-export const REGIONS = [{ id: 'wheels' }, { id: 'underbody' }, { id: 'base' }, { id: 'front' }, { id: 'sides' }, { id: 'top' }];
+const REGIONS = ['wheels', 'underbody', 'base', 'front', 'sides', 'top'];
 /** A face belongs to a facing region when its normal is within about 45° of the axis. */
 const FACING = 0.7;
 /** Wheels and arches: within this distance of an axle in x, this far out from the centre plane, this high off the ground. */
@@ -27,7 +27,7 @@ function regionOf({ centers, normals }, bounds, yCenter) {
 	const median = (values) => values.sort((a, b) => a - b)[values.length >> 1];
 	const axles = [median(contact.filter((x) => x < split)), median(contact.filter((x) => x >= split))];
 	const region = new Int8Array(count);
-	const index = Object.fromEntries(REGIONS.map((r, i) => [r.id, i]));
+	const index = Object.fromEntries(REGIONS.map((id, i) => [id, i]));
 	for (let t = 0; t < count; t++) {
 		const [x, y, z] = [centers[3 * t], centers[3 * t + 1] - yCenter, centers[3 * t + 2]];
 		const [nx, ny, nz] = [normals[3 * t], normals[3 * t + 1], normals[3 * t + 2]];
@@ -87,7 +87,7 @@ export function caseStats(cells, bounds, yCenter) {
 		regionArea[region[t]] += areas[t];
 		regionError[region[t]] += areas[t] * error;
 	}
-	const regions = REGIONS.map((r, i) => ({ ...r, share: regionArea[i] / total, error: regionError[i] / regionArea[i] }));
+	const regions = REGIONS.map((id, i) => ({ id, share: regionArea[i] / total, error: regionError[i] / regionArea[i] }));
 
 	// Spread against error: cells in bins of equal area by σ, each bin's mean σ and root-mean-square error.
 	const edges = areaQuantiles(sigma, areas, Array.from({ length: CALIBRATION_BINS - 1 }, (_, k) => (k + 1) / CALIBRATION_BINS));

@@ -3,11 +3,10 @@
 // browser shows the canvas again, so the live view never shows a picture being taken.
 
 import { h } from '../dom.js';
+import { ORTHO_DISTANCE, VIEWS } from '../../viewer/viewer.js';
 
 /** Camera directions, from the car towards the camera: the left side (−y), and from below with the nose to the left. */
-const VIEWS = { side: [0, -1, 0], below: [0, -1e-4, -1] };
-/** How far the orthographic camera stands off, in metres. */
-const DISTANCE = 20;
+const DIRECTIONS = { side: VIEWS.left.dir, below: VIEWS.bottom.dir };
 /** Share of the canvas the car fills. */
 const FILL = 0.96;
 
@@ -46,19 +45,19 @@ export function takePictures(viewer, requests) {
 	const camera = viewer.cameraState();
 	const panes = viewer.panes;
 	const ground = viewer.display.ground;
-	const markers = viewer.markers;
-	if (markers) markers.visible = false;
+	const overlay = viewer.overlay;
+	if (overlay) overlay.visible = false;
 	viewer.setDisplay({ ground: false });
 	const pictures = requests.map(({ field, map, view }) => {
 		viewer.setPanes([{ field, map }]);
 		const target = viewer.bounds;
-		frame(viewer, VIEWS[view]);
+		frame(viewer, DIRECTIONS[view]);
 		viewer.snapshot();
 		return crop(viewer, target);
 	});
 	viewer.setPanes(panes);
 	viewer.setDisplay({ ground });
-	if (markers) markers.visible = true;
+	if (overlay) overlay.visible = true;
 	viewer.restoreCamera(camera);
 	viewer.render();
 	return pictures;
@@ -74,7 +73,7 @@ function frame(viewer, dir) {
 	const length = Math.hypot(...dir);
 	viewer.restoreCamera({
 		projection: 'orthographic',
-		position: target.map((t, k) => t + (dir[k] / length) * DISTANCE),
+		position: target.map((t, k) => t + (dir[k] / length) * ORTHO_DISTANCE),
 		target,
 		zoom,
 	});

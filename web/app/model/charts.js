@@ -4,11 +4,11 @@
 import { h } from '../dom.js';
 import { niceTicks } from '../format.js';
 import { rampCss } from '../ramps.js';
-import { copied } from './copy.js';
+import { copied, hasCopy } from './copy.js';
 
-const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 /** A count as a word, or as digits beyond twelve; a placeholder written capitalised ({CarsWord}) begins a sentence with it. */
-export const countWord = (n) => WORDS[n] ?? n.toLocaleString('en-US');
+export const countWord = (n) => NUMBER_WORDS[n] ?? n.toLocaleString('en-US');
 
 /** The DrivAerML run of a car, read from the dataset's file naming (`boundary_<run>.vtp`), or null. */
 export function runOf(result) {
@@ -16,11 +16,14 @@ export function runOf(result) {
 	return match ? Number(match[1]) : null;
 }
 
-/** A section: its takeaway as the title (`<id>.title`), a sentence or two under it (`<id>.lede`), and its figures. */
+/**
+ * A section: its takeaway as the title (`<id>.title`), a sentence or two under it where copy.json has them
+ * (`<id>.lede`), and its figures.
+ */
 export function section(id, values, ...figures) {
 	return h('section', { class: 'model-section', id: `model-${id}`, 'data-section': id },
 		copied(h('h2'), `${id}.title`, values),
-		copied(h('p', { class: 'lede' }), `${id}.lede`, values),
+		hasCopy(`${id}.lede`) ? copied(h('p', { class: 'lede' }), `${id}.lede`, values) : null,
 		...figures);
 }
 

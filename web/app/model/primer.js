@@ -11,7 +11,7 @@ import {
 	vectorSquares, view,
 } from './body-views.js';
 import { shade } from './charts.js';
-import { copied, onCopyChange } from './copy.js';
+import { copied } from './copy.js';
 
 /** The modes, in the figure's order: a group of inputs each, by its words in copy.json, then all of them. */
 const MODES = ['position', 'surface', 'slices', 'all'];
@@ -34,7 +34,7 @@ const detailHeight = (width) => (width < 420 ? 230 : 260);
  * @param {import('../../engine/result.js').ModelColumn[]} columns
  * @param {import('./groups.js').InputGroup[]} groups
  */
-export function arrange(columns, groups) {
+function arrange(columns, groups) {
 	const of = (words) => groups.find((g) => g.words === words).columns;
 	const scales = [...new Set(of('surface').map((i) => columns[i].scale))].sort((a, b) => a - b);
 	const stations = [...new Set(of('slices').map((i) => columns[i].station))].sort((a, b) => a - b);
@@ -210,10 +210,7 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		const value = (i) => (body.state
 			? h('dd', { class: 'num' }, h('i', { class: 'swatch', style: `--group: ${shade(body.state.standard[i], 1.5)}` }), valueText(card.columns[i], body.state.values[i]))
 			: h('dd'));
-		readout.replaceChildren(...rows.flatMap(([i, words]) => [
-			h('div', {}, copied(h('dt'), `inputs.names.${words}`), value(i)),
-			...(words === 'facingSideways' ? [copied(h('p', { class: 'readout-note' }), 'inputs.names.sideways')] : []),
-		]));
+		readout.replaceChildren(...rows.map(([i, words]) => h('div', {}, copied(h('dt'), `inputs.names.${words}`), value(i))));
 	}
 
 	/** Draw the figure for what is shown; `told` tells the page too, for the car. */
@@ -236,7 +233,6 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		paintReadout();
 		if (told) onShow();
 	}
-	onCopyChange(() => { side.redraw(); detail.redraw(); });
 
 	/** Show the group of a tapped square, at its size and part, or its station. */
 	function show(i) {

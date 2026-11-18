@@ -50,10 +50,10 @@ export function createInputs({ card, groups, engine, ask }) {
 	const primer = createPrimer({ card, groups, engine, onShow: () => { drawMarks(); frame(); } });
 	primer.carGrid(carGrid);
 
-	const el = section('inputs', { inputs: card.columns.length },
+	const el = section('inputs', {},
 		primer.el,
 		h('div', { class: 'inputs-car' },
-			h('div', { class: 'inputs-car-view' }, carHost, copied(h('p', { class: 'hint' }), 'inputs.car.hint')),
+			h('div', { class: 'inputs-car-view' }, carHost),
 			h('div', { class: 'inputs-car-numbers' }, caption, answer, carGrid)));
 	el.prepend(locator('inputs'));
 

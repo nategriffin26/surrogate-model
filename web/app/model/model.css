@@ -5,7 +5,6 @@
 .model-page #model-arrow path { fill: var(--heading); }
 .model-page h1 { margin: 0; font: 600 28px/1.2 var(--head); color: var(--heading); letter-spacing: -0.01em; }
 .model-page h2 { margin: 0 0 6px; font: 600 22px/1.25 var(--head); color: var(--heading); letter-spacing: -0.005em; }
-.model-page h3 { display: flex; align-items: center; gap: 8px; margin: 0; font: 600 15px/1.3 var(--head); color: var(--heading); }
 .model-page .lede { max-width: 72ch; margin: 0 0 22px; color: var(--muted); font-size: 15px; line-height: 1.5; }
 .model-page .num { font-variant-numeric: tabular-nums; }
 .model-page .symbol { font-style: italic; }
@@ -16,10 +15,8 @@
 .model-page .page-notice p { margin: 0; }
 .model-page .figure { margin: 0; min-width: 0; }
 .model-page figcaption { margin: 0 0 10px; color: var(--heading); font-size: 13px; font-weight: 600; }
-.model-page .figure figcaption:not(:first-child) { margin-top: 26px; }
 .model-page .big-number { display: block; margin: 0; font: 600 34px/1.1 var(--head); color: var(--heading); letter-spacing: -0.01em; }
 .model-page .small-number { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
-.model-page .hint { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
 
 /* Words emptied in copy.json leave no box. A block whose words are all empty goes with them: a figure (its caption,
    heads, axis names, labels, key and note all empty), a headline (a number nobody names), a key, a legend; the
@@ -99,7 +96,7 @@
 .model-page .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--steel); opacity: 0.5; }
 .model-page .bar-value { color: var(--heading); font-size: 13px; text-align: right; }
 
-/* ---- what a cell is told: the invented body (primer.js, body-views.js), then the open car ---- */
+/* ---- what a cell is told: the invented body (primer.js, body-views.js), then the reference car ---- */
 .model-page .inputs-primer svg, .model-page .inputs-car svg { display: block; overflow: hidden; font-family: var(--body); -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
 .model-page .inputs-primer svg text { fill: var(--muted); font-size: 11px; font-weight: 500; }
 .model-page .primer-modes { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -128,7 +125,6 @@
 .model-page .primer-readout dt { color: var(--muted); }
 .model-page .primer-readout dd { margin: 0; color: var(--heading); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .model-page .primer-readout dd .swatch { box-shadow: inset 0 0 0 0.5px rgba(13, 34, 51, 0.2); }
-.model-page .readout-note { grid-column: 1 / -1; margin: -2px 0 2px; color: var(--faint); font-size: 12px; }
 .model-page .choice { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--tint); }
 .model-page .choice button { height: 30px; min-width: 44px; padding: 0 10px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background 0.15s, color 0.15s; }
 .model-page .choice button:hover { color: var(--heading); }
@@ -201,7 +197,7 @@
 .model-page .square { stroke: rgba(13, 34, 51, 0.12); stroke-width: 0.5; }
 .model-page .square.selected { stroke: var(--heading); stroke-width: 2; }
 .model-page .block-name { font-size: 11px; font-weight: 600; }
-/* the open car */
+/* the reference car */
 .model-page .inputs-car { display: grid; gap: 14px 32px; margin-top: 32px; align-items: start; }
 .model-page .car-view { position: relative; height: 380px; border-radius: 10px; background: #f5f8fa; overflow: hidden; }
 .model-page .car-caption { margin: 0; color: var(--heading); font-size: 13px; font-weight: 600; }
@@ -210,7 +206,6 @@
 .model-page .answer-strip { position: relative; height: 30px; margin: 0 12px; }
 .model-page .answer-strip::before { content: ''; position: absolute; left: -12px; right: -12px; top: 15px; border-top: 1px solid var(--rule); }
 .model-page .answer-strip i { position: absolute; transform: translateX(-50%); }
-.model-page .answer-strip .answer-cfd { transform: translateX(-50%) rotate(45deg); }
 .model-page .answer-strip .answer-network, .model-page .key-network { width: 2px; height: 20px; top: 5px; background: var(--heading); opacity: 0.55; }
 .model-page .answer-strip .answer-mean, .model-page .key-mean { width: 13px; height: 13px; top: 9px; border-radius: 50%; background: var(--link); box-shadow: 0 0 0 2px #fff; }
 .model-page .answer-strip .answer-cfd, .model-page .key-cfd { width: 11px; height: 11px; top: 10px; border: 2px solid var(--rose); background: #fff; transform: translateX(-50%) rotate(45deg); }

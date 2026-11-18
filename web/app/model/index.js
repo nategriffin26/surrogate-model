@@ -72,7 +72,8 @@ function whenShown(host) {
 	});
 }
 
-export function mountModelView(host, { engine }) {
+/** Build the Model page in `host`; it draws once `host` is shown. */
+export function mountModelPage(host, { engine }) {
 	const notice = h('div', { class: 'page-notice', role: 'status' });
 	const title = h('h1');
 	const page = h('div', { class: 'model-page', 'data-state': 'loading' },
@@ -124,7 +125,7 @@ export function mountModelView(host, { engine }) {
 			inputs,
 			createNetworks({ card, groups }),
 			createAccuracy({ card }),
-			createSpread({ card }),
+			createSpread(),
 		];
 		page.append(h('div', { class: 'model-body' }, parts.map((part) => part.el)));
 		// The car is in hand: the figures show, so the page's viewer has its size when it draws the car's pictures.
@@ -163,7 +164,7 @@ export function mountModelView(host, { engine }) {
 		surface.working.setFields({ sigma: Float32Array.from(mesh.cp, (cp, v) => Math.abs(cp - mesh.cfd[v])) });
 		await whenDrawn(viewer, surface);
 		[pictures.missSide, pictures.missBelow] = takePictures(viewer, [side('sigma', maps.spread), below('sigma', maps.spread)]);
-		const car = { result, pictures, stats, maps, surface, cutter: inputs.stencil.car.cutter };
+		const car = { result, pictures, stats, maps, cutter: inputs.stencil.car.cutter };
 		for (const part of parts) part.setCar(car);
 	}
 }
