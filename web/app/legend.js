@@ -125,12 +125,14 @@ export function createLegend(actions) {
 			else if (grab === 'hi') actions.change({ hi: round(Math.max(start.hi + d, start.lo + perPixel * 8)) });
 			else actions.change({ lo: round(start.lo + d), hi: round(start.hi + d) });
 		};
-		const up = () => {
+		const end = () => {
 			bar.removeEventListener('pointermove', move);
-			bar.removeEventListener('pointerup', up);
+			bar.removeEventListener('pointerup', end);
+			bar.removeEventListener('pointercancel', end);
 		};
 		bar.addEventListener('pointermove', move);
-		bar.addEventListener('pointerup', up);
+		bar.addEventListener('pointerup', end);
+		bar.addEventListener('pointercancel', end);
 	});
 	bar.addEventListener('pointermove', (e) => {
 		if (e.buttons) return;

@@ -12,7 +12,7 @@ import { VertexGrid, FaceIndex } from '../viewer/picking.js';
 import { oneOf, round, triple } from './checks.js';
 import { CUT_AXES } from './section.js';
 import { sectionStations } from './cut.js';
-import { h, put, s } from './dom.js';
+import { failureNote, h, put, s } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
 import { signed } from './format.js';
@@ -473,25 +473,26 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	/** How many probes the set in use holds, for the dock's tab. */
 	const count = () => inUse()?.probes.length ?? 0;
 
-	/** The probe table: the set in use, read on the car shown. */
+	/** The probe table: the set in use, read on the car shown, under the note of a failed action from the tab. */
 	function table(c) {
 		const set = inUse();
 		// Placing a probe is a click or a tap on the car, which no control in the tab shows.
-		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`);
+		if (!set || set.probes.length === 0) return h('div', { class: 'probes' }, failure.el, h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`));
 		const sites = known(c, set);
-		const remove = (n) => run('remove_probe', { number: n });
 		return h('div', { class: 'probes' },
+			failure.el,
 			h('table', { class: 'probe-table' },
 				h('thead', {}, h('tr', {}, h('th', {}, '#'), COLUMNS.map((col) => h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null)), h('th', {}))),
 				h('tbody', {}, set.probes.map((p, i) => h('tr', { 'data-probe': p.n },
 					h('td', { class: 'probe-n' }, p.n),
 					COLUMNS.map((col) => h('td', { class: 'num' }, sites[i] ? signed(col.read(sites[i]), 3) : '')),
-					h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove probe ${p.n}`, onclick: () => remove(p.n) }, icon('close'))))))));
+					h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove probe ${p.n}`, onclick: () => act('remove_probe', { number: p.n }) }, icon('close'))))))));
 	}
 
 	// ---- the dock's header: the set in use, stations along the section, and clear; the table is exported from Export ----
 
-	const quietly = (promise) => promise.catch(() => {});
+	const failure = failureNote();
+	const act = (name, args) => failure.run(run(name, args));
 	const setList = h('div', { class: 'menu-list', role: 'menu' });
 	const setButton = h('button', { type: 'button', class: 'tool probe-set', title: 'The probe set in use' });
 	const sets = menu(setButton, setList);
@@ -500,19 +501,19 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 		if (e.key === 'Escape') return renderSets();
 		if (e.key !== 'Enter') return;
 		const set = inUse();
-		if (set && naming.value.trim()) quietly(run('use_probe_set', { set_id: set.id, name: naming.value.trim() }));
+		if (set && naming.value.trim()) act('use_probe_set', { set_id: set.id, name: naming.value.trim() });
 		sets.close();
 	});
 	function renderSets(renaming = false) {
 		const set = inUse();
 		const item = (label, onclick, extra = {}) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick, ...extra }, label);
 		put(setList,
-			...session.probeSets.map((x) => item([x.name, h('span', { class: 'menu-count' }, String(x.probes.length))], () => { sets.close(); quietly(run('use_probe_set', { set_id: x.id })); }, { role: 'menuitemradio', 'aria-checked': String(x === set) })),
+			...session.probeSets.map((x) => item([x.name, h('span', { class: 'menu-count' }, String(x.probes.length))], () => { sets.close(); act('use_probe_set', { set_id: x.id }); }, { role: 'menuitemradio', 'aria-checked': String(x === set) })),
 			session.probeSets.length ? h('hr', { class: 'menu-rule' }) : null,
-			item('New set', () => { sets.close(); quietly(run('use_probe_set', { name: freeSetName(session.probeSets) })); }),
+			item('New set', () => { sets.close(); act('use_probe_set', { name: freeSetName(session.probeSets) }); }),
 			set && !renaming ? item('Rename', () => { renderSets(true); naming.value = set.name; naming.focus(); naming.select(); }) : null,
 			set && renaming ? h('div', { class: 'menu-field' }, naming) : null,
-			set ? item(`Delete ${set.name}`, () => { sets.close(); quietly(run('delete_probe_set', { set_id: set.id })); }, { class: 'menu-item danger' }) : null);
+			set ? item(`Delete ${set.name}`, () => { sets.close(); act('delete_probe_set', { set_id: set.id }); }, { class: 'menu-item danger' }) : null);
 	}
 	setButton.addEventListener('click', () => renderSets());
 
@@ -523,7 +524,7 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 		const count = Number(stationCount.value);
 		const branch = branchButtons[1].getAttribute('aria-checked') === 'true' ? 'lower' : 'upper';
 		stations.close();
-		quietly(run('place_probes_along_section', { count, branch }));
+		act('place_probes_along_section', { count, branch });
 	} },
 		h('label', { class: 'stations-row' }, h('span', { class: 'control-label' }, 'Stations'), stationCount),
 		h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Branch' }, branchButtons),
@@ -535,7 +536,7 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 		branchButtons.forEach((b, k) => (b.textContent = names[k]));
 	});
 
-	const clear = h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('clear_probes', {})) }, icon('close'), 'Clear');
+	const clear = h('button', { type: 'button', class: 'tool', onclick: () => act('clear_probes', {}) }, icon('close'), 'Clear');
 	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, stations.el, clear);
 
 	/** The dock's header for the probes, brought up to date: the set in use and what can be done with it. */

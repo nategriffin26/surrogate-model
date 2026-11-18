@@ -22,10 +22,28 @@ export const s = (tag, attrs = {}, ...children) => build(document.createElementN
 /** A force coefficient's name as it is written on screen, C with its axis subscripted, after a prefix such as Δ. */
 export const coefficient = (axis, prefix = '') => [prefix, 'C', h('sub', {}, axis)];
 
-/** Replace an element's children. */
+/** Replace an element's children, skipping null, false and undefined as `h` does; `replaceChildren` would write them as text. */
 export function put(element, ...children) {
 	element.replaceChildren();
 	return build(element, {}, children);
+}
+
+/**
+ * A note that shows why the operation a control ran failed, until that control or another runs again. `run(promise)`
+ * resolves to the operation's result, or to undefined when it failed.
+ */
+export function failureNote() {
+	const el = h('p', { class: 'failure-note', role: 'alert', hidden: true });
+	async function run(promise) {
+		el.hidden = true;
+		try {
+			return await promise;
+		} catch (error) {
+			el.textContent = error.message;
+			el.hidden = false;
+		}
+	}
+	return { el, run, hide: () => (el.hidden = true) };
 }
 
 /** Download a Blob under a file name. */

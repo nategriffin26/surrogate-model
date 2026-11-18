@@ -107,7 +107,10 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .menu-item:not(:disabled):hover { background: var(--tint); color: var(--heading); }
 .menu-item[aria-checked="true"] { color: var(--link); font-weight: 500; }
 .menu-rule { border: 0; border-top: 1px solid var(--hair); margin: 5px 4px; }
-.menu-note { width: 220px; margin: 4px 10px 6px; color: var(--rose); font-size: 12.5px; }
+/* Why an operation a control ran failed: under the dock's tab controls, in a menu, or under the Files panel's head. */
+.failure-note { margin: 0 0 8px; color: var(--rose); font-size: 12.5px; }
+.popover .failure-note { width: 220px; margin: 4px 10px 6px; }
+.files .failure-note { margin: 10px 18px 0; }
 .menu-item.danger { color: var(--rose); }
 .export-list { min-width: 220px; }
 .export-row { display: flex; align-items: center; gap: 2px; }
@@ -436,7 +439,6 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .variants-part { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
 .variants-part[hidden] { display: none; }
 .variants-form .button { height: 28px; margin-left: 10px; }
-.variants-problem { margin: 0 0 8px; color: var(--rose); font-size: 12.5px; }
 .variants-table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .variants-table th { text-align: right; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
 .variants-table th:first-child, .variants-table td.variants-name { text-align: left; padding-right: 20px; }
@@ -461,7 +463,6 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .files-head { display: flex; align-items: center; gap: 6px; flex: none; height: 52px; padding: 0 8px 0 18px; border-bottom: 1px solid var(--hair); }
 .files-title { margin-right: auto; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
 .files-upload { height: 28px; padding: 0 11px; }
-.files-note { margin: 10px 18px 0; color: var(--rose); font-size: 12.5px; }
 .files-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0 14px; }
 .files-list { min-height: 40px; border-radius: 6px; transition: background 0.15s; }
 .files-list.drop-target { background: var(--tint); }

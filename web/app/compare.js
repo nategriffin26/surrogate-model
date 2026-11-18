@@ -11,7 +11,7 @@
 import { sampleFields } from '../engine/nearest.js';
 import { caseSummary } from './cases.js';
 import { round } from './checks.js';
-import { coefficient, h } from './dom.js';
+import { coefficient, failureNote, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { addField, removeField, scaleEnd } from './fields.js';
 import { signed } from './format.js';
@@ -324,18 +324,19 @@ export function createComparison({ session, engine, update, run }) {
 
 	// ---- the Compare tab ----
 
-	const quietly = (promise) => promise.catch(() => {});
+	const failure = failureNote();
+	const compare = (args) => failure.run(run('set_comparison', args));
 	const choices = h('div', { class: 'menu-list', role: 'menu' });
 	const withButton = h('button', { type: 'button', class: 'tool compare-with' });
 	const chooser = menu(withButton, choices);
-	const sideBySide = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', onclick: () => quietly(run('set_comparison', { side_by_side: !view.compare?.sideBySide })) }, icon('compare'), 'Side by side');
+	const sideBySide = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', onclick: () => compare({ side_by_side: !view.compare?.sideBySide }) }, icon('compare'), 'Side by side');
 	const controls = h('div', { class: 'compare-controls' }, chooser.el, sideBySide);
 	const table = h('table', { class: 'compare-table' });
 	const note = h('p', { class: 'compare-note' });
 	const empty = h('div', { class: 'compare-empty' });
 	// The section plot sits beside the table, so a difference in the numbers can be found along the car.
 	const sectionSlot = h('div', { class: 'section-slot' });
-	const el = h('div', { class: 'compare dock-row' }, h('div', { class: 'dock-numbers' }, empty, table, note), sectionSlot);
+	const el = h('div', { class: 'compare dock-row' }, h('div', { class: 'dock-numbers' }, failure.el, empty, table, note), sectionSlot);
 
 	/** What case c can be compared with: its CFD when it carries one, and every other case with a result. */
 	const targets = (c) => [
@@ -355,12 +356,12 @@ export function createComparison({ session, engine, update, run }) {
 				type: 'button', role: 'menuitemradio', class: 'menu-item', 'aria-checked': String(o.with === current),
 				onclick: () => {
 					chooser.close();
-					quietly(run('set_comparison', { with: o.with }));
+					compare({ with: o.with });
 				},
 			}, o.label)),
-			...(view.compare ? [h('div', { class: 'menu-rule' }), h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => {
+			...(view.compare ? [h('hr', { class: 'menu-rule' }), h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => {
 				chooser.close();
-				quietly(run('set_comparison', { with: null }));
+				compare({ with: null });
 			} }, 'Stop comparing')] : []),
 		);
 		sideBySide.disabled = !pair;
@@ -370,7 +371,7 @@ export function createComparison({ session, engine, update, run }) {
 		note.textContent = pair ? simplified(c) ?? '' : '';
 		if (!pair) {
 			empty.replaceChildren(...(options.length
-				? [h('span', {}, `Compare ${c.name} with`), ...options.map((o) => h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('set_comparison', { with: o.with })) }, o.label))]
+				? [h('span', {}, `Compare ${c.name} with`), ...options.map((o) => h('button', { type: 'button', class: 'tool', onclick: () => compare({ with: o.with }) }, o.label))]
 				: [h('span', {}, 'Open another car to compare with.')]));
 			return;
 		}

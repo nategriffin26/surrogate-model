@@ -15,7 +15,7 @@ import { defineCaseOperations } from './cases.js';
 import { createSectionTool, defineSectionOperations } from './cut.js';
 import { defineDisplayOperations } from './display.js';
 import { createDock } from './dock.js';
-import { h } from './dom.js';
+import { failureNote, h } from './dom.js';
 import { EXPORTS, baseName, defineExport, defineExportOperations, pictureOf } from './export.js';
 import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
 import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
@@ -227,24 +227,17 @@ function setMode(next) {
  * that cannot be made now are disabled with the reason as their tooltip; the surface file is offered only while the
  * engine holds the car's whole predicted surface.
  */
-const exportNote = h('p', { class: 'menu-note', role: 'alert', hidden: true });
+const exportNote = failureNote();
 const exportList = h('div', { class: 'menu-list export-list' });
 const exportButton = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
-const exportMenu = menu(exportButton, h('div', {}, exportList, exportNote), { align: 'right' });
+const exportMenu = menu(exportButton, h('div', {}, exportList, exportNote.el), { align: 'right' });
 $('[data-export]').append(exportMenu.el);
 
 async function exportTo(row, name, to) {
-	exportNote.hidden = true;
 	row.classList.add('busy');
-	try {
-		await run(to === 'download' ? 'download_export' : 'save_export', { export: name });
-		exportMenu.close();
-	} catch (error) {
-		exportNote.textContent = error.message;
-		exportNote.hidden = false;
-	} finally {
-		row.classList.remove('busy');
-	}
+	const saved = await exportNote.run(run(to === 'download' ? 'download_export' : 'save_export', { export: name }));
+	row.classList.remove('busy');
+	if (saved) exportMenu.close();
 }
 
 function renderExportMenu() {
@@ -259,7 +252,7 @@ function renderExportMenu() {
 	}));
 }
 exportButton.addEventListener('click', () => {
-	exportNote.hidden = true;
+	exportNote.hide();
 	renderExportMenu();
 });
 
@@ -550,13 +543,15 @@ dockResizer.addEventListener('pointerdown', (e) => {
 		const bottom = $('[data-dock]').getBoundingClientRect().bottom;
 		body.style.setProperty('--dock', `${Math.min(innerHeight * 0.6, Math.max(150, bottom - ev.clientY))}px`);
 	};
-	const up = () => {
+	const end = () => {
 		body.classList.remove('resizing');
 		dockResizer.removeEventListener('pointermove', move);
-		dockResizer.removeEventListener('pointerup', up);
+		dockResizer.removeEventListener('pointerup', end);
+		dockResizer.removeEventListener('pointercancel', end);
 	};
 	dockResizer.addEventListener('pointermove', move);
-	dockResizer.addEventListener('pointerup', up);
+	dockResizer.addEventListener('pointerup', end);
+	dockResizer.addEventListener('pointercancel', end);
 });
 
 // ---- keys -------------------------------------------------------------------------------------------------------------------

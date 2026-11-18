@@ -5,7 +5,7 @@
 // assistant act on the workspace alike.
 
 import { caseSummary } from './cases.js';
-import { download, h, s } from './dom.js';
+import { download, failureNote, h, s } from './dom.js';
 import { EXAMPLES } from './examples.js';
 import { bytes, millions, seconds } from './format.js';
 import { icon } from './icons.js';
@@ -60,6 +60,8 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 		}
 		return file;
 	};
+	/** The files at a normalised path, or under it when it names a folder. */
+	const filesAt = (path) => workspace.files().filter((f) => f.path === path || f.path.startsWith(`${path}/`));
 
 	/** The case showing a geometry, made and analysed if it has none. */
 	function openPath(path) {
@@ -173,12 +175,22 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'move_file',
-		description: 'Rename or move a file or folder in the workspace: from one path to another, e.g. "boundary_1.vtp" to "baseline/boundary_1.vtp". Fails if the destination exists. An open case keeps showing a moved geometry.',
+		description: 'Rename or move a file or folder in the workspace: from one path to another, e.g. "boundary_1.vtp" to "baseline/boundary_1.vtp". Fails if the destination exists. Moving a file the engineer wrote asks the engineer first. An open case keeps showing a moved geometry.',
 		parameters: {
 			type: 'object',
 			properties: { from: pathParameter, to: { type: 'string', description: 'New path.' } },
 			required: ['from', 'to'],
 			additionalProperties: false,
+		},
+		/** Asks when anything it moves was written by the engineer. A path the workspace refuses asks nothing: `run` fails on it. */
+		confirm({ from }) {
+			let path;
+			try {
+				path = normalPath(from);
+			} catch {
+				return false;
+			}
+			return filesAt(path).some((f) => f.by === 'engineer');
 		},
 		run({ from, to }, { by }) {
 			const moved = workspace.move(from, to, by);
@@ -193,7 +205,7 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 		confirm: true,
 		run({ path }, { by }) {
 			const target = normalPath(path);
-			const count = workspace.files().filter((f) => f.path === target || f.path.startsWith(`${target}/`)).length;
+			const count = filesAt(target).length;
 			workspace.remove(target, by);
 			return { deleted: target, files: count };
 		},
@@ -272,17 +284,9 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 	}
 
 	/** Run an operation from a control; a failure shows on the panel until the next action. */
-	const note = h('p', { class: 'files-note', role: 'alert', hidden: true });
-	el.querySelector('.files-head').after(note);
-	async function act(name, args) {
-		note.hidden = true;
-		try {
-			return await run(name, args);
-		} catch (error) {
-			note.textContent = error.message;
-			note.hidden = false;
-		}
-	}
+	const note = failureNote();
+	el.querySelector('.files-head').after(note.el);
+	const act = (name, args) => note.run(run(name, args));
 
 	/** A geometry's state: its case and how far its analysis has got. */
 	function geometryState(file) {

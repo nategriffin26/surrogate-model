@@ -11,7 +11,7 @@
 import { boundsOf } from '../engine/geometry.js';
 import { writeVtp } from '../engine/vtp.js';
 import { finite, oneOf, round } from './checks.js';
-import { coefficient, h } from './dom.js';
+import { coefficient, failureNote, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { signed } from './format.js';
 import { defineOperation } from './operations.js';
@@ -339,31 +339,24 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	};
 	const make = h('button', { type: 'submit', class: 'button' }, 'Make variant');
 	const form = h('form', { class: 'variants-form', onsubmit: (e) => submit(e) }, kinds.el, ...Object.values(parts), make);
-	const problem = h('p', { class: 'variants-problem', role: 'alert', hidden: true });
+	const note = failureNote();
 	const table = h('table', { class: 'variants-table' });
 	const basis = h('p', { class: 'variants-basis' }, 'Variants are predicted on the simplified mesh of 600,000 triangles, and compared with their car predicted unchanged on it.');
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });
-	const el = h('div', { class: 'variants' }, form, problem, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
+	const el = h('div', { class: 'variants' }, form, note.el, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
 	// The study is saved from the Export menu, so the tab's header holds nothing of its own.
 	const controls = h('div', { class: 'variants-controls' });
 
 	async function submit(e) {
 		e.preventDefault();
-		problem.hidden = true;
 		const value = (input) => Number(input.value.trim().replace('\u2212', '-'));
 		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: value(percent) } : { kind, offset_mm: value(height) };
 		making = true;
 		render();
-		try {
-			await run('make_variant', { changes: [change] });
-		} catch (error) {
-			problem.textContent = error.message;
-			problem.hidden = false;
-		} finally {
-			making = false;
-			render();
-		}
+		await note.run(run('make_variant', { changes: [change] }));
+		making = false;
+		render();
 	}
 
 	function render() {
@@ -376,7 +369,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		table.hidden = basis.hidden = !variants.length || !root.baseline;
 		if (table.hidden) return table.replaceChildren();
 		const base = numbers(root.baseline);
-		const row = (x, label, values, title) => h('tr', { class: x === c ? 'current' : '', title, onclick: () => run('show_case', { case_id: x.id }).catch(() => {}) },
+		const row = (x, label, values, title) => h('tr', { class: x === c ? 'current' : '', title, onclick: () => note.run(run('show_case', { case_id: x.id })) },
 			h('td', { class: 'variants-name' }, label),
 			...['cx', 'cz'].flatMap((key) => [h('td', {}, signed(values[key], 3)), h('td', { class: 'variants-delta' }, x === root ? '' : signed(values[key] - base[key], 3))]),
 			h('td', {}, values.frontal_area_m2.toFixed(3)));

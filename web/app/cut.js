@@ -310,14 +310,16 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / perMetre;
 			run('set_section', { position_m: Number(offset.toFixed(3)) });
 		};
-		const up = () => {
+		const end = () => {
 			dragging = false;
 			viewport.removeEventListener('pointermove', move);
-			viewport.removeEventListener('pointerup', up);
+			viewport.removeEventListener('pointerup', end);
+			viewport.removeEventListener('pointercancel', end);
 			run('set_section', {});
 		};
 		viewport.addEventListener('pointermove', move);
-		viewport.addEventListener('pointerup', up);
+		viewport.addEventListener('pointerup', end);
+		viewport.addEventListener('pointercancel', end);
 	}, { capture: true });
 
 	viewport.addEventListener('pointermove', (e) => {
