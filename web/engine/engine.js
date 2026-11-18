@@ -193,9 +193,9 @@ export function createEngine() {
 
 /**
  * The working-mesh vertex nearest `point` among those not facing away from `normal`, so a point on
- * one side of a thin panel stays on that side; with its position and normal.
+ * one side of a thin panel stays on that side; with its position, normal and CFD Cp.
  */
-function nearestVertex({ positions, normals }, point, normal) {
+function nearestVertex({ positions, normals, cfd }, point, normal) {
   let index = 0;
   let best = Infinity;
   for (let v = 0; v < positions.length / 3; v++) {
@@ -206,7 +206,12 @@ function nearestVertex({ positions, normals }, point, normal) {
       index = v;
     }
   }
-  return { index, position: Array.from(positions.subarray(3 * index, 3 * index + 3)), normal: Array.from(normals.subarray(3 * index, 3 * index + 3)) };
+  return {
+    index,
+    position: Array.from(positions.subarray(3 * index, 3 * index + 3)),
+    normal: Array.from(normals.subarray(3 * index, 3 * index + 3)),
+    cfd: cfd ? cfd[index] : null,
+  };
 }
 
 /** A promise with its settling functions; nobody awaiting its rejection is not an error. */

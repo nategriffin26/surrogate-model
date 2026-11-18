@@ -5,7 +5,7 @@ const BUCKETS = 512;
 
 /**
  * Triangles grouped by the slab of one axis they span, so a cut only visits the triangles near its plane.
- * Built once per axis, on the first cut along it.
+ * Built on the second cut along an axis: one cut alone is cheaper as a scan of every triangle.
  */
 class SlabIndex {
 	constructor(mesh, axis) {
@@ -13,19 +13,25 @@ class SlabIndex {
 		const triangles = I.length / 3;
 		let lo = Infinity, hi = -Infinity;
 		for (let v = axis; v < P.length; v += 3) {
-			lo = Math.min(lo, P[v]);
-			hi = Math.max(hi, P[v]);
+			if (P[v] < lo) lo = P[v];
+			if (P[v] > hi) hi = P[v];
 		}
 		this.lo = lo;
 		this.width = (hi - lo) / BUCKETS || 1;
+		// The bucket of each triangle's lowest and highest corner, computed inline: this runs once per triangle.
+		const scale = 1 / this.width;
 		const first = new Uint16Array(triangles);
 		const last = new Uint16Array(triangles);
 		const sizes = new Uint32Array(BUCKETS + 1);
 		for (let t = 0; t < triangles; t++) {
 			const a = P[3 * I[3 * t] + axis], b = P[3 * I[3 * t + 1] + axis], c = P[3 * I[3 * t + 2] + axis];
-			first[t] = this.bucket(Math.min(a, b, c));
-			last[t] = this.bucket(Math.max(a, b, c));
-			for (let k = first[t]; k <= last[t]; k++) sizes[k + 1]++;
+			const min = a < b ? (a < c ? a : c) : b < c ? b : c;
+			const max = a > b ? (a > c ? a : c) : b > c ? b : c;
+			const f = Math.min(BUCKETS - 1, ((min - lo) * scale) | 0);
+			const l = Math.min(BUCKETS - 1, ((max - lo) * scale) | 0);
+			first[t] = f;
+			last[t] = l;
+			for (let k = f; k <= l; k++) sizes[k + 1]++;
 		}
 		for (let k = 0; k < BUCKETS; k++) sizes[k + 1] += sizes[k];
 		const fill = sizes.slice(0, BUCKETS);
@@ -44,13 +50,19 @@ class SlabIndex {
 	}
 }
 
+/** Per mesh, per axis: undefined before the first cut, null after it, then the index. */
 const indexes = new WeakMap();
 
-function slabIndex(mesh, axis) {
+/** The triangles a cut must visit, or null for every triangle. */
+function nearby(mesh, axis, offset) {
 	let perAxis = indexes.get(mesh);
 	if (!perAxis) indexes.set(mesh, (perAxis = []));
+	if (perAxis[axis] === undefined) {
+		perAxis[axis] = null;
+		return null;
+	}
 	perAxis[axis] ??= new SlabIndex(mesh, axis);
-	return perAxis[axis];
+	return perAxis[axis].near(offset);
 }
 
 /**
@@ -81,19 +93,21 @@ export function cut(mesh, axis, offset) {
 		crossings.set(key, point);
 		return key;
 	};
-	for (const t of slabIndex(mesh, axis).near(offset)) {
-		const corners = [I[3 * t], I[3 * t + 1], I[3 * t + 2]];
-		const above = corners.map((v) => P[3 * v + axis] >= offset);
-		if (above[0] === above[1] && above[1] === above[2]) continue;
+	const visit = (t) => {
+		const a = I[3 * t], b = I[3 * t + 1], c = I[3 * t + 2];
+		const aboveA = P[3 * a + axis] >= offset, aboveB = P[3 * b + axis] >= offset, aboveC = P[3 * c + axis] >= offset;
+		if (aboveA === aboveB && aboveB === aboveC) return;
+		// The plane crosses exactly two of the triangle's edges.
 		const ends = [];
-		for (let e = 0; e < 3; e++) {
-			const u = corners[e], v = corners[(e + 1) % 3];
-			if (above[e] !== above[(e + 1) % 3]) ends.push(crossing(u, v));
-		}
-		const [k0, k1] = ends;
-		crossings.get(k0).links.push(k1);
-		crossings.get(k1).links.push(k0);
-	}
+		if (aboveA !== aboveB) ends.push(crossing(a, b));
+		if (aboveB !== aboveC) ends.push(crossing(b, c));
+		if (aboveC !== aboveA) ends.push(crossing(c, a));
+		crossings.get(ends[0]).links.push(ends[1]);
+		crossings.get(ends[1]).links.push(ends[0]);
+	};
+	const near = nearby(mesh, axis, offset);
+	if (near) for (const t of near) visit(t);
+	else for (let t = 0; t < I.length / 3; t++) visit(t);
 	return chain(crossings);
 }
 

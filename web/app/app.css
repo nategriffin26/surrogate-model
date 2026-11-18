@@ -3,7 +3,7 @@
 body {
 	/* The plots take about a third of the height: tall enough to read, while most of the screen stays with the car. */
 	--dock: clamp(200px, 32vh, 340px);
-	--model: 440px;
+	--model: clamp(480px, 40vw, 640px);
 	display: grid;
 	grid-template-rows: 48px minmax(0, 1fr);
 	height: 100vh;
@@ -55,6 +55,7 @@ body:is([data-screen="start"], [data-screen="notice"]) :is(.toolbar-host, .dock-
 body[data-mode="model"] .work { grid-template-columns: minmax(0, 1fr) var(--model); }
 body[data-mode="model"] .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
 body[data-mode="model"] :is(.dock-host, .dock-resizer, .card-host, .overlay) { display: none; }
+body:not([data-mode="model"]) .model-corner { display: none; }
 .model-host { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--hair); }
 
 .dock-resizer { position: relative; z-index: 6; }
@@ -97,6 +98,7 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .menu-item:not(:disabled):hover { background: var(--tint); color: var(--heading); }
 .menu-item[aria-checked="true"] { color: var(--link); font-weight: 500; }
 .menu-rule { border: 0; border-top: 1px solid var(--hair); margin: 5px 4px; }
+.menu-note { width: 220px; margin: 4px 10px 6px; color: var(--rose); font-size: 12.5px; }
 .menu-item .ramp-swatch { width: 56px; }
 .menu-item:has(.ramp-swatch) { justify-content: flex-start; }
 .controls-list { display: grid; grid-template-columns: auto auto; gap: 6px 18px; margin: 4px 6px; font-size: 13px; white-space: nowrap; }
@@ -113,20 +115,21 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .viewport.over-cut .viewer-canvas { cursor: move; }
 .overlay { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
 .triad { position: absolute; left: 10px; bottom: 10px; z-index: 4; overflow: visible; }
-.triad line { stroke-width: 1.6; }
-.triad .negative line { stroke-dasharray: 2 2.5; opacity: 0.6; }
-.triad circle { stroke-width: 1.4; }
-.triad text { font: 600 10px var(--body); fill: #fff; pointer-events: none; }
-.triad-end { cursor: pointer; }
-.triad-end:hover circle { stroke-width: 3; }
-.triad-end:focus-visible { outline: none; }
-.triad-end:focus-visible circle { stroke-width: 3; }
+.triad .origin { fill: var(--muted); }
+.triad .shaft { stroke-width: 1.5; stroke-linecap: round; }
+.triad .hit { stroke: transparent; stroke-width: 14; stroke-linecap: round; }
+.triad .label { font: 600 11px var(--body); }
+.triad-axis { cursor: pointer; }
+.triad-axis:hover .shaft, .triad-axis:focus-visible .shaft { stroke-width: 2.4; }
+.triad-axis:focus-visible { outline: none; }
 .pane-labels { position: absolute; inset: 0 0 auto 0; display: flex; z-index: 3; pointer-events: none; }
 .pane-label { flex: 1; padding: 12px 16px; font-family: var(--head); font-weight: 600; font-size: 14px; color: var(--heading); }
 .pane-label + .pane-label { border-left: 1px solid var(--rule); }
+.model-corner { position: absolute; left: 12px; top: 12px; z-index: 4; }
 .viewport:has(.pane-label) .legend-host { top: auto; bottom: 12px; left: 50%; transform: translateX(-50%); }
 .legend-host { position: absolute; left: 12px; top: 12px; z-index: 4; }
-.card-host { position: absolute; right: 12px; top: 12px; z-index: 4; }
+.card-host { position: absolute; right: 12px; top: 12px; bottom: 12px; z-index: 4; display: flex; flex-direction: column; pointer-events: none; }
+.card-host > * { pointer-events: auto; }
 
 /* ---- legend ---- */
 .legend { width: 288px; padding: 8px 12px 6px; background: rgba(255, 255, 255, 0.9); border: 1px solid var(--hair); border-radius: 8px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
@@ -149,14 +152,28 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .legend-end.invalid { border-color: var(--rose); }
 
 /* ---- probes and readouts on the car ---- */
-.hover-chip {
-	position: absolute; left: 0; top: 0; z-index: 5; min-width: 150px; padding: 6px 9px 5px; border-radius: 6px; pointer-events: none;
-	background: rgba(255, 255, 255, 0.95); border: 1px solid var(--rule); box-shadow: 0 6px 18px rgba(13, 34, 51, 0.08); font-variant-numeric: tabular-nums;
+/* The hover preview: the cell outlined at its true size, a ring at its centre, and the readout beside them. Figures are
+   tabular and their boxes fixed, so the readout keeps its width as the digits change. */
+.probe-preview { position: absolute; inset: 0; }
+.cell-outline { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.cell-outline polygon { stroke-linejoin: round; }
+.cell-outline .halo { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 3.5; }
+.cell-outline .edge { fill: rgba(255, 255, 255, 0.16); stroke: var(--heading); stroke-width: 1.5; }
+.preview-marker { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.preview-marker::before {
+	content: ""; position: absolute; left: -6px; top: -6px; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%;
+	border: 2px solid var(--heading); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9), inset 0 0 0 1.5px rgba(255, 255, 255, 0.9);
 }
-.chip-value { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
-.chip-value span { color: var(--muted); font-size: 12px; }
-.chip-value b { font-family: var(--head); font-size: 17px; font-weight: 600; color: var(--heading); }
-.chip-at { display: flex; gap: 8px; color: var(--faint); font-size: 11px; white-space: nowrap; }
+.probe-tip {
+	position: absolute; left: 0; top: 0; padding: 6px 10px 7px; border-radius: 6px; white-space: nowrap;
+	background: rgba(255, 255, 255, 0.96); border: 1px solid var(--rule); box-shadow: 0 6px 18px rgba(13, 34, 51, 0.1);
+	font-variant-numeric: tabular-nums;
+}
+.tip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.tip-symbol { color: var(--muted); font-size: 12px; font-weight: 500; }
+.tip-value { display: inline-block; width: 6ch; text-align: right; font-family: var(--head); font-size: 20px; font-weight: 600; color: var(--heading); }
+.tip-at { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; color: var(--faint); font-size: 11px; }
+.tip-number { display: inline-block; width: 6ch; text-align: right; color: var(--ink); }
 .probe-markers { position: absolute; inset: 0; }
 .probe-marker { position: absolute; left: 0; top: 0; width: 0; height: 0; }
 .probe-marker::before { content: ""; position: absolute; left: -3.5px; top: -3.5px; width: 7px; height: 7px; border-radius: 50%; background: var(--heading); box-shadow: 0 0 0 2px #fff; }
@@ -263,14 +280,16 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .unit { color: var(--faint); font-size: 12px; }
 .slider { width: 120px; accent-color: var(--link); }
 .dock-save, .dock-save[hidden] + .dock-collapse { margin-left: auto; }
-.plot-key { position: absolute; top: 4px; right: 16px; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.plot-head { position: absolute; top: 4px; left: 60px; right: 16px; display: flex; align-items: center; gap: 22px; font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.plot-key { display: flex; align-items: center; gap: 12px; }
+.plot-key:empty { display: none; }
 .key-item { display: inline-flex; align-items: center; gap: 5px; }
 .key-item i { display: inline-block; width: 16px; border-top: 2px solid var(--link); }
 .key-item.b1 i { border-top-color: var(--teal); }
 .dock-body { position: relative; min-height: 0; overflow: hidden; }
 .plot { position: absolute; inset: 0; display: block; }
 .plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
-.plot-readout { position: absolute; top: 4px; left: 60px; display: flex; gap: 14px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none; }
+.plot-readout { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
 .plot-readout b { color: var(--heading); font-weight: 600; }
 .readout-b0 b { color: var(--link); }
 .readout-b1 b { color: var(--teal); }
@@ -283,14 +302,13 @@ svg .axis .tick { stroke: var(--rule); }
 svg .line { stroke-width: 1.5; stroke-linejoin: round; }
 svg .line.b0 { stroke: var(--link); }
 svg .line.b1 { stroke: var(--teal); }
-svg .band.b0 { fill: rgba(11, 111, 191, 0.1); }
 svg .cursor line { stroke: var(--heading); stroke-width: 1; }
 svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 svg .cursor circle.b1 { stroke: var(--teal); }
 
 /* ---- result card ---- */
 .result-card {
-	width: 252px; padding: 12px 14px 10px; background: rgba(255, 255, 255, 0.9); border: 1px solid var(--hair); border-radius: 8px;
+	width: 264px; max-height: 100%; overflow-y: auto; padding: 12px 14px 10px; background: rgba(255, 255, 255, 0.92); border: 1px solid var(--hair); border-radius: 8px;
 	backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: rise 0.35s var(--ease) both;
 }
 .result-card.settled { animation: none; }
@@ -306,6 +324,40 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 .result-outside { display: grid; gap: 2px; margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: rgba(163, 91, 26, 0.08); color: var(--orange); font-size: 12px; }
 .result-outside > div:first-child { font-weight: 600; }
 .result-run { margin-top: 9px; color: var(--faint); font-size: 11.5px; }
+/* Where the drag comes from: forward- and rearward-facing surfaces, signed about zero, with the net marked. */
+.split { margin-top: 10px; }
+.split-bar { display: block; overflow: visible; }
+.split-part { transition: opacity 0.15s; }
+.split-part.forward { fill: var(--link); }
+.split-part.rearward { fill: var(--teal); }
+.split-bar .zero { stroke: var(--muted); stroke-width: 1; }
+.split-bar .net { stroke: var(--heading); stroke-width: 2; }
+.split-legend { display: flex; justify-content: space-between; margin-top: 5px; }
+.split-item { display: grid; color: var(--muted); font-size: 11.5px; transition: opacity 0.15s; }
+.split-item b { font-size: 13px; font-weight: 600; }
+.split-item.forward b { color: var(--link); }
+.split-item.rearward { text-align: right; }
+.split-item.rearward b { color: var(--teal); }
+.split:has(.forward:hover) .rearward, .split:has(.rearward:hover) .forward { opacity: 0.35; }
+/* The pressure extremes on a side view of the car; their colours are the ends of the cool-to-warm ramp. */
+.extremes { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
+.profile { display: block; overflow: visible; }
+.profile .outline { fill: #eef3f7; stroke: #9cb9c8; stroke-width: 1; stroke-linejoin: round; }
+.profile .spot { stroke: #fff; stroke-width: 1.5; cursor: pointer; }
+.profile .spot.max, .extreme.max i { fill: #b40426; background: #b40426; }
+.profile .spot.min, .extreme.min i { fill: #3b4cc0; background: #3b4cc0; }
+.extreme-buttons { display: flex; justify-content: space-between; margin-top: 4px; }
+.extreme { display: inline-flex; align-items: baseline; gap: 6px; margin: 0 -6px; padding: 3px 6px; border-radius: 5px; color: var(--muted); font-size: 12px; }
+.extreme:hover, .extreme:focus-visible { background: var(--tint); color: var(--heading); }
+.extreme i { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.extreme b { color: var(--heading); font-size: 13px; font-weight: 600; }
+.extreme-marker { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.extreme-marker::before { content: ""; position: absolute; left: -10px; top: -10px; width: 20px; height: 20px; border: 2px solid; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
+.extreme-marker.max::before { border-color: #b40426; }
+.extreme-marker.min::before { border-color: #3b4cc0; }
+.extreme-marker span { position: absolute; left: 13px; top: -24px; padding: 1px 5px; border-radius: 4px; background: #fff; box-shadow: 0 1px 3px rgba(13, 34, 51, 0.15); font-size: 11px; font-weight: 600; }
+.extreme-marker.max span { color: #b40426; }
+.extreme-marker.min span { color: #3b4cc0; }
 
 /* ---- probes table ---- */
 .dock-table { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; }
@@ -327,6 +379,10 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 
 /* ---- smaller windows ---- */
+/* A short window keeps the extremes' values and drops their side view, so the card stays clear of the car. */
+@media (max-height: 760px) {
+	.profile { display: none; }
+}
 @media (max-width: 1360px) {
 	.tool-label { display: none; }
 	.tool { padding: 0 7px; }
@@ -340,7 +396,7 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 	.stage, body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
 	:is(.dock-host, .dock-resizer, .topbar-end, .tool-group, .legend-tools) { display: none !important; }
 	.work { grid-template-columns: minmax(0, 1fr) 0 !important; }
-	.card-host { top: auto; bottom: 12px; }
+	.card-host { top: auto; }
 	.toolbar { gap: 8px; padding: 0 8px; overflow-x: auto; }
 	.legend { width: 220px; }
 	.legend-bar { width: 196px; }

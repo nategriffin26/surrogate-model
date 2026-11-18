@@ -306,14 +306,15 @@ def _assert_polygon(polygon: dict, c: int, mesh: pv.PolyData, surface: SurfaceMe
 @requires_runtime
 def test_polygon_at_gives_the_polygon_under_a_pick(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches `polygonAt` or `explain` on the file analysed last choosing another polygon than the
-    one under the point, outlining it with other corners than the file's, or giving other values
-    than the prediction there, before or after the background prediction reaches it."""
+    one under the point, outlining it with other corners than the file's, giving other values than
+    the prediction there (before or after the background prediction reaches it), or `explain`
+    showing CFD from elsewhere than that polygon."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     probes = _run_engine("analysis", path, tmp_path / "out")["probes"]
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
     mesh, surface = pv.read(path), read_vtp_surface(path)
     for probe in probes:
-        assert probe["explained"] == probe["target"]
+        assert probe["explained"] == {"index": probe["target"], "cfd": float(mesh.cell_data["CpMeanTrim"][probe["target"]])}
         for polygon in (probe["early"], probe["late"]):
             _assert_polygon(polygon, probe["target"], mesh, surface, reference.cp_mean, reference.cp_std)
 
@@ -328,6 +329,16 @@ def test_polygons_asked_on_demand_match_the_reference(car: pv.PolyData, model_di
     mesh, surface = pv.read(path), read_vtp_surface(path)
     for pick in picks:
         _assert_polygon(pick["polygon"], pick["target"], mesh, surface, reference.cp_mean, reference.cp_std)
+
+
+@requires_runtime
+def test_a_bundled_example_is_explained_at_a_vertex(tmp_path: Path) -> None:
+    """Catches `explain` failing, or `polygonAt` answering, for a bundled example opened before any
+    file was analysed, when the engine holds no polygons."""
+    outcome = _run_engine("example", REPO / "web/examples/run_1", tmp_path / "out")
+    assert outcome["explained"]["at"] == "vertex"
+    assert outcome["explained"]["cfd"] == outcome["vertexCfd"]
+    assert outcome["polygon"] is None
 
 
 RUN_1 = REPO / "data/raw/holdout/run_1/boundary_1.vtp"

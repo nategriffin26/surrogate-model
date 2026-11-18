@@ -8,6 +8,7 @@
 //   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs analysis <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs pick     <surface.vtp> <out dir> <model dir>
+//   bun tests/web_engine_outputs.mjs example  <example base>  <out dir>
 //
 // `parse` writes the parsed surface; `engine` adds the polygon geometry, the features at every
 // polygon centre, each network's Cp there, and the features again from the lookups as an example
@@ -19,7 +20,8 @@
 // predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
 // forces, the `exact` numbers, and what `polygonAt` and `explain` give at points just outside two
 // dozen polygons. `pick` times `polygonAt`'s lookup at points outside two hundred polygons, the
-// networks asked at each on demand, without the rest of the engine.
+// networks asked at each on demand, without the rest of the engine. `example` asks a fresh engine,
+// which has analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -53,6 +55,18 @@ function probesOutside({ points, connectivity, offsets }, { normals }, count) {
 }
 
 const plain = (polygon) => polygon && { ...polygon, corners: Array.from(polygon.corners) };
+
+if (mode === 'example') {
+  const example = await unpackResult(JSON.parse(readFileSync(`${path}.json`, 'utf8')), readFileSync(`${path}.bin`).buffer);
+  const engine = createEngine();
+  const v = Math.floor(example.mesh.positions.length / 6);
+  const point = Array.from(example.mesh.positions.subarray(3 * v, 3 * v + 3));
+  const normal = Array.from(example.mesh.normals.subarray(3 * v, 3 * v + 3));
+  const { at, index, cfd } = await engine.explain(example, point, normal);
+  const polygon = await engine.polygonAt(example, point, normal);
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ explained: { at, index, cfd }, vertexCfd: example.mesh.cfd[index], polygon }));
+  process.exit(0);
+}
 
 if (mode === 'sequence') {
   const engine = createEngine();
@@ -116,7 +130,9 @@ if (mode === 'analysis') {
     geometry: result.geometry,
     sampled: { forces: result.forces },
     exact: numbers,
-    probes: probes.map(({ target }, k) => ({ target, early: plain(early[k]), late: plain(late[k]), explained: explained[k].index })),
+    probes: probes.map(({ target }, k) => ({
+      target, early: plain(early[k]), late: plain(late[k]), explained: { index: explained[k].index, cfd: explained[k].cfd },
+    })),
   }));
   process.exit(0);
 }

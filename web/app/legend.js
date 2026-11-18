@@ -42,15 +42,28 @@ function digits(map) {
 	return digitsFor((map.hi - map.lo) / 20);
 }
 
-function paintBar(canvas, map) {
-	const ctx = canvas.getContext('2d');
+/** The bar across [lo, hi] as CSS: the ramp, or its bands with hard edges. Painted off the main thread. */
+function barGradient(map) {
 	const bands = bandCount(map);
-	for (let i = 0; i < canvas.width; i++) {
-		const value = map.lo + ((map.hi - map.lo) * (i + 0.5)) / canvas.width;
+	const colour = (t) => `rgb(${sample(map.ramp, t).join(' ')})`;
+	const percent = (t) => `${(t * 100).toFixed(2)}%`;
+	const stops = [];
+	if (bands) for (let k = 0; k < bands; k++) stops.push(`${colour((k + 0.5) / bands)} ${percent(k / bands)} ${percent((k + 1) / bands)}`);
+	else for (let i = 0; i <= 64; i++) stops.push(`${colour(i / 64)} ${percent(i / 64)}`);
+	return `linear-gradient(90deg, ${stops.join(', ')})`;
+}
+
+/** The bar into a canvas, for the picture export. */
+function paintBar(canvas, map) {
+	const bands = bandCount(map);
+	const { width, height } = canvas;
+	const image = new ImageData(width, height);
+	for (let i = 0; i < width; i++) {
+		const value = map.lo + ((map.hi - map.lo) * (i + 0.5)) / width;
 		const [r, g, b] = sample(map.ramp, rampPosition(value, map.lo, map.hi, bands));
-		ctx.fillStyle = `rgb(${r},${g},${b})`;
-		ctx.fillRect(i, 0, 1, canvas.height);
+		for (let j = 0; j < height; j++) image.data.set([r, g, b, 255], 4 * (j * width + i));
 	}
+	canvas.getContext('2d').putImageData(image, 0, 0);
 }
 
 function parse(text) {
@@ -61,7 +74,8 @@ function parse(text) {
 /** actions: change(patch to the map), reset(). */
 export function createLegend(actions) {
 	const title = h('span', { class: 'legend-title' });
-	const bar = h('canvas', { class: 'legend-bar', width: BAR_WIDTH * 2, height: 2, title: 'Drag an end to set it, the middle to shift the range' });
+	// A gradient, not a canvas: putting pixels into a canvas waits on the GPU process, which the networks keep busy.
+	const bar = h('div', { class: 'legend-bar', title: 'Drag an end to set it, the middle to shift the range' });
 	const ticks = h('div', { class: 'legend-ticks' });
 	const lo = h('input', { class: 'legend-end', 'aria-label': 'Range minimum', inputmode: 'decimal', spellcheck: 'false' });
 	const hi = h('input', { class: 'legend-end legend-end-hi', 'aria-label': 'Range maximum', inputmode: 'decimal', spellcheck: 'false' });
@@ -136,7 +150,7 @@ export function createLegend(actions) {
 		el.hidden = !map;
 		if (!map) return;
 		title.textContent = state.title;
-		paintBar(bar, map);
+		bar.style.background = barGradient(map);
 		const d = digits(map);
 		if (document.activeElement !== lo) lo.value = signed(map.lo, d);
 		if (document.activeElement !== hi) hi.value = signed(map.hi, d);

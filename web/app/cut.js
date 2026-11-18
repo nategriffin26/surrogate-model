@@ -3,7 +3,7 @@
 // cursor linked to the car.
 
 import { h } from './dom.js';
-import { metres, signed } from './format.js';
+import { metres, niceTicks, signed } from './format.js';
 import { drawCursor, drawPlot, valueAlong } from './plots.js';
 import { CUT_AXES, branches, cut } from './section.js';
 
@@ -32,6 +32,27 @@ function sectionRows(c, section, field) {
 	return sectionOf(c, section).branches.map((paths) => paths.map((path) => path.map((p) => ({ along: p.p[along], value: q.value(p), p: p.p }))));
 }
 
+const plotRanges = new WeakMap();
+
+/**
+ * A field's value axis for a car: its lowest and highest value over the whole working mesh, rounded outward to tidy
+ * ticks, so the axis holds still wherever the plane goes.
+ */
+function plotRange(c, field) {
+	const ranges = plotRanges.get(c) ?? plotRanges.set(c, {}).get(c);
+	if (ranges[field]) return ranges[field];
+	const { cp, sigma, normals } = c.result.mesh;
+	let lo = Infinity, hi = -Infinity;
+	for (let v = 0; v < cp.length; v++) {
+		const value = field === 'cp' ? cp[v] : field === 'sigma' ? sigma[v] : -cp[v] * normals[3 * v];
+		if (value < lo) lo = value;
+		if (value > hi) hi = value;
+	}
+	const { step } = niceTicks(lo, hi, 5);
+	ranges[field] = [Math.floor(lo / step) * step, Math.ceil(hi / step) * step];
+	return ranges[field];
+}
+
 export function sectionCsv(c, view) {
 	const names = CUT_AXES[view.section.axis].branches;
 	const lines = [['branch', 'x_m', 'y_m', 'z_m', QUANTITY[view.field].key].join(',')];
@@ -51,7 +72,8 @@ export function createSectionTool({ host, viewport, viewer, active, view, change
 	let plot = null;
 	let cursorAt = null;
 
-	const enabled = () => Boolean(active()?.result && view.section.on);
+	// The cut line can be grabbed only while it is drawn: not with the section off, nor while the Model view owns the car.
+	const enabled = () => Boolean(active()?.result && viewer.section);
 
 	/** Distance in pixels from a client point to the cut line on screen, and the cut point nearest to it. */
 	function nearestOnScreen(clientX, clientY) {
@@ -138,19 +160,11 @@ export function createSectionTool({ host, viewport, viewer, active, view, change
 		const q = QUANTITY[view.field];
 		const { along, branches: names } = CUT_AXES[view.section.axis];
 		const rows = sectionRows(c, view.section, view.field);
-		const series = rows.flatMap((paths, b) => paths.map((path) => ({ kind: 'line', cls: `b${b}`, points: path.map((r) => [r.along, r.value]) })));
+		const series = rows.flatMap((paths, b) => paths.map((path) => ({ cls: `b${b}`, points: path.map((r) => [r.along, r.value]) })));
 		const bounds = c.result.geometry.bounds;
 		const domain = [bounds[2 * along] - 0.05, bounds[2 * along + 1] + 0.05];
-		let lo = Infinity, hi = -Infinity;
-		for (const paths of rows) for (const path of paths) for (const r of path) {
-			lo = Math.min(lo, r.value);
-			hi = Math.max(hi, r.value);
-		}
-		if (!Number.isFinite(lo)) [lo, hi] = [-1, 1];
-		// Pressure keeps a steady scale while the plane is dragged; other fields follow their values.
-		if (q.invert) [lo, hi] = [Math.min(-1.2, Math.floor(lo * 2) / 2), Math.max(1, Math.ceil(hi * 2) / 2)];
-		const pad = (hi - lo) * 0.06 || 1;
-		plot = { frame: drawPlot(svg, { width, height, x: { domain, label: `${AXIS_NAMES[along]}, m` }, y: { domain: [lo - pad, hi + pad], label: q.label, invert: q.invert }, series }), rows, readout, along, names };
+		const [lo, hi] = plotRange(c, view.field);
+		plot = { frame: drawPlot(svg, { width, height, x: { domain, label: `${AXIS_NAMES[along]}, m` }, y: { domain: [lo, hi], label: q.label, invert: q.invert }, series }), rows, readout, along, names };
 		setCursor(cursorAt);
 		svg.onpointermove = (e) => {
 			const rect = svg.getBoundingClientRect();
@@ -186,30 +200,51 @@ export function createSectionTool({ host, viewport, viewer, active, view, change
 		setCursor(hit ? hit.point[plot.along] : null);
 	}
 
-	/** Header controls for the dock: normal axis, position, clip. */
+	// The header controls are built once and updated in place: replacing them while the slider is held would end
+	// the drag after its first step.
+	const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', 'aria-label': 'Position, m', spellcheck: 'false' });
+	position.addEventListener('change', () => {
+		const value = Number(position.value.replace('\u2212', '-'));
+		if (Number.isFinite(value)) changed({ offset: value });
+		else position.value = signed(view.section.offset, 3);
+	});
+	position.addEventListener('keydown', (e) => e.key === 'Enter' && position.blur());
+	const slider = h('input', { type: 'range', class: 'slider', step: 0.001, 'aria-label': 'Position' });
+	slider.addEventListener('input', () => changed({ offset: Number(slider.value) }));
+	const segments = (label, values, pick) => {
+		const buttons = values.map((value) => h('button', { type: 'button', role: 'radio', class: 'segment', onclick: () => pick(value) }));
+		return { el: h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons), buttons };
+	};
+	const normal = segments('Normal', [0, 1, 2], (axis) => {
+		const b = active().result.geometry.bounds;
+		changed({ axis, offset: axis === 1 ? 0 : Number(((b[2 * axis] + b[2 * axis + 1]) / 2).toFixed(3)) });
+	});
+	normal.buttons.forEach((b, axis) => (b.textContent = AXIS_NAMES[axis]));
+	const clip = segments('Clip', [0, 1, -1], (value) => changed({ clip: value }));
+	const axisLabel = h('span', { class: 'control-label' });
+	const controlsEl = h('div', { class: 'cut-controls' },
+		h('span', { class: 'control-label' }, 'Normal'), normal.el,
+		h('label', { class: 'position' }, axisLabel, position, h('span', { class: 'unit' }, 'm')),
+		slider,
+		h('span', { class: 'control-label' }, 'Clip'), clip.el);
+
+	/** Header controls for the dock, brought up to date with the section and the car: normal axis, position, clip. */
 	function controls(c) {
 		const s = view.section;
 		const b = c.result.geometry.bounds;
-		const [min, max] = [b[2 * s.axis], b[2 * s.axis + 1]];
-		const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', value: signed(s.offset, 3), 'aria-label': 'Position, m', spellcheck: 'false' });
-		position.addEventListener('change', () => {
-			const value = Number(position.value.replace('\u2212', '-'));
-			if (Number.isFinite(value)) changed({ offset: value });
-			else position.value = signed(s.offset, 3);
-		});
-		position.addEventListener('keydown', (e) => e.key === 'Enter' && position.blur());
-		const slider = h('input', { type: 'range', class: 'slider', min, max, step: 0.001, value: s.offset, 'aria-label': 'Position' });
-		slider.addEventListener('input', () => changed({ offset: Number(slider.value) }));
-		const segmented = (label, options, current, pick) => h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label },
-			options.map(([value, text, title]) => h('button', { type: 'button', role: 'radio', class: 'segment', title, 'aria-checked': String(value === current), onclick: () => pick(value) }, text)));
 		const name = AXIS_NAMES[s.axis];
-		return h('div', { class: 'cut-controls' },
-			h('span', { class: 'control-label' }, 'Normal'),
-			segmented('Normal', [[0, 'x'], [1, 'y'], [2, 'z']], s.axis, (axis) => changed({ axis, offset: axis === 1 ? 0 : Number(((b[2 * axis] + b[2 * axis + 1]) / 2).toFixed(3)) })),
-			h('label', { class: 'position' }, h('span', { class: 'control-label' }, name), position, h('span', { class: 'unit' }, 'm')),
-			slider,
-			h('span', { class: 'control-label' }, 'Clip'),
-			segmented('Clip', [[0, 'Off', 'No clipping'], [1, `−${name}`, `Keep ${name} below the plane`], [-1, `+${name}`, `Keep ${name} above the plane`]], s.clip, (clip) => changed({ clip })));
+		slider.min = b[2 * s.axis];
+		slider.max = b[2 * s.axis + 1];
+		slider.value = s.offset;
+		if (document.activeElement !== position) position.value = signed(s.offset, 3);
+		axisLabel.textContent = name;
+		normal.buttons.forEach((button, axis) => button.setAttribute('aria-checked', String(axis === s.axis)));
+		const clipLabels = [['Off', 'No clipping'], [`−${name}`, `Keep ${name} below the plane`], [`+${name}`, `Keep ${name} above the plane`]];
+		clip.buttons.forEach((button, i) => {
+			[button.textContent, button.title] = clipLabels[i];
+			button.setAttribute('aria-checked', String([0, 1, -1][i] === s.clip));
+		});
+		return controlsEl;
 	}
 
 	function key() {

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
-import { VertexGrid } from './picking.js';
+import { FaceIndex, VertexGrid } from './picking.js';
 import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX } from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
@@ -16,6 +16,8 @@ const CLAY = '#e4e9ed';
 const ACCENT = '#0b6fbf';
 const FOV = 30;
 const ORTHO_DISTANCE = 20;
+/** How close `flyTo` comes, as a share of the distance that frames the whole car. */
+const CLOSE_UP = 0.4;
 /** The camera counts as moving until this long after its last change. */
 const SETTLE_MS = 140;
 /** Screen motion per frame, in pixels, that counts as the camera moving (for choosing the mesh). */
@@ -25,6 +27,13 @@ const SUBPIXEL = 0.05;
 /** A full-mesh frame slower than this while the camera moves hands motion to the working mesh. */
 const MOVING_BUDGET_MS = 14;
 const ARRIVAL_MS = 850;
+/**
+ * Bytes per millisecond handed to the GPU while the car uploads: 0.5 GB/s, 8 MB per 60 Hz frame, which the browser's
+ * transfer buffer takes without waiting on the GPU process. Measured during a real load: 8 MB a frame never cost
+ * more than 1.1 ms, while 17 MB a frame blocked for up to 60 ms whenever the networks kept the GPU process busy.
+ * Paced by time, not by frame, so a 120 Hz display hands over no more per second than a 60 Hz one.
+ */
+const UPLOAD_RATE = 1 << 19;
 
 /** Camera directions, from the target towards the camera. x runs downstream, z up, the car's left side is −y. */
 export const VIEWS = {
@@ -46,6 +55,13 @@ export class Viewer extends EventTarget {
 		this.host = host;
 		this.surface = null;
 		this.bounds = null;
+		/** The working mesh the floor is laid under and picking reads: the surface's, once it is on the GPU. */
+		this.placed = null;
+		/** Starts the field's arrival once the mesh carrying it is on the GPU. */
+		this.arrival = null;
+		this.lastUpload = 0;
+		/** Signalled once the GPU has taken in the last piece uploaded. */
+		this.uploadFence = null;
 		this.panes = [{ field: 'none', map: null }];
 		this.display = { edges: false, ground: true };
 		this.section = null;
@@ -68,9 +84,12 @@ export class Viewer extends EventTarget {
 		host.append(renderer.domElement);
 		this.renderer = renderer;
 		this.canvas = renderer.domElement;
-		// three rebuilds its own state when the GPU hands the context back; the floor shadow lived in a texture.
+		// three rebuilds its own state when the GPU hands the context back; the car's buffers and the floor shadow are
+		// made again.
 		this.canvas.addEventListener('webglcontextrestored', () => {
-			if (this.surface) this.placeSurface();
+			this.surface?.restage();
+			this.placed = null;
+			this.uploadFence = null;
 			this.requestRender();
 		});
 
@@ -113,8 +132,7 @@ export class Viewer extends EventTarget {
 			uOrtho: { value: 0 },
 			uViewDir: { value: new THREE.Vector3() },
 			uSection: { value: 0 },
-			uCursor: { value: new THREE.Vector4() },
-			uAccent: { value: new THREE.Color(ACCENT) },
+			uEmphasis: { value: 0 },
 			uPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
 			uClip: { value: 0 },
 			uArrival: { value: new THREE.Vector4() },
@@ -165,6 +183,7 @@ export class Viewer extends EventTarget {
 		this.pickScene.add(this.pickMesh);
 		this.pickTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType });
 		this.grid = null;
+		this.faces = null;
 		/** Whether pointer moves are picked for a hover readout; the app turns it on once a case has a result. */
 		this.hoverPicking = false;
 		this.pointer = null;
@@ -207,36 +226,90 @@ export class Viewer extends EventTarget {
 
 	// ---- the car ------------------------------------------------------------------------------------------------
 
-	/** Show a case's surface, or nothing (the first screen). The floor is laid under the working mesh. */
+	/** Show a case's surface, or nothing (the first screen). It is drawn once its working mesh is on the GPU. */
 	show(surface) {
 		this.surface = surface;
-		this.bounds = null;
+		this.placed = null;
+		this.bounds = surface?.working.bounds ?? null;
 		this.grid = null;
-		this.car.visible = surface !== null;
-		this.ground.object.visible = surface !== null && this.display.ground;
-		if (surface) this.placeSurface();
+		this.faces = null;
+		this.ground.object.visible = false;
+		this.cancelAnimation('arrival');
+		this.arrival = null;
+		this.uniforms.uArrival.value.w = 0;
+		this.uniforms.uFade.value = 1;
 		this.requestRender();
 	}
 
-	/** The surface gained a mesh or fields: re-lay the floor if the working mesh changed, and redraw. */
+	/** The surface gained a mesh or fields; the frame loop uploads them and re-lays the floor under a new working mesh. */
 	surfaceChanged() {
-		if (this.pickMesh.geometry !== this.surface.working.geometry) this.placeSurface();
 		this.requestRender();
 	}
 
+	/**
+	 * Move the next pieces of the car to the GPU. Once the working mesh is there, lay the floor under it and pick from
+	 * it; once the fields shown are there too, start a waiting arrival.
+	 */
+	uploadSurface(now) {
+		const s = this.surface;
+		if (!s) return;
+		if (s.uploading && this.uploadTaken()) {
+			// A piece the size of the time since the last one, at most a 60 Hz frame's worth.
+			const ms = Math.min(1000 / 60, now - this.lastUpload);
+			this.lastUpload = now;
+			if (s.upload(this.renderer, ms * UPLOAD_RATE)) this.dirty = true;
+			const gl = this.renderer.getContext();
+			this.uploadFence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+		}
+		if (s.working.ready && this.placed !== s.working) {
+			this.placeSurface();
+			this.dirty = true;
+		}
+		if (this.arrival && this.placed === s.working && this.panes.every((pane) => s.working.has(pane.field))) {
+			const start = this.arrival;
+			this.arrival = null;
+			start();
+		}
+	}
+
+	/**
+	 * Whether the GPU has taken in the last piece. The GPU process also runs the networks, and a piece handed over
+	 * while it is behind blocks the page until it catches up; so the next piece waits for it instead.
+	 */
+	uploadTaken() {
+		const fence = this.uploadFence;
+		if (!fence) return true;
+		const gl = this.renderer.getContext();
+		if (gl.getSyncParameter(fence, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+		gl.deleteSync(fence);
+		this.uploadFence = null;
+		return true;
+	}
+
+	/** The working mesh is on the GPU: lay the floor under it and pick from it. Listeners hear 'placed'. */
 	placeSurface() {
 		const working = this.surface.working;
+		this.placed = working;
 		this.bounds = working.bounds;
 		this.pickMesh.geometry = working.geometry;
 		this.grid = null;
+		this.faces = null;
+		this.ground.object.visible = this.display.ground;
 		this.uniforms.uZmin.value = this.bounds[4];
 		this.ground.place(this.renderer, working.geometry, this.bounds);
+		this.placePlane();
+		this.dispatchEvent(new CustomEvent('placed'));
 	}
 
-	/** The vertex grid is built on first use: picking is the only thing that needs it. */
+	/** The vertex grid and face index are built on first use: picking is the only thing that needs them. */
 	vertexGrid() {
-		this.grid ??= new VertexGrid(this.surface.working.mesh.positions);
+		this.grid ??= new VertexGrid(this.placed.mesh.positions);
 		return this.grid;
+	}
+
+	faceIndex() {
+		this.faces ??= new FaceIndex(this.placed.mesh);
+		return this.faces;
 	}
 
 	/**
@@ -245,13 +318,16 @@ export class Viewer extends EventTarget {
 	 * and its cost on the full mesh is timed only once they finish.
 	 */
 	chooseLayer(moving) {
-		if (!this.surface) return null;
-		const full = this.surface.full;
+		const s = this.surface;
+		if (!this.placed) return null;
+		const full = s.full?.ready ? s.full : null;
+		// A new working mesh still on its way: the full mesh stands in, clay until its fields arrive.
+		if (!s.working.ready) return full ? 'full' : null;
 		// The full mesh shown as the preview is, until the result arrives, the working mesh too.
-		if (!full || full === this.surface.working) return 'working';
+		if (!full || full === s.working) return 'working';
 		if (!this.panes.every((pane) => full.has(pane.field))) return 'working';
 		if (this.lod.layer !== full) this.resetLod(full);
-		if (moving && (this.surface.fullFraction < 1 || !this.lod.fullWhileMoving)) return 'working';
+		if (moving && (s.fullFraction < 1 || !this.lod.fullWhileMoving)) return 'working';
 		return 'full';
 	}
 
@@ -268,7 +344,7 @@ export class Viewer extends EventTarget {
 
 	setDisplay(display) {
 		this.display = { ...this.display, ...display };
-		this.ground.object.visible = this.surface !== null && this.display.ground;
+		this.ground.object.visible = this.placed !== null && this.display.ground;
 		this.requestRender();
 	}
 
@@ -286,8 +362,8 @@ export class Viewer extends EventTarget {
 		}
 		// The floor shadow follows the clipped car.
 		const after = u.uPlane.value.toArray().concat(u.uClip.value);
-		if (this.surface && (before[4] !== 0 || after[4] !== 0) && before.some((v, i) => v !== after[i])) {
-			this.ground.bakeShadow(this.renderer, this.surface.working.geometry, this.bounds);
+		if (this.placed && (before[4] !== 0 || after[4] !== 0) && before.some((v, i) => v !== after[i])) {
+			this.ground.bakeShadow(this.renderer, this.placed.geometry, this.bounds);
 		}
 		this.placePlane();
 		this.requestRender();
@@ -299,11 +375,12 @@ export class Viewer extends EventTarget {
 		return Boolean(s?.clip) && s.clip * (point[s.axis] - s.offset) > 0;
 	}
 
-	/** A thin line on the car where coordinate `axis` equals `offset` (a plot's cursor), or none for null. */
-	setCursorLine(line) {
-		const n = [0, 0, 0];
-		if (line) n[line.axis] = 1;
-		this.uniforms.uCursor.value.set(...n, line ? line.offset : 0);
+	/**
+	 * Pick out the faces a readout is about, fading the rest of the car towards clay: 'forward' or 'rearward' facing,
+	 * by the sign of the outward n_x, or null for none.
+	 */
+	setEmphasis(faces) {
+		this.uniforms.uEmphasis.value = { forward: -1, rearward: 1 }[faces] ?? 0;
 		this.requestRender();
 	}
 
@@ -382,19 +459,25 @@ export class Viewer extends EventTarget {
 		this.requestRender();
 	}
 
-	/** The field arrives on the car as a front carried downstream, broken into streaks like dye in a tunnel. */
+	/**
+	 * The field arrives on the car as a front carried downstream, broken into streaks like dye in a tunnel. The car
+	 * stays clay until the mesh carrying the field is on the GPU, and the front starts then.
+	 */
 	arrive() {
 		const u = this.uniforms;
+		this.cancelAnimation('arrival');
 		if (REDUCED_MOTION.matches) {
-			this.animate(200, (k) => (u.uFade.value = k), () => (u.uFade.value = 1), 'arrival');
-			return;
+			u.uFade.value = 0;
+			this.arrival = () => this.animate(200, (k) => (u.uFade.value = k), () => (u.uFade.value = 1), 'arrival');
+		} else {
+			const [xmin, xmax] = this.bounds;
+			const length = xmax - xmin;
+			const width = 0.22 * length;
+			const depth = 0.1 * length;
+			u.uArrival.value.set(xmin - depth, width, depth, 1);
+			this.arrival = () => this.animate(ARRIVAL_MS, (k) => (u.uArrival.value.x = xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)), () => (u.uArrival.value.w = 0), 'arrival');
 		}
-		const [xmin, xmax] = this.bounds;
-		const length = xmax - xmin;
-		const width = 0.22 * length;
-		const depth = 0.1 * length;
-		u.uArrival.value.set(xmin - depth, width, depth, 1);
-		this.animate(ARRIVAL_MS, (k) => (u.uArrival.value.x = xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)), () => (u.uArrival.value.w = 0), 'arrival');
+		this.requestRender();
 	}
 
 	// ---- camera --------------------------------------------------------------------------------------------------
@@ -450,6 +533,17 @@ export class Viewer extends EventTarget {
 	/** Look at the car along a direction (the axis triad). */
 	lookAlong(dir) {
 		this.moveTo(this.framing(dir), true);
+	}
+
+	/**
+	 * Fly to a surface point and look at it from outside, along its normal tipped up to stay above the floor, from
+	 * CLOSE_UP of the distance that frames the whole car.
+	 */
+	flyTo(point, normal) {
+		const whole = this.framing([normal[0], normal[1], Math.max(normal[2], 0.25)]);
+		const target = new THREE.Vector3(...point);
+		const offset = whole.position.clone().sub(whole.target).multiplyScalar(CLOSE_UP);
+		this.moveTo({ position: target.clone().add(offset), target, zoom: this.camera.isOrthographicCamera ? whole.zoom / CLOSE_UP : 1 }, true, 600);
 	}
 
 	/** Frame the whole car without changing the direction of view. */
@@ -628,7 +722,7 @@ export class Viewer extends EventTarget {
 	 * null over the background. Rendered into a one-pixel float target and read back without stalling the page.
 	 */
 	async pick(clientX, clientY) {
-		if (!this.surface) return null;
+		if (!this.placed) return null;
 		const at = this.paneAt(clientX, clientY);
 		if (!at) return null;
 		const camera = this.camera;
@@ -645,10 +739,19 @@ export class Viewer extends EventTarget {
 		await renderer.readRenderTargetPixelsAsync(this.pickTarget, 0, 0, 1, 1, out);
 		if (out[3] === 0 || surface !== this.surface) return null;
 		const point = [out[0], out[1], out[2]];
-		// The nearest working-mesh vertex needs the vertex grid; it is found only when a reader asks for it.
-		const nearest = () => this.vertexGrid().nearest(point);
-		let vertex;
-		return { pane: at.index, point, get vertex() { return (vertex ??= nearest()); } };
+		// The nearest working-mesh vertex and the face the point lies on are found only when a reader asks for them.
+		let vertex, face;
+		const viewer = this;
+		return {
+			pane: at.index,
+			point,
+			get vertex() {
+				return (vertex ??= viewer.vertexGrid().nearest(point));
+			},
+			get face() {
+				return (face ??= viewer.faceIndex().faceAt(point, this.vertex));
+			},
+		};
 	}
 
 	bindPointer() {
@@ -734,6 +837,7 @@ export class Viewer extends EventTarget {
 
 	frame(now) {
 		this.pending = false;
+		this.uploadSurface(now);
 		const animating = this.animations.size > 0;
 		for (const a of [...this.animations]) {
 			const k = Math.min(1, (now - a.start) / a.ms);
@@ -764,7 +868,7 @@ export class Viewer extends EventTarget {
 		}
 		this.lastFrame = now;
 		this.dirty = false;
-		if (this.animations.size > 0 || controlled || moving || latticeMoving) this.schedule();
+		if (this.animations.size > 0 || controlled || moving || latticeMoving || this.surface?.uploading) this.schedule();
 	}
 
 	/** The largest distance, in pixels, any corner of the car's box moved on screen since the previous frame. */
@@ -811,6 +915,7 @@ export class Viewer extends EventTarget {
 		}
 		camera.getWorldDirection(u.uViewDir.value);
 		const layer = layerName ? this.surface[layerName] : null;
+		this.car.visible = layer !== null;
 		if (layer) {
 			this.car.geometry = layer.geometry;
 			const edgeGeometry = this.display.edges ? layer.edgeGeometry(() => this.requestRender()) : null;

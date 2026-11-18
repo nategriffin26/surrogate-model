@@ -44,13 +44,14 @@ export function valueAt(mesh, field, v) {
 	}
 }
 
-/** The `quantile` of |value| over an even sample of about 50,000 of the mesh's vertices. */
+/** The `quantile` of |value| over an even sample of about 20,000 of the mesh's vertices: ample for a 98 % range end. */
 function magnitudeQuantile(mesh, field, quantile) {
 	const count = mesh.positions.length / 3;
-	const step = Math.max(1, Math.floor(count / 50000));
-	const sample = [];
-	for (let v = 0; v < count; v += step) sample.push(Math.abs(valueAt(mesh, field, v)));
-	sample.sort((a, b) => a - b);
+	const step = Math.max(1, Math.floor(count / 20000));
+	// A typed array sorts numerically and natively, several times faster than an array with a comparator.
+	const sample = new Float32Array(Math.ceil(count / step));
+	for (let v = 0, i = 0; v < count; v += step) sample[i++] = Math.abs(valueAt(mesh, field, v));
+	sample.sort();
 	return sample[Math.floor(quantile * (sample.length - 1))];
 }
 

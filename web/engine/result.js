@@ -135,6 +135,8 @@
  * @property {number[]} cpModels        each network's Cp
  * @property {number} cp                their mean
  * @property {number} sigma             spread σ(Cp): their standard deviation × `ModelCard.spreadScale`
+ * @property {number | null} cfd        the CFD Cp there: the file's own value at the polygon, or
+ *   `Result.mesh.cfd` at the vertex; null when the file carried no CFD
  * @property {Float32Array[][]} activations  per network, what it computed on the way to its Cp:
  *   [input, hidden 1, hidden 2, hidden 3]. `input` is `features` standardized and clipped by that
  *   network's own scaling (what its first layer reads); each hidden layer is its output after GELU.

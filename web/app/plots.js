@@ -1,5 +1,5 @@
-// Line plots in SVG: a frame with round ticks and units, lines, dashed lines, bands, and a cursor that follows the
-// pointer. Each plot redraws to the size of its box.
+// Line plots in SVG: a frame with round ticks and units, lines, and a cursor that follows the pointer. Each plot
+// redraws to the size of its box.
 
 import { s } from './dom.js';
 import { niceTicks, signed } from './format.js';
@@ -15,8 +15,7 @@ const path = (points) => points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(
 
 /**
  * Draw a plot into an empty SVG of the given size. `x` and `y` are {domain: [lo, hi], label, invert?}; series are
- * {kind: 'line' | 'dashed' | 'band', cls, points: [[x, y]] or, for a band, [[x, lo, hi]]}. Returns the scales and
- * the plotting box so a cursor can be drawn later.
+ * lines {cls, points: [[x, y]]}. Returns the scales and the plotting box so a cursor can be drawn later.
  */
 export function drawPlot(svg, { width, height, x, y, series }) {
 	const m = { l: 52, r: 16, t: 22, b: 30 };
@@ -45,13 +44,7 @@ export function drawPlot(svg, { width, height, x, y, series }) {
 	const body = s('g', { 'clip-path': `url(#${clip})` });
 	for (const item of series) {
 		if (item.points.length < 2) continue;
-		if (item.kind === 'band') {
-			const top = item.points.map(([a, lo]) => [sx(a), sy(lo)]);
-			const bottom = item.points.map(([a, , hi]) => [sx(a), sy(hi)]).reverse();
-			body.append(s('path', { d: `${path(top)}L${path(bottom).slice(1)}Z`, class: `band ${item.cls}` }));
-		} else {
-			body.append(s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: `${item.kind} ${item.cls}`, fill: 'none' }));
-		}
+		body.append(s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: `line ${item.cls}`, fill: 'none' }));
 	}
 	svg.append(body);
 	return { svg, x: sx, y: sy, m, width, height };
@@ -64,23 +57,6 @@ export function drawCursor(frame, at, dots = []) {
 	const g = s('g', { class: 'cursor' }, s('line', { x1: frame.x(at), x2: frame.x(at), y1: frame.m.t, y2: frame.height - frame.m.b }));
 	for (const { value, cls } of dots) g.append(s('circle', { cx: frame.x(at), cy: frame.y(value), r: 3.5, class: cls }));
 	frame.svg.append(g);
-}
-
-/** Domain covering every y in the series, padded a little, never empty. */
-export function extent(series, pad = 0.05) {
-	let lo = Infinity, hi = -Infinity;
-	for (const item of series) {
-		for (const p of item.points) {
-			for (const v of item.kind === 'band' ? [p[1], p[2]] : [p[1]]) {
-				if (v < lo) lo = v;
-				if (v > hi) hi = v;
-			}
-		}
-	}
-	if (!Number.isFinite(lo)) return [0, 1];
-	if (hi - lo < 1e-9) return [lo - 1, hi + 1];
-	const d = (hi - lo) * pad;
-	return [lo - d, hi + d];
 }
 
 /** Linear interpolation along a run of [x, ...values] points sorted by x; null outside it. */

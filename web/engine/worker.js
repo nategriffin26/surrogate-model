@@ -622,13 +622,17 @@ async function explain({ id, point, normal, analysis, model, lookups, vertex }) 
     }
     let site;
     let context;
-    const cell = lastCar?.id === analysis ? polygonAt(lastCar, point, normal) : -1;
+    const car = heldCar(analysis);
+    const cell = car ? polygonAt(car, point, normal) : -1;
     if (cell >= 0) {
-      const { cells } = lastCar;
-      site = { at: 'polygon', index: cell, position: cells.centers.slice(3 * cell, 3 * cell + 3), normal: cells.normals.slice(3 * cell, 3 * cell + 3) };
-      context = lastCar.context;
+      const { cells, surface } = car;
+      site = {
+        at: 'polygon', index: cell, position: cells.centers.slice(3 * cell, 3 * cell + 3),
+        normal: cells.normals.slice(3 * cell, 3 * cell + 3), cfd: surface.cfd ? surface.cfd[cell] : null,
+      };
+      context = car.context;
     } else {
-      site = { at: 'vertex', index: vertex.index, position: Float32Array.from(vertex.position), normal: Float32Array.from(vertex.normal) };
+      site = { at: 'vertex', index: vertex.index, position: Float32Array.from(vertex.position), normal: Float32Array.from(vertex.normal), cfd: vertex.cfd };
       context = explainedLookups;
     }
     const features = new Float32Array(layout.count);
@@ -655,11 +659,17 @@ async function explain({ id, point, normal, analysis, model, lookups, vertex }) 
 async function answerPolygonAt({ id, analysis, point, normal }) {
   try {
     const { ensemble } = await engine;
-    const cell = lastCar?.id === analysis ? polygonAt(lastCar, point, normal) : -1;
-    self.postMessage({ type: 'answer', id, answer: cell < 0 ? null : describePolygon(lastCar, ensemble, cell) });
+    const car = heldCar(analysis);
+    const cell = car ? polygonAt(car, point, normal) : -1;
+    self.postMessage({ type: 'answer', id, answer: cell < 0 ? null : describePolygon(car, ensemble, cell) });
   } catch (error) {
     self.postMessage({ type: 'answerFailed', id, message: error.message });
   }
+}
+
+/** The car this worker holds for `analysis`, or null: a bundled example has no analysis. */
+function heldCar(analysis) {
+  return lastCar && lastCar.id === analysis ? lastCar : null;
 }
 
 /**
@@ -667,9 +677,9 @@ async function answerPolygonAt({ id, analysis, point, normal }) {
  * pressure coefficient is `CpMeanTrim`): `CpPredicted`, the networks' mean, and `CpSpread`, σ(Cp).
  */
 async function exportVtp({ id, analysis }) {
-  const car = lastCar;
+  const car = heldCar(analysis);
   try {
-    if (car?.id !== analysis || !car.complete) {
+    if (!car?.complete) {
       throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse its file again.');
     }
     let reported = 0;

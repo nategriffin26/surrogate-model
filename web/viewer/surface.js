@@ -1,5 +1,9 @@
 // One car's meshes on the GPU: the working mesh the tools run on and, where the engine delivers it, the full mesh
 // of the file. Both are indexed; fields are per-vertex attributes. Everything is released by `dispose`.
+//
+// Arrays reach the GPU in pieces, a few megabytes a frame (`upload`), into buffers three draws from as they are.
+// Handing three a 17.7M-triangle mesh whole would copy 430 MB in one task: 90 ms of a frozen page, then frames
+// held back while the GPU process takes the data in.
 
 import * as THREE from 'three';
 
@@ -8,54 +12,131 @@ const FIELD_ARRAYS = ['cp', 'sigma', 'cfd'];
 /** Arrays each field needs on a mesh before it can be drawn. */
 const NEEDS = { cp: ['cp'], cfd: ['cfd'], error: ['cp', 'cfd'], sigma: ['sigma'], drag: ['cp'], none: [] };
 
+/**
+ * Bytes per bufferSubData call. A larger call can outgrow the browser's transfer buffer, which then waits on the GPU
+ * process to make room; that process also runs the networks and may be busy for tens of milliseconds.
+ */
+const CALL_BYTES = 1 << 20;
+
 class Layer {
 	constructor(mesh) {
 		this.mesh = mesh;
 		this.triangles = mesh.indices.length / 3;
-		this.bounds = boundsOf(mesh.positions);
+		this.bounds = mesh.bounds;
+		this.disposed = false;
+		this.gl = null;
+		this.stageAll();
+	}
+
+	/** Queue every array for the GPU on a fresh geometry: when the layer is made, and again after the context is lost. */
+	stageAll() {
+		const mesh = this.mesh;
 		const geometry = new THREE.BufferGeometry();
-		geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
-		geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
-		geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-		// three sorts what it draws by bounding sphere and would otherwise walk every vertex twice to find one.
+		// three culls and sorts by these, and cannot measure buffers it never saw as arrays.
 		const [x0, x1, y0, y1, z0, z1] = this.bounds;
 		geometry.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1));
 		geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new THREE.Sphere());
 		this.geometry = geometry;
 		this.edges = null;
 		this.edgesPending = null;
+		/** Arrays on their way to the GPU, in order: {geometry, name, array, itemSize, sent, buffer}. */
+		this.uploads = [];
+		this.stage(geometry, 'index', mesh.indices, 1);
+		this.stage(geometry, 'position', mesh.positions, 3);
+		this.stage(geometry, 'normal', mesh.normals, 3);
 		this.setFields(mesh);
 	}
 
-	/** Attach whichever of cp, sigma and cfd the source carries; an existing attribute is refilled in place. */
+	/** Whether the mesh can be drawn: its triangles, positions and normals are on the GPU. Fields may still be on their way. */
+	get ready() {
+		const g = this.geometry;
+		return Boolean(g.index && g.getAttribute('position') && g.getAttribute('normal'));
+	}
+
+	get uploading() {
+		return this.uploads.length > 0;
+	}
+
+	/** Queue whichever of cp, sigma and cfd the source carries; a field already on the GPU is refilled in place. */
 	setFields(source) {
 		for (const name of FIELD_ARRAYS) {
-			const data = source[name];
-			if (!data) continue;
-			this.mesh[name] = data;
-			const existing = this.geometry.getAttribute(name);
-			if (existing) {
-				existing.array = data;
-				existing.needsUpdate = true;
-			} else {
-				this.geometry.setAttribute(name, new THREE.BufferAttribute(data, 1));
-			}
+			if (!source[name]) continue;
+			this.mesh[name] = source[name];
+			this.stage(this.geometry, name, source[name], 1);
 		}
 	}
 
+	/** Whether every array the field needs is on the GPU. */
 	has(field) {
-		return NEEDS[field].every((name) => this.mesh[name]);
+		return NEEDS[field].every((name) => this.geometry.getAttribute(name));
 	}
 
-	/** Edge lines, built once on first use without blocking the page for long; `onReady` runs when they exist. */
+	/** Queue an array for an attribute (or the index); a newer array replaces one still on its way and keeps its buffer. */
+	stage(geometry, name, array, itemSize) {
+		const attached = name === 'index' ? geometry.index : geometry.getAttribute(name);
+		const queued = this.uploads.find((u) => u.geometry === geometry && u.name === name);
+		this.uploads = this.uploads.filter((u) => u !== queued);
+		this.uploads.push({ geometry, name, array, itemSize, sent: 0, buffer: attached?.buffer ?? queued?.buffer ?? null });
+	}
+
+	/**
+	 * Hand the GPU the next pieces of the queued arrays, up to `budget` bytes. An array is drawn from once all of it is
+	 * there; a field refilled in place shows its previous values until then. Returns the budget left and whether an
+	 * array finished arriving, which can change the picture.
+	 */
+	upload(renderer, budget) {
+		if (this.uploads.length === 0) return { left: budget, finished: false };
+		const gl = renderer.getContext();
+		this.gl = gl;
+		// An index buffer binds to the bound vertex array object; none of three's may take this one on.
+		gl.bindVertexArray(null);
+		let finished = false;
+		while (this.uploads.length > 0 && budget > 0) {
+			const u = this.uploads[0];
+			const target = u.name === 'index' ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER;
+			if (u.buffer) {
+				gl.bindBuffer(target, u.buffer);
+			} else {
+				u.buffer = gl.createBuffer();
+				gl.bindBuffer(target, u.buffer);
+				gl.bufferData(target, u.array.byteLength, gl.STATIC_DRAW);
+			}
+			const bytes = u.array.BYTES_PER_ELEMENT;
+			const count = Math.min(u.array.length - u.sent, Math.max(1, Math.floor(Math.min(budget, CALL_BYTES) / bytes)));
+			gl.bufferSubData(target, u.sent * bytes, u.array, u.sent, count);
+			u.sent += count;
+			budget -= count * bytes;
+			if (u.sent < u.array.length) continue;
+			this.uploads.shift();
+			this.attach(u, gl);
+			finished = true;
+		}
+		// three caches the bindings it made; these calls changed them behind its back.
+		renderer.resetState();
+		return { left: budget, finished };
+	}
+
+	/** An array is all on the GPU: draw from it. A refilled one is already attached. */
+	attach({ geometry, name, array, itemSize, buffer }, gl) {
+		if (name === 'index') {
+			if (!geometry.index) geometry.setIndex(new THREE.GLBufferAttribute(buffer, gl.UNSIGNED_INT, 1, 4, array.length));
+		} else if (!geometry.getAttribute(name)) {
+			geometry.setAttribute(name, new THREE.GLBufferAttribute(buffer, gl.FLOAT, itemSize, 4, array.length / itemSize));
+		}
+	}
+
+	/** Edge lines, built once on first use without blocking the page for long; `onReady` runs once they are on the GPU. */
 	edgeGeometry(onReady) {
-		if (this.edges) return this.edges;
+		if (this.edges) return this.edges.index ? this.edges : null;
+		const surface = this.geometry;
 		this.edgesPending ??= buildEdges(this.mesh).then(({ index, edge }) => {
-			if (this.disposed) return;
+			if (this.disposed || this.geometry !== surface) return;
 			const geometry = new THREE.BufferGeometry();
-			geometry.setAttribute('position', this.geometry.getAttribute('position'));
-			geometry.setAttribute('edge', new THREE.BufferAttribute(edge, 1));
-			geometry.setIndex(new THREE.BufferAttribute(index, 1));
+			geometry.setAttribute('position', surface.getAttribute('position'));
+			geometry.boundingBox = surface.boundingBox;
+			geometry.boundingSphere = surface.boundingSphere;
+			this.stage(geometry, 'edge', edge, 1);
+			this.stage(geometry, 'index', index, 1);
 			this.edges = geometry;
 			onReady();
 		});
@@ -64,6 +145,9 @@ class Layer {
 
 	dispose() {
 		this.disposed = true;
+		// Buffers still on their way are unknown to three; deleting one twice does nothing.
+		for (const { buffer } of this.uploads) if (buffer) this.gl.deleteBuffer(buffer);
+		this.uploads = [];
 		// The edge geometry shares the position buffer, so it goes first and the surface's own dispose frees the rest.
 		this.edges?.dispose();
 		this.geometry.dispose();
@@ -99,23 +183,27 @@ export class Surface {
 		this.fullFraction = fraction;
 	}
 
+	get uploading() {
+		return this.working.uploading || Boolean(this.full?.uploading);
+	}
+
+	/** Upload up to `budget` bytes, the working mesh first; returns whether an array finished arriving. */
+	upload(renderer, budget) {
+		const working = this.working.upload(renderer, budget);
+		const full = this.full && this.full !== this.working ? this.full.upload(renderer, working.left) : { finished: false };
+		return working.finished || full.finished;
+	}
+
+	/** The GPU context was lost and is back: every array goes to the GPU again. */
+	restage() {
+		this.working.stageAll();
+		if (this.full && this.full !== this.working) this.full.stageAll();
+	}
+
 	dispose() {
 		this.working.dispose();
 		if (this.full !== this.working) this.full?.dispose();
 	}
-}
-
-/** [xmin, xmax, ymin, ymax, zmin, zmax] of packed xyz positions. */
-function boundsOf(positions) {
-	const b = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
-	for (let i = 0; i < positions.length; i += 3) {
-		for (let k = 0; k < 3; k++) {
-			const v = positions[i + k];
-			if (v < b[2 * k]) b[2 * k] = v;
-			if (v > b[2 * k + 1]) b[2 * k + 1] = v;
-		}
-	}
-	return b;
 }
 
 const yieldToPage = () => new Promise((resolve) => setTimeout(resolve));

@@ -1,14 +1,14 @@
 // The open cases and which one is shown. Each case has one status with its moves in one place:
 //   example:  loading → ready | failed
-//   file:     queued → analysing → ready | failed
-// and any case can be closed, which cancels its analysis. The engine analyses one file at a time, so files wait
-// their turn in order.
+//   file:     queued → analysing → ready, or failed from queued or analysing
+// and any case can be closed, which cancels its analysis. A file goes to the engine as soon as it is opened; the
+// engine analyses one at a time in that order, and a file stays queued until its first stage begins.
 
 import { loadResult } from '../engine/result.js';
 import { Surface } from '../viewer/surface.js';
 
 const MOVES = {
-	queued: ['analysing'],
+	queued: ['analysing', 'failed'],
 	loading: ['ready', 'failed'],
 	analysing: ['ready', 'failed'],
 	ready: [],
@@ -24,7 +24,6 @@ export class Session extends EventTarget {
 		this.engine = engine;
 		this.cases = [];
 		this.active = null;
-		this.queue = Promise.resolve();
 		this.serial = 0;
 		this.device = null;
 		engine.device.then((device) => {
@@ -98,14 +97,14 @@ export class Session extends EventTarget {
 
 	openFile(file) {
 		const c = this.add(this.newCase(file.name, 'file', file.size, 'queued'));
-		this.queue = this.queue.then(() => (c.closed ? null : this.analyse(c, file)));
+		this.analyse(c, file);
 		return c;
 	}
 
 	async analyse(c, file) {
-		this.move(c, 'analysing');
 		const on = {
 			stage: (stage, fraction) => {
+				if (c.status === 'queued') this.move(c, 'analysing');
 				const now = performance.now();
 				if (c.stage !== stage) {
 					if (c.stage) c.stages[c.stage].end = now;

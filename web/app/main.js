@@ -15,7 +15,7 @@ import { bandCount, createLegend } from './legend.js';
 import { menu } from './menu.js';
 import { createProbes } from './probes.js';
 import { createProgress } from './progress.js';
-import { renderResultCard } from './results.js';
+import { createResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
 import { VIEW_KEYS, createToolbar } from './toolbar.js';
@@ -46,8 +46,8 @@ const ready = () => session.active?.status === 'ready';
 const view = {
 	field: 'cp',
 	maps: null,
-	section: { on: false, axis: 1, offset: 0, clip: 0 },
-	dock: 'buildup',
+	section: { on: true, axis: 1, offset: 0, clip: 0 },
+	dock: 'section',
 	dockCollapsed: false,
 };
 /** The camera frames the first car; after that it stays where the engineer put it, whichever car is shown. */
@@ -97,14 +97,14 @@ const toolbar = createToolbar({
 });
 $('[data-toolbar]').append(toolbar.el);
 
-/** Turning the section on brings its plot up; turning it off leaves the drag build-up in its place. */
+/** Turning the section on brings its plot up; turning it off leaves the probe table in its place. */
 function showSection(on) {
 	view.section.on = on;
 	if (on) {
 		view.dock = 'section';
 		view.dockCollapsed = false;
 	} else if (view.dock === 'section') {
-		view.dock = 'buildup';
+		view.dock = 'probes';
 	}
 }
 
@@ -138,7 +138,7 @@ const legend = createLegend({
 });
 $('[data-legend]').append(legend.el);
 
-const probes = createProbes({ host: overlay, viewer, active, view, changed: () => update('dock', 'layout', 'markers') });
+const probes = createProbes({ host: overlay, engine, viewer, active, view, changed: () => update('dock', 'layout', 'markers') });
 
 const section = createSectionTool({
 	host: overlay,
@@ -155,7 +155,6 @@ const section = createSectionTool({
 const dock = createDock({
 	section,
 	probes,
-	viewer,
 	active,
 	view,
 	actions: {
@@ -197,16 +196,36 @@ function setMode(next) {
 			modelPanes = panes;
 			update('toolbar', 'legend', 'viewer');
 		};
-		modelMounted = import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer, showPanes }));
+		modelMounted = import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine, session, viewer, showPanes, corner: $('[data-model-corner]') }));
 	}
 	update('layout', 'toolbar', 'legend', 'viewer');
 }
 
-/** A CSV file of one of the dock's tabs, whichever tab is showing. */
+/** A CSV file of one of the dock's tabs, shown or not. */
 function saveCsv(tab) {
 	exportMenu.close();
 	const c = active();
 	download(new Blob([dockCsv(c, { ...view, dock: tab })], { type: 'text/csv' }), `${baseName(c)}-${tab}.csv`);
+}
+
+/** The dropped file with the predicted Cp and its spread added as cell arrays, for ParaView and the like. */
+async function saveSurface() {
+	const item = exportItems.surface;
+	const progress = item.querySelector('kbd');
+	item.disabled = true;
+	exportNote.hidden = true;
+	try {
+		const file = await engine.exportVtp(active().result, (fraction) => (progress.textContent = `${Math.round(fraction * 100)} %`));
+		download(file, file.name);
+		exportMenu.close();
+	} catch (error) {
+		exportNote.textContent = error.message;
+		exportNote.hidden = false;
+	} finally {
+		progress.textContent = 'VTP';
+		item.disabled = false;
+		refreshExport();
+	}
 }
 
 const exportItems = {
@@ -214,28 +233,34 @@ const exportItems = {
 		exportMenu.close();
 		savePicture(active(), viewer, { field: view.field, map: view.maps[FIELDS[view.field].map] });
 	} }, h('span', {}, 'Picture'), h('kbd', {}, 'PNG')),
+	surface: h('button', { type: 'button', class: 'menu-item', title: 'The analysed file with CpPredicted and CpSpread cell arrays added', onclick: saveSurface }, h('span', {}, 'Surface'), h('kbd', {}, 'VTP')),
 	section: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('section') }, h('span', {}, 'Section'), h('kbd', {}, 'CSV')),
-	buildup: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('buildup') }, h('span', {}, 'Drag build-up'), h('kbd', {}, 'CSV')),
 	probes: h('button', { type: 'button', class: 'menu-item', onclick: () => saveCsv('probes') }, h('span', {}, 'Probes'), h('kbd', {}, 'CSV')),
 };
-const exportMenu = menu(h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export'), h('div', { class: 'menu-list' }, Object.values(exportItems)), { align: 'right' });
+const exportNote = h('p', { class: 'menu-note', role: 'alert', hidden: true });
+const exportButton = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
+const exportMenu = menu(exportButton, h('div', { class: 'menu-list' }, Object.values(exportItems), exportNote), { align: 'right' });
 $('[data-export]').append(exportMenu.el);
+
+/**
+ * What can be exported right now. The surface file exists only while the engine holds the car's whole predicted
+ * surface: for a dropped file, from its exact numbers until the next analysis starts, and never on a device too
+ * slow to predict every polygon. Rather than a control that cannot be used, it is offered only then.
+ */
+function refreshExport() {
+	const c = active();
+	exportItems.surface.hidden = !engine.canExportVtp(c.result);
+	exportItems.section.disabled = !view.section.on;
+	exportItems.probes.disabled = c.probes.length === 0;
+}
+exportButton.addEventListener('click', () => {
+	exportNote.hidden = true;
+	refreshExport();
+});
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
-/** The card rises in when a car's result first shows, and updates in place after that. */
-function renderCard() {
-	const c = active();
-	if (!c?.result) {
-		card.replaceChildren();
-		delete card.dataset.case;
-		return;
-	}
-	const next = renderResultCard(c);
-	if (card.dataset.case === String(c.id)) next.classList.add('settled');
-	card.dataset.case = c.id;
-	card.replaceChildren(next);
-}
+const resultCard = createResultCard({ host: card, overlay, viewer, active });
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
@@ -269,7 +294,7 @@ function renderCenter() {
 		case 'queued':
 		case 'analysing':
 			progress.render(c, session.device);
-			if (c.surface) {
+			if (carShown(c)) {
 				center.replaceChildren();
 				if (strip.firstChild !== progress.el) strip.replaceChildren(progress.el);
 			} else {
@@ -303,10 +328,6 @@ function renderLayout() {
 	modelHost.hidden = mode !== 'model';
 	viewer.hoverPicking = ready();
 	body.classList.toggle('dock-closed', view.dockCollapsed);
-	if (ready()) {
-		exportItems.section.disabled = !view.section.on;
-		exportItems.probes.disabled = c.probes.length === 0;
-	}
 }
 
 /** While the Model view owns the car, the field picker and the section wait until Result is back. */
@@ -348,7 +369,7 @@ const RENDER = {
 	legend: renderLegend,
 	viewer: applyViewer,
 	dock: () => dock.render(),
-	card: renderCard,
+	card: () => resultCard.render(),
 	center: renderCenter,
 	markers: () => probes.place(),
 };
@@ -357,8 +378,27 @@ function update(...parts) {
 	for (const part of parts) RENDER[part]();
 }
 
+/** Whether a case's car is on screen: its surface is the one shown and its mesh has reached the GPU. */
+function carShown(c) {
+	return Boolean(c?.surface) && viewer.surface === c.surface && viewer.placed !== null;
+}
+
+/** The analysing backdrop moves until the car is on screen, which takes it over. */
+function placeBackdrop(c) {
+	viewer.setBackdrop(!c ? 'still' : carShown(c) ? 'none' : c.status === 'failed' ? 'still' : 'moving');
+	if (carShown(c) || !c) viewer.setSweep(null);
+}
+
 /** Put a case on screen, or bring the screen up to date with it: its surface, its result and everything drawn from it. */
 function present(c) {
+	const arriving = Boolean(c?.result && !c.arrived);
+	if (arriving) {
+		c.arrived = true;
+		// Every car opens on its centreline section.
+		view.section = { on: true, axis: 1, offset: 0, clip: 0 };
+		view.dock = 'section';
+		view.dockCollapsed = false;
+	}
 	if (c?.result && !view.maps) view.maps = defaultMaps(c.result.mesh);
 	const surface = c?.surface ?? null;
 	if (viewer.surface !== surface) {
@@ -370,13 +410,9 @@ function present(c) {
 	} else if (surface) {
 		viewer.surfaceChanged();
 	}
-	viewer.setBackdrop(!c ? 'still' : surface ? 'none' : c.status === 'failed' ? 'still' : 'moving');
-	if (surface || !c) viewer.setSweep(null);
+	placeBackdrop(c);
 	update('layout', 'tabs', 'toolbar', 'legend', 'viewer', 'center', 'card', 'dock', 'markers');
-	if (c?.result && !c.arrived) {
-		c.arrived = true;
-		viewer.arrive();
-	}
+	if (arriving) viewer.arrive();
 }
 
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
@@ -393,7 +429,7 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 			return;
 		case 'stage':
 			if (c !== active()) return;
-			if (!c.surface) viewer.setSweep(progress.fraction(c));
+			if (!carShown(c)) viewer.setSweep(progress.fraction(c));
 			update('center');
 			return;
 		case 'geometry':
@@ -403,7 +439,10 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 			if (c === active()) viewer.surfaceChanged();
 			return;
 		case 'numbers':
-			if (c === active()) update('card', 'dock');
+			if (c !== active()) return;
+			update('card', 'dock');
+			// The surface export becomes available with the exact numbers, perhaps while the menu is open.
+			if (ready()) refreshExport();
 			return;
 		case 'device':
 			if (active()?.status === 'analysing' || active()?.status === 'queued') update('center');
@@ -411,6 +450,12 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 		default:
 			throw new Error(`Unknown change ${what}`);
 	}
+});
+
+// A car's mesh reaches the GPU some frames after it arrives; the analysing screen hands over to it then.
+viewer.addEventListener('placed', () => {
+	placeBackdrop(active());
+	update('center');
 });
 
 // Stage clocks tick while the active case is being analysed.
@@ -421,11 +466,11 @@ setInterval(() => {
 viewer.addEventListener('hover', ({ detail: { hit, clientX, clientY } }) => {
 	if (mode !== 'result' || !ready()) return;
 	probes.hover(hit, clientX, clientY);
-	dock.followCar(hit);
+	section.followCar(hit);
 });
-viewer.addEventListener('tap', ({ detail: { hit } }) => {
+viewer.addEventListener('tap', ({ detail: { hit, clientX, clientY } }) => {
 	if (mode !== 'result' || !ready()) return;
-	probes.pin(hit);
+	probes.pin(hit, clientX, clientY);
 });
 
 // ---- dock height ----------------------------------------------------------------------------------------------------------
