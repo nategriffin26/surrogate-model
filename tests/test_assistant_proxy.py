@@ -1,6 +1,7 @@
 """The assistant route of the local server (`surrogate.server`), against a fake model service on this machine that
-replays a stream recorded from OpenRouter (`fixtures/assistant_tool_call.sse`: a reply calling a tool); and the public
-site's Worker for the same route (`deploy/assistant-worker/`), whose tests run under Deno."""
+replays a stream recorded from OpenRouter (`fixtures/assistant_tool_call.sse`: anthropic/claude-opus-5.5 streaming
+its thinking as text, then calling a tool); and the public site's Worker for the same route
+(`deploy/assistant-worker/`), whose tests run under Deno."""
 
 from __future__ import annotations
 
@@ -110,7 +111,8 @@ def get(base: str, path: str) -> tuple[int, dict, bytes]:
 
 
 def test_the_reply_stream_passes_through_unchanged(tool: str, service: FakeModelService) -> None:
-    """Catches the proxy re-encoding, dropping or reordering the model's events."""
+    """Catches the proxy re-encoding, dropping or reordering the model's events, its streamed thinking included."""
+    assert b'"type":"reasoning.text"' in RECORDED and b'"signature"' in RECORDED
     status, headers, body = post(tool, json.dumps(CONVERSATION).encode())
     assert status == 200
     assert headers["Content-Type"] == STREAM_TYPE

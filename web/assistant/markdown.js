@@ -3,48 +3,90 @@
 
 import { h } from '../app/dom.js';
 
-/** Block elements for `text`. Safe to call again on a longer text as it streams in. */
-export function renderMarkdown(text) {
-	const lines = text.replaceAll('\r', '').split('\n');
+/**
+ * The blocks of `text`, each `{ source, element }`. A block whose source is the same as the block in its place in
+ * `previous` keeps that element, so a reply drawn again as it streams rebuilds only the block still being written.
+ * While `streaming`, only what is settled is drawn (see `settled`), so half-written markup never shows and nothing
+ * already drawn changes shape when the rest arrives.
+ */
+export function renderMarkdown(text, { streaming = false, previous = [] } = {}) {
+	let lines = text.replaceAll('\r', '').split('\n');
+	if (streaming) lines = settled(lines);
 	const blocks = [];
 	for (let i = 0; i < lines.length; ) {
+		const start = i;
 		const line = lines[i];
+		let build = null;
 		if (line.trim() === '') {
 			i++;
 		} else if (line.startsWith('```')) {
 			const code = [];
 			for (i++; i < lines.length && !lines[i].startsWith('```'); i++) code.push(lines[i]);
 			i++;
-			blocks.push(h('pre', { class: 'md-code' }, code.join('\n')));
+			build = () => h('pre', { class: 'md-code' }, code.join('\n'));
 		} else if (/^#{1,6}\s/.test(line)) {
-			blocks.push(h('p', { class: 'md-heading' }, inline(line.replace(/^#+\s+/, ''))));
 			i++;
+			build = () => h('p', { class: 'md-heading' }, inline(line.replace(/^#+\s+/, '')));
 		} else if (isTableRow(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
 			const rows = [];
 			for (; i < lines.length && isTableRow(lines[i]); i++) rows.push(cells(lines[i]));
 			const [head, , ...body] = rows;
-			blocks.push(h('div', { class: 'md-table' }, h('table', {},
+			build = () => h('div', { class: 'md-table' }, h('table', {},
 				h('thead', {}, h('tr', {}, head.map((cell) => h('th', {}, inline(cell))))),
-				h('tbody', {}, body.map((row) => h('tr', {}, row.map((cell) => h('td', { class: numeric(cell) ? 'num' : null }, inline(cell)))))))));
-		} else if (/^\s*([-*•]|\d+[.)])\s+/.test(line)) {
+				h('tbody', {}, body.map((row) => h('tr', {}, row.map((cell) => h('td', { class: numeric(cell) ? 'num' : null }, inline(cell))))))));
+		} else if (LIST_ITEM.test(line)) {
 			const ordered = /^\s*\d/.test(line);
 			const items = [];
-			for (; i < lines.length && /^\s*([-*•]|\d+[.)])\s+/.test(lines[i]); i++) items.push(h('li', {}, inline(lines[i].replace(/^\s*([-*•]|\d+[.)])\s+/, ''))));
-			blocks.push(h(ordered ? 'ol' : 'ul', {}, items));
+			for (; i < lines.length && LIST_ITEM.test(lines[i]); i++) items.push(lines[i].replace(LIST_ITEM, ''));
+			build = () => h(ordered ? 'ol' : 'ul', {}, items.map((item) => h('li', {}, inline(item))));
 		} else {
 			const paragraph = [];
 			for (; i < lines.length && lines[i].trim() !== '' && !startsBlock(lines[i], lines[i + 1]); i++) paragraph.push(lines[i]);
-			blocks.push(h('p', {}, paragraph.flatMap((part, k) => (k ? [h('br'), ...inline(part)] : inline(part)))));
+			build = () => h('p', {}, paragraph.flatMap((part, k) => (k ? [h('br'), ...inline(part)] : inline(part))));
 		}
+		if (!build) continue;
+		const source = lines.slice(start, i).join('\n');
+		const kept = previous[blocks.length];
+		blocks.push(kept?.source === source ? kept : { source, element: build() });
 	}
 	return blocks;
 }
 
+const LIST_ITEM = /^\s*([-*•]|\d+[.)])\s+/;
+
+/**
+ * The lines of a reply still streaming that are safe to draw. The last line has no newline after it yet. A table is
+ * held back until the line after it has begun, so it appears whole instead of re-flowing its columns row by row; an
+ * unfinished line that may yet open a table, a list or code is held back; and on the line being written a ** or `
+ * that is not yet closed is left out rather than shown as a stray mark.
+ */
+function settled(lines) {
+	const unfinished = lines.at(-1) !== '';
+	let end = unfinished ? lines.length : lines.length - 1;
+	if (unfinished && /^\s*(\||`|([-*•]|\d+[.)]?)\s*$)/.test(lines[end - 1])) end--;
+	while (end > 0 && isTableLike(lines[end - 1])) end--;
+	const kept = lines.slice(0, end);
+	if (unfinished && end === lines.length) kept[end - 1] = withoutOpenMarks(kept[end - 1]);
+	return kept;
+}
+
+/** `line` without its last ** or ` when that mark opens a span not yet closed. */
+function withoutOpenMarks(line) {
+	for (const mark of ['**', '`']) {
+		if (line.split(mark).length % 2 === 0) {
+			const at = line.lastIndexOf(mark);
+			line = line.slice(0, at) + line.slice(at + mark.length);
+		}
+	}
+	return line;
+}
+
 function startsBlock(line, next) {
-	return line.startsWith('```') || /^#{1,6}\s/.test(line) || /^\s*([-*•]|\d+[.)])\s+/.test(line) || (isTableRow(line) && /^\s*\|?\s*:?-{2,}/.test(next ?? ''));
+	return line.startsWith('```') || /^#{1,6}\s/.test(line) || LIST_ITEM.test(line) || (isTableRow(line) && /^\s*\|?\s*:?-{2,}/.test(next ?? ''));
 }
 
 const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
+const isTableLike = (line) => /^\s*\|/.test(line);
 const cells = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
 const numeric = (cell) => /^[−+-]?[\d.,]+\s*(%|m²|m|s|counts?)?$/.test(cell);
 

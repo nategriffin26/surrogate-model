@@ -19,20 +19,24 @@ export async function availability() {
  * Run the assistant until it answers. Its messages and the tools' results are appended to `messages` as they come,
  * so the conversation stays one the model accepts even when the engineer stops it part way.
  * @param {object[]} messages  The conversation in the chat-completions format, system prompt first.
- * @param {{ tools: () => object[], execute: (call: object) => Promise<string>, onStart: () => void,
- *   onText: (text: string) => void, signal: AbortSignal }} turn
+ * @param {{ tools: () => object[], execute: (call: object) => Promise<string>, signal: AbortSignal,
+ *   onRequest: () => void, onReasoning: (text: string) => void, onText: (text: string) => void,
+ *   onToolCall: (call: object) => void, onRequestEnd: () => void }} turn
  *   `tools` is asked before every request, so operations added meanwhile are offered; `execute` runs one tool call
- *   and returns what the model is told; `onStart` hears that a request went out, `onText` the reply's text as it streams.
+ *   (the same object `onToolCall` announced as soon as its name arrived) and returns what the model is told. The
+ *   other callbacks follow one request as it streams: sent, a piece of its thinking ('' when the thinking arrives
+ *   without text), a piece of its reply, a tool call begun, and over (whole, stopped or failed).
  */
-export async function respond(messages, { tools, execute, onStart, onText, signal }) {
+export async function respond(messages, { tools, execute, signal, onRequest, onReasoning, onText, onToolCall, onRequestEnd }) {
 	for (;;) {
 		const message = { role: 'assistant', content: '', tool_calls: [], reasoning_details: [] };
 		let whole = false;
 		try {
-			onStart();
-			await stream(messages, tools(), message, { onText, signal });
+			onRequest();
+			await stream(messages, tools(), message, { onReasoning, onText, onToolCall, signal });
 			whole = true;
 		} finally {
+			onRequestEnd();
 			// A reply cut short (stopped, refused, broken off) keeps the text the engineer saw, and nothing else.
 			if (whole) messages.push(sendable(message));
 			else if (message.content) messages.push({ role: 'assistant', content: message.content });
@@ -57,19 +61,19 @@ function sendable({ content, tool_calls, reasoning_details }) {
 }
 
 /** One request: read the server-sent events into `message` as they arrive. */
-async function stream(messages, tools, message, { onText, signal }) {
-	const response = await fetch(ENDPOINT, {
+async function stream(messages, tools, message, { onReasoning, onText, onToolCall, signal }) {
+	const response = await reach(() => fetch(ENDPOINT, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ messages, tools }),
 		signal,
-	});
+	}), "The tool's server did not answer, so the message did not reach the model.");
 	if (!response.ok) throw new Error(await refusal(response));
 	const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
 	let buffer = '';
 	let finish = null;
 	for (;;) {
-		const { value, done } = await reader.read();
+		const { value, done } = await reach(() => reader.read(), 'The connection to the model broke off during the reply.');
 		if (done) break;
 		buffer += value;
 		for (let end = buffer.indexOf('\n'); end >= 0; end = buffer.indexOf('\n')) {
@@ -85,17 +89,23 @@ async function stream(messages, tools, message, { onText, signal }) {
 			if (!choice) continue;
 			finish = choice.finish_reason ?? finish;
 			const { content, tool_calls, reasoning_details } = choice.delta ?? {};
+			// Thinking arrives as text (Claude's summary of it) or encrypted, which the engineer cannot read.
+			for (const detail of reasoning_details ?? []) {
+				addReasoning(message.reasoning_details, detail);
+				onReasoning(detail.text ?? detail.summary ?? '');
+			}
 			if (content) {
 				message.content += content;
 				onText(content);
 			}
 			for (const part of tool_calls ?? []) {
 				const call = (message.tool_calls[part.index ?? 0] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+				const named = !call.function.name && part.function?.name;
 				if (part.id) call.id = part.id;
 				if (part.function?.name) call.function.name += part.function.name;
 				if (part.function?.arguments) call.function.arguments += part.function.arguments;
+				if (named) onToolCall(call);
 			}
-			for (const detail of reasoning_details ?? []) addReasoning(message.reasoning_details, detail);
 		}
 	}
 	if (finish === 'length') {
@@ -121,4 +131,14 @@ function addReasoning(details, piece) {
 async function refusal(response) {
 	const body = await response.json().catch(() => null);
 	return body?.error?.message ?? `The assistant's service answered ${response.status} ${response.statusText}.`;
+}
+
+/** `act`, with a network failure (the browser's bare "Failed to fetch") said as `message`; a stop stays a stop. */
+async function reach(act, message) {
+	try {
+		return await act();
+	} catch (error) {
+		if (error.name === 'AbortError') throw error;
+		throw new Error(message);
+	}
 }

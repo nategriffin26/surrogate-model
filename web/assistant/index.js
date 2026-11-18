@@ -51,13 +51,20 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	/** What the engineer did since the last message, the latest of each operation (a drag runs one many times). */
 	const actions = new Map();
 
-	const log = h('div', { class: 'assistant-log', role: 'log', 'aria-live': 'polite' });
+	const thread = h('div', { class: 'assistant-thread' });
+	// A log for navigation, but not read out as it streams: the announcer below says each turn's outcome once.
+	const log = h('div', { class: 'assistant-log', role: 'log', 'aria-live': 'off', 'aria-label': 'Conversation' }, thread);
+	const latest = h('button', { type: 'button', class: 'assistant-latest', hidden: true, title: 'Scroll to the latest', 'aria-label': 'Scroll to the latest' }, downIcon());
+	const announcer = h('p', { class: 'assistant-announcer', role: 'status' });
 	const input = h('textarea', { class: 'assistant-input', rows: 1, placeholder: 'Ask about the cars, or describe a study', 'aria-label': 'Message to the assistant' });
 	const sendButton = h('button', { type: 'submit', class: 'assistant-send', 'aria-label': 'Send' });
 	const form = h('form', { class: 'assistant-composer' }, input, sendButton);
 	const newButton = h('button', { type: 'button', class: 'icon-button', title: 'New conversation', 'aria-label': 'New conversation', onclick: restart }, icon('plus'));
 	const closeButton = h('button', { type: 'button', class: 'icon-button', title: 'Close', 'aria-label': 'Close the assistant', onclick: close }, icon('close'));
-	host.append(h('div', { class: 'assistant' }, h('header', { class: 'assistant-head' }, h('h2', { class: 'assistant-title' }, 'Assistant'), newButton, closeButton), log, form));
+	host.append(h('div', { class: 'assistant' },
+		h('header', { class: 'assistant-head' }, h('h2', { class: 'assistant-title' }, 'Assistant'), newButton, closeButton),
+		h('div', { class: 'assistant-view' }, log, latest),
+		form, announcer));
 
 	const kernel = createKernel({ workspace, engine, session, approve, operate: (name, args) => operate(name, args, turn?.python) });
 
@@ -67,15 +74,35 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		actions.set(name, args);
 	});
 
+	// The log keeps the latest in view while the reader is at the bottom. Scrolling up stops that, and the button
+	// below brings them back; reaching the bottom again resumes it.
+	let following = true;
+	let lastTop = 0;
+	log.addEventListener('scroll', () => {
+		if (log.scrollHeight - log.scrollTop - log.clientHeight < 24) following = true;
+		else if (log.scrollTop < lastTop) following = false;
+		lastTop = log.scrollTop;
+		latest.hidden = following;
+	}, { passive: true });
+	new ResizeObserver(() => {
+		if (following) log.scrollTop = log.scrollHeight;
+	}).observe(thread);
+	latest.addEventListener('click', () => {
+		following = true;
+		latest.hidden = true;
+		log.scrollTo({ top: log.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+	});
+
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		if (status === 'running') stop();
 		else send(input.value);
 	});
+	// Enter sends; while a turn runs it does nothing, so the next message can be written meanwhile (Stop is the button).
 	input.addEventListener('keydown', (event) => {
 		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
 			event.preventDefault();
-			form.requestSubmit();
+			if (status !== 'running') form.requestSubmit();
 		}
 	});
 	input.addEventListener('input', fitInput);
@@ -96,15 +123,15 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		newButton.disabled = running || messages.length === 0;
 		form.hidden = !['idle', 'running'].includes(next);
 		if (next === 'unavailable') {
-			put(log, h('div', { class: 'assistant-note' },
+			put(thread, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant is not available in this copy.'),
 				h('p', {}, 'To use it here, set ', h('code', {}, 'OPENROUTER_API_KEY'), ' in ', h('code', {}, 'local/secrets/assistant.env'), ' and restart ', h('code', {}, 'uv run surrogate app'), '.')));
 		} else if (next === 'unreachable') {
-			put(log, h('div', { class: 'assistant-note' },
+			put(thread, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
 				h('button', { type: 'button', class: 'button', onclick: check }, 'Try again')));
 		} else if (next === 'idle' && messages.length === 0) {
-			put(log, h('div', { class: 'assistant-start' }, SUGGESTIONS.map((text) => h('button', { type: 'button', class: 'suggestion', onclick: () => send(text) }, text))));
+			put(thread, h('div', { class: 'assistant-start' }, SUGGESTIONS.map((text) => h('button', { type: 'button', class: 'suggestion', onclick: () => send(text) }, text))));
 		}
 	}
 
@@ -120,14 +147,18 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		if (status !== 'idle' || !text) return;
 		if (messages.length === 0) {
 			messages = [{ role: 'system', content: systemPrompt(await engine.model) }];
-			log.replaceChildren();
+			thread.replaceChildren();
 		}
 		input.value = '';
 		fitInput();
+		// Only the latest failed turn can be tried again.
+		for (const retry of thread.querySelectorAll('.reply-retry')) retry.remove();
 		// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
 		const { cases } = await runOperation('list_cases', {});
+		const before = messages.length;
 		messages.push({ role: 'user', content: `${describeState({ cases, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
 		actions.clear();
+		following = true;
 		turn = createTurn(text);
 		setStatus('running');
 		controller = new AbortController();
@@ -135,15 +166,25 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 			await respond(messages, {
 				tools: toolList,
 				execute: (call) => execute(call, turn),
-				onStart: () => turn.waiting(true),
-				onText: (delta) => turn.text(delta),
 				signal: controller.signal,
+				onRequest: () => turn.request(),
+				onReasoning: (piece) => turn.reasoning(piece),
+				onText: (delta) => turn.text(delta),
+				onToolCall: (call) => turn.toolCall(call),
+				onRequestEnd: () => turn.requestEnd(),
 			});
+			turn.finish('answered');
 		} catch (error) {
-			if (error.name === 'AbortError') turn.note('Stopped.');
-			else turn.error(error.message);
+			if (error.name === 'AbortError') {
+				turn.finish('stopped');
+			} else {
+				// Trying again sends the same message from the conversation as it was before it.
+				turn.finish('failed', error.message, () => {
+					messages.length = before;
+					send(text);
+				});
+			}
 		} finally {
-			turn.end();
 			turn = null;
 			controller = null;
 			setStatus('idle');
@@ -172,14 +213,16 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 	/** Run one tool call; returns what the model is told. */
 	async function execute(call, current) {
 		const { name } = call.function;
+		const step = current.step(call);
 		let args;
 		try {
 			args = JSON.parse(call.function.arguments || '{}');
 		} catch {
-			return JSON.stringify({ error: 'The arguments were not valid JSON. Send one JSON object.' });
+			const error = 'The arguments were not valid JSON. Send one JSON object.';
+			step.finish('failed', error);
+			return JSON.stringify({ error });
 		}
-		current.waiting(false);
-		const step = current.step(name, args);
+		step.begin(args);
 		if (name === PYTHON) {
 			const items = [];
 			current.python = step;
@@ -188,38 +231,41 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 					items.push(item);
 					step.output(item);
 				}, controller.signal);
-				step.finish(outcome.status === 'finished' ? null : outcome.error);
+				step.finish(outcome.status === 'finished' ? 'done' : outcome.status, outcome.error);
 				return JSON.stringify(report(outcome, items));
 			} catch (error) {
-				step.finish(error.message);
+				step.finish('failed', error.message);
 				return JSON.stringify({ error: error.message });
 			} finally {
 				current.python = null;
 			}
 		}
 		// An operation cannot be called back once started; a stop ends the run without waiting for it.
-		const { result, error } = await Promise.race([operate(name, args), whenStopped(controller.signal)]);
-		step.finish(error ?? null, result);
+		const { result, error, outcome } = await Promise.race([operate(name, args), whenStopped(controller.signal)]);
+		step.finish(outcome, error, result);
 		return clip(JSON.stringify(error ? { error } : result));
 	}
 
-	/** Run an operation as the assistant, asking the engineer first when it opens, writes, downloads or deletes. */
+	/**
+	 * Run an operation as the assistant, asking the engineer first when it opens, writes, downloads or deletes.
+	 * `outcome` is how its step ends: 'done', 'declined' or 'failed'.
+	 */
 	async function operate(name, args, within) {
 		const operation = operations.get(name);
-		if (!operation) return { error: `There is no operation named ${name}.` };
+		if (!operation) return { error: `There is no operation named ${name}.`, outcome: 'failed' };
 		const sub = within?.sub(name, args);
 		const asks = typeof operation.confirm === 'function' ? operation.confirm(args, { session, viewer, engine, by: 'assistant' }) : operation.confirm;
 		if (asks && !(await approve(`${sentence(name)}${subject(args)}?`, sentence(name)))) {
-			sub?.finish('Declined');
-			return { error: 'The engineer declined.' };
+			sub?.finish('declined');
+			return { error: 'The engineer declined.', outcome: 'declined' };
 		}
 		try {
 			const result = await runOperation(name, args);
-			sub?.finish(null);
-			return { result };
+			sub?.finish('done');
+			return { result, outcome: 'done' };
 		} catch (error) {
-			sub?.finish(error.message);
-			return { error: error.message };
+			sub?.finish('failed');
+			return { error: error.message, outcome: 'failed' };
 		}
 	}
 
@@ -229,100 +275,216 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 			const yes = h('button', { type: 'button', class: 'button button-primary' }, action);
 			const no = h('button', { type: 'button', class: 'button' }, 'Decline');
 			const row = h('div', { class: 'approval', role: 'group', 'aria-label': question }, h('p', { class: 'approval-question' }, question), h('div', { class: 'approval-actions' }, yes, no));
+			const exchange = turn ?? createTurn(null);
 			const settle = (approved) => {
 				waiting.delete(settle);
+				exchange.asking(false);
 				row.replaceWith(h('p', { class: 'approval-decided' }, `${question.replace(/\?$/, '')}: ${approved ? 'approved' : 'declined'}`));
 				resolve(approved);
 			};
 			yes.addEventListener('click', () => settle(true));
 			no.addEventListener('click', () => settle(false));
 			waiting.add(settle);
-			(turn ?? createTurn(null)).append(row);
+			exchange.asking(true);
+			exchange.append(row);
 			// The run waits on this answer, so it is brought into view wherever the engineer has scrolled.
 			row.scrollIntoView({ block: 'nearest' });
 			yes.focus({ preventScroll: true });
 		});
 	}
 
-	/** One exchange in the log: the engineer's message, then the steps and text of the reply as they come. */
+	/**
+	 * One exchange in the log: the engineer's message, then the parts of the reply in the order they come. Whatever is
+	 * in progress says so with its name shimmering: "Thinking" while the model's thinking streams in, a step while
+	 * its call is written and run, and "Working" at the end of the exchange while nothing else is moving.
+	 */
 	function createTurn(text) {
 		const reply = h('div', { class: 'reply' });
-		const pending = h('div', { class: 'pending', hidden: true }, h('span', { class: 'spinner' }), 'Thinking');
-		log.append(h('section', { class: 'exchange' }, text ? h('p', { class: 'question' }, text) : null, reply, pending));
-		log.scrollTop = log.scrollHeight;
+		const working = h('p', { class: 'working', hidden: true }, h('span', { class: 'shimmer' }, 'Working'));
+		thread.append(h('section', { class: 'exchange' }, text ? h('p', { class: 'question' }, text) : null, reply, working));
+		let thought = null;
 		let answer = null;
-		let answerText = '';
-		let frame = 0;
-		const follow = () => {
-			const near = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-			return () => near && (log.scrollTop = log.scrollHeight);
-		};
-		const add = (element) => {
-			const keep = follow();
-			reply.append(element);
-			keep();
+		let lastAnswer = '';
+		let requested = 0;
+		/** Each tool call's step, shown from the moment its name arrives. */
+		const steps = new Map();
+		const settle = () => {
+			thought?.finish();
+			thought = null;
+			if (answer) lastAnswer = answer.finish();
+			answer = null;
 		};
 		return {
 			python: null,
-			append: add,
-			waiting(on) {
-				pending.hidden = !on;
-				if (on) follow()();
+			append: (element) => reply.append(element),
+			request() {
+				requested = performance.now();
+				working.hidden = false;
+			},
+			reasoning(piece) {
+				working.hidden = true;
+				if (!thought) reply.append((thought = thoughtView(requested)).el);
+				thought.add(piece);
 			},
 			text(delta) {
-				pending.hidden = true;
-				if (!answer) {
-					answer = h('div', { class: 'answer' });
-					answerText = '';
-					add(answer);
+				thought?.finish();
+				thought = null;
+				working.hidden = true;
+				if (!answer) reply.append((answer = answerView()).el);
+				answer.add(delta);
+			},
+			toolCall(call) {
+				settle();
+				working.hidden = true;
+				const view = stepView(call.function.name);
+				steps.set(call, view);
+				reply.append(view.el);
+			},
+			requestEnd: settle,
+			step(call) {
+				if (!steps.has(call)) this.toolCall(call);
+				return steps.get(call);
+			},
+			/** While a question waits on the engineer, nothing shimmers: the run is waiting on them, not working. */
+			asking(on) {
+				reply.classList.toggle('asking', on);
+			},
+			/** The turn is over: 'answered', 'stopped' (what arrived stays) or 'failed' with what to do next. */
+			finish(outcome, message, retry) {
+				settle();
+				working.hidden = true;
+				if (outcome === 'stopped') {
+					reply.append(h('p', { class: 'reply-note' }, 'Stopped.'));
+					announcer.textContent = 'Stopped.';
+				} else if (outcome === 'failed') {
+					reply.append(h('div', { class: 'reply-failed', role: 'alert' },
+						h('p', { class: 'reply-error' }, message),
+						h('button', { type: 'button', class: 'button reply-retry', onclick: retry }, 'Try again')));
+				} else {
+					announcer.textContent = lastAnswer;
 				}
-				answerText += delta;
-				const element = answer;
-				const shown = answerText;
-				cancelAnimationFrame(frame);
-				frame = requestAnimationFrame(() => {
-					const keep = follow();
-					put(element, renderMarkdown(shown));
-					keep();
+			},
+		};
+	}
+
+	/**
+	 * The model's thinking for one request, from the moment its first piece arrives: open while it streams, then
+	 * folded to "Thought for 4 s" (timed from the request) unless the engineer opened or closed it meanwhile. When the
+	 * thinking came without text, the row says only that it thought and for how long, and does not open.
+	 */
+	function thoughtView(requested) {
+		const row = disclosure('thought', 'Thinking');
+		const text = answerView('thought-text');
+		row.content.append(text.el);
+		row.setOpen(true);
+		let touched = false;
+		row.toggle.addEventListener('click', () => (touched = true));
+		return {
+			el: row.el,
+			add(piece) {
+				if (piece) text.add(piece, () => (text.el.scrollTop = text.el.scrollHeight));
+			},
+			finish() {
+				const said = text.finish().trim();
+				row.finish('done', `Thought for ${Math.max(1, Math.round((performance.now() - requested) / 1000))} s`);
+				if (!said) {
+					row.toggle.disabled = true;
+					row.setOpen(false);
+					return;
+				}
+				row.setDetail(said.split('\n')[0].replaceAll('**', ''));
+				if (!touched) row.setOpen(false);
+			},
+		};
+	}
+
+	/** Streamed Markdown, drawn once a frame; returns its whole text when finished. */
+	function answerView(className = 'answer') {
+		const el = h('div', { class: className });
+		let text = '';
+		let blocks = [];
+		let frame = 0;
+		let drawn = null;
+		const draw = (streaming) => {
+			blocks = renderMarkdown(text, { streaming, previous: blocks });
+			blocks.forEach(({ element }, i) => {
+				if (el.children[i] !== element) el.insertBefore(element, el.children[i] ?? null);
+			});
+			while (el.children.length > blocks.length) el.lastElementChild.remove();
+			drawn?.();
+		};
+		return {
+			el,
+			add(delta, then) {
+				text += delta;
+				drawn = then;
+				frame ||= requestAnimationFrame(() => {
+					frame = 0;
+					draw(true);
 				});
 			},
-			step(name, args) {
-				answer = null;
-				const view = stepView(name, args);
-				add(view.el);
-				return view;
+			finish() {
+				cancelAnimationFrame(frame);
+				frame = 0;
+				draw(false);
+				return text;
 			},
-			note: (message) => add(h('p', { class: 'reply-note' }, message)),
-			error: (message) => add(h('p', { class: 'reply-error', role: 'alert' }, message)),
-			end() {
-				pending.hidden = true;
+		};
+	}
+
+	/**
+	 * The row a thinking block and a tool step share: state mark, name, a one-line summary, how it ended when not
+	 * well, and a chevron; it opens a body below. Running, the mark is blue and the name shimmers.
+	 */
+	function disclosure(kind, name) {
+		const nameEl = h('span', { class: kind === 'step' ? 'row-name step-name' : 'row-name' }, name);
+		const detail = h('span', { class: 'row-detail' });
+		const ending = h('span', { class: 'row-ending' });
+		const toggle = h('button', { type: 'button', class: 'row', 'aria-expanded': 'false' },
+			h('span', { class: 'row-state' }), nameEl, detail, ending, h('span', { class: 'row-chevron' }, icon('chevron')));
+		const content = h('div', { class: 'row-content' });
+		const body = h('div', { class: 'row-body' }, h('div', { class: 'row-clip' }, content));
+		const el = h('div', { class: `${kind} running` }, toggle, body);
+		const setOpen = (open) => {
+			el.classList.toggle('open', open);
+			toggle.setAttribute('aria-expanded', String(open));
+		};
+		toggle.addEventListener('click', () => setOpen(!el.classList.contains('open')));
+		return {
+			el,
+			toggle,
+			body,
+			content,
+			setOpen,
+			setDetail: (text) => put(detail, text),
+			/** `outcome` 'done', or how it ended otherwise: 'failed', 'timed out', 'declined' or 'stopped'. */
+			finish(outcome, newName) {
+				el.classList.remove('running');
+				el.classList.add(outcome === 'done' ? 'done' : ['declined', 'stopped'].includes(outcome) ? 'ended' : 'failed');
+				if (outcome !== 'done') put(ending, sentence(outcome));
+				if (newName) put(nameEl, newName);
 			},
 		};
 	}
 
 	/** A tool call as a row the engineer can open to see what was asked and what came back. */
-	function stepView(name, args) {
+	function stepView(name) {
 		const python = name === PYTHON;
-		const body = h('div', { class: 'step-body', hidden: true });
-		const toggle = h('button', { type: 'button', class: 'step-row', 'aria-expanded': 'false' },
-			h('span', { class: 'step-state' }),
-			h('span', { class: 'step-name' }, python ? 'Python' : sentence(name)),
-			h('span', { class: 'step-detail' }, python ? firstLine(args.code) : summary(args, operations.get(name)?.parameters.properties)),
-			h('span', { class: 'step-chevron' }, icon('chevron')));
+		const row = disclosure('step', python ? 'Python' : sentence(name));
 		const subs = h('div', { class: 'step-subs' });
 		const outputs = h('div', { class: 'step-outputs' });
-		const el = h('div', { class: 'step running' }, toggle, subs, body, outputs);
+		row.el.insertBefore(subs, row.body);
+		row.el.append(outputs);
 		let printed = null;
-		toggle.addEventListener('click', () => {
-			body.hidden = !body.hidden;
-			toggle.setAttribute('aria-expanded', String(!body.hidden));
-		});
-		body.append(h('p', { class: 'step-label' }, 'Asked'), h('pre', { class: python ? 'step-code' : 'step-json' }, python ? args.code : JSON.stringify(args, null, 2)));
 		return {
-			el,
+			el: row.el,
+			begin(args) {
+				row.setDetail(python ? firstLine(args.code) : summary(args, operations.get(name)?.parameters.properties));
+				row.content.append(h('p', { class: 'step-label' }, 'Asked'), h('pre', { class: python ? 'step-code' : 'step-json' }, python ? args.code : JSON.stringify(args, null, 2)));
+			},
 			output(item) {
 				if (item.kind === 'text') {
-					if (!printed) body.append(h('p', { class: 'step-label' }, 'Printed'), (printed = h('pre', { class: 'step-text' })));
+					if (!printed) row.content.append(h('p', { class: 'step-label' }, 'Printed'), (printed = h('pre', { class: 'step-text' })));
 					printed.append(item.stream === 'stderr' ? h('span', { class: 'stderr' }, item.text) : item.text);
 				} else if (item.kind === 'figure') {
 					outputs.append(figureView(item));
@@ -331,14 +493,14 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 				}
 			},
 			sub(subName, subArgs) {
-				const row = h('div', { class: 'step-sub running' }, h('span', { class: 'step-state' }), h('span', { class: 'step-name' }, sentence(subName)), h('span', { class: 'step-detail' }, summary(subArgs, operations.get(subName)?.parameters.properties)));
-				subs.append(row);
-				return { finish: (error) => row.classList.replace('running', error ? 'failed' : 'done') };
+				const sub = h('div', { class: 'step-sub running' }, h('span', { class: 'row-state' }), h('span', { class: 'row-name step-name' }, sentence(subName)), h('span', { class: 'row-detail' }, summary(subArgs, operations.get(subName)?.parameters.properties)));
+				subs.append(sub);
+				return { finish: (outcome) => sub.classList.replace('running', outcome === 'done' ? 'done' : outcome === 'declined' ? 'ended' : 'failed') };
 			},
-			finish(error, result) {
-				el.classList.replace('running', error ? 'failed' : 'done');
-				if (result !== undefined) body.append(h('p', { class: 'step-label' }, 'Returned'), h('pre', { class: 'step-json' }, JSON.stringify(result, null, 2)));
-				if (error) body.append(h('p', { class: 'step-label' }, python ? 'Error' : 'Refused'), h('pre', { class: 'step-error' }, error));
+			finish(outcome, error, result) {
+				row.finish(outcome);
+				if (result !== undefined) row.content.append(h('p', { class: 'step-label' }, 'Returned'), h('pre', { class: 'step-json' }, JSON.stringify(result, null, 2)));
+				if (error) row.content.append(h('p', { class: 'step-label' }, python ? 'Error' : 'Refused'), h('pre', { class: 'step-error' }, error));
 			},
 		};
 	}
@@ -349,7 +511,7 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 /** Settles with an error when `signal` aborts: what an operation still running is reported as after a stop. */
 function whenStopped(signal) {
 	return new Promise((resolve) => {
-		const stopped = () => resolve({ error: 'The engineer stopped the run while this operation ran; it may still finish on screen.' });
+		const stopped = () => resolve({ error: 'The engineer stopped the run while this operation ran; it may still finish on screen.', outcome: 'stopped' });
 		if (signal.aborted) stopped();
 		else signal.addEventListener('abort', stopped, { once: true });
 	});
@@ -375,8 +537,10 @@ function figureView({ png, title }) {
 	const blob = new Blob([png], { type: 'image/png' });
 	const url = URL.createObjectURL(blob);
 	const name = `${title.replace(/[^\w\- ]+/g, '').trim().slice(0, 60) || 'figure'}.png`;
+	// The size from the PNG header, so the figure's space is kept before it decodes and nothing below it jumps.
+	const header = new DataView(png.buffer, png.byteOffset, 24);
 	return h('figure', { class: 'output-figure' },
-		h('img', { src: url, alt: title }),
+		h('img', { src: url, alt: title, width: header.getUint32(16), height: header.getUint32(20) }),
 		h('button', { type: 'button', class: 'icon-button figure-save', title: 'Download', 'aria-label': `Download ${name}`, onclick: () => download(blob, name) }, icon('download')));
 }
 
@@ -439,6 +603,10 @@ function clip(text, limit = RESULT_LIMIT) {
 
 function arrowIcon() {
 	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M8 13V3M3.5 7.5 8 3l4.5 4.5' }));
+}
+
+function downIcon() {
+	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M8 3v10M3.5 8.5 8 13l4.5-4.5' }));
 }
 
 function stylesheet() {
