@@ -169,7 +169,7 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 	defineOperation({
 		name: 'attach_reference',
 		description:
-			"Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car's polygons. The car can then be compared with it (set_comparison with \"cfd\"), and its result reports the CFD's whole-car numbers. The file must describe the same surface, its polygons within 5 mm of the car's: the CFD of another car is refused. The engine holds the car analysed last only, so another car is first analysed again (about as long as its first analysis); a car whose every polygon this device could not predict cannot take one. Reading a DrivAerML file takes a few seconds.",
+			"Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car's polygons. The car then offers the fields cfd and error (set_field), its section plot draws the CFD's line, and its result reports the CFD's whole-car numbers. The file must describe the same surface, its polygons within 5 mm of the car's: the CFD of another car is refused. The engine holds the car analysed last only, so another car is first analysed again (about as long as its first analysis); a car whose every polygon this device could not predict cannot take one. Reading a DrivAerML file takes a few seconds.",
 		parameters: {
 			type: 'object',
 			properties: {

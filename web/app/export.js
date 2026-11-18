@@ -116,7 +116,7 @@ export function defineExportOperations({ session, workspace, engine }) {
 	defineOperation({
 		name: 'save_export',
 		description:
-			"Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section, probes, comparison and study: the section plot's points, the probe table, the Compare table and the Variants table, as CSV. report: one HTML page with the picture, the whole-car numbers, and the section, probes, comparison and study the car has. Returns the path and size.",
+			"Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section, probes and study: the section plot's points, the probe table and the Variants table, as CSV. report: one HTML page with the picture, the whole-car numbers, and the section, probes and study the car has. Returns the path and size.",
 		get parameters() {
 			return {
 				type: 'object',

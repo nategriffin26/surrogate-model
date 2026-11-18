@@ -1,7 +1,7 @@
 // The report: the analysis on screen as one HTML page, for someone without the tool. It holds the view as drawn, the
-// whole car, the section plot, the probe set in use, the comparison and the study, each read from what the
-// operations give, so the page and the tool agree. The picture is inlined as a data URL, the plot as SVG, and the
-// styles travel in the page: it loads nothing.
+// whole car, the section plot, the probe set in use and the study, each read from what the operations give, so the
+// page and the tool agree. The picture is inlined as a data URL, the plot as SVG, and the styles travel in the page:
+// it loads nothing.
 
 import { caseSummary } from './cases.js';
 import { EXPORTS, baseName, defineExport } from './export.js';
@@ -75,8 +75,8 @@ async function carriedFaces() {
 	return inlined.join('\n');
 }
 
-/** context: { session, engine, section, comparison, variants }. Defines the report export. */
-export function defineReport({ session, engine, section, comparison, variants }) {
+/** context: { session, engine, section, variants }. Defines the report export. */
+export function defineReport({ session, engine, section, variants }) {
 	const view = session.view;
 
 	function wholeCar(c) {
@@ -133,40 +133,6 @@ export function defineReport({ session, engine, section, comparison, variants })
 		return `<h2>Probes: ${escapeHtml(set.name)}</h2>${table(['Probe', 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
 	}
 
-	function comparisonPart(c) {
-		const out = comparison.read(c);
-		if (!out) return '';
-		const other = out.compared_with === 'cfd' ? 'CFD' : out.compared_with.name;
-		const mine = out.compared_with === 'cfd' ? 'Predicted' : c.name;
-		const columns = [
-			['cx', coefficient('x')],
-			['cz', coefficient('z')],
-			['mean_cp', 'Mean Cp'],
-		];
-		const head = [
-			'',
-			...columns.flatMap(([, name]) => [
-				markup(`${name}, ${escapeHtml(mine)}`),
-				markup(`${name}, ${escapeHtml(other)}`),
-				markup(`Δ${name}`),
-			]),
-			'RMS ΔCp',
-		];
-		const whole = out.whole_car;
-		const rows = [
-			[
-				'Whole car',
-				...columns.flatMap(([key]) => [
-					number(whole.this_car[key]),
-					number(whole.other[key]),
-					number(whole.difference[key]),
-				]),
-				number(whole.rms_dcp),
-			],
-		];
-		return `<h2>Compared with ${escapeHtml(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
-	}
-
 	function studyPart(c) {
 		const study = variants.study(c);
 		if (!study) return '';
@@ -212,7 +178,7 @@ export function defineReport({ session, engine, section, comparison, variants })
 			`${r.source.cells.toLocaleString('en-US')} cells`,
 			`model ${r.model.slice(0, 8)}`,
 		].join(' · ');
-		const parts = [wholeCar(c), sectionPart(), await probesPart(c), comparisonPart(c), studyPart(c)];
+		const parts = [wholeCar(c), sectionPart(), await probesPart(c), studyPart(c)];
 		return `<!doctype html>
 <html lang="en">
 <head>
@@ -237,8 +203,7 @@ ${parts.join('\n')}
 		name: 'report',
 		label: 'Report',
 		format: 'HTML',
-		title:
-			'The analysis on screen as one page: the view, the whole car, the section, probes, the comparison and the study',
+		title: 'The analysis on screen as one page: the view, the whole car, the section, probes and the study',
 		unavailable: () => null,
 		make: async (c) => new Blob([await reportOf(c)], { type: 'text/html' }),
 		fileName: (c) => `${baseName(c)}-report.html`,

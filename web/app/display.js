@@ -19,6 +19,14 @@ const mapResult = (field, map) => ({
 	bands: bandCount(map),
 });
 
+/** A field the Result view offers, checked against case c: the CFD's need a case that carries CFD, Change a variant. */
+function offeredOn(c, field) {
+	oneOf('field', field, offeredFields());
+	const why = FIELDS[field].unavailable?.(c);
+	if (why) throw new Error(why);
+	return field;
+}
+
 /** The camera moves as soon as a car is on screen, while its pressure is still being predicted too. */
 function carOnScreen(session) {
 	if (!session.active?.surface) throw new Error('No car is on screen. Open a file or an example first.');
@@ -31,7 +39,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 	defineOperation({
 		name: 'set_field',
 		description:
-			"Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model's networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model's calibration. Any other field is one added to the car (an annotation's array). Section plots and probe readouts follow the field. Returns the field and its colour scale.",
+			"Colour the car by a field. `cp`: the predicted pressure coefficient (mean of the model's networks). `drag`: the local pressure drag density −Cp·nₓ, Cp times the x component of the outward unit normal, negated: positive where pressure pushes the car rearward (x runs downstream). `sigma`: the spread σ(Cp) between the networks, scaled by the model's calibration. `cfd`: the CFD pressure coefficient the case carries, on the pressure scale, and `error`: the predicted Cp minus it, on a case that carries CFD. `change`: on a variant, its Cp minus its car's predicted unchanged on the same mesh. Any other field is one added to the car (an annotation's array). Section plots and probe readouts follow the field. Returns the field and its colour scale.",
 		// The enum follows the fields added at run time.
 		get parameters() {
 			return {
@@ -42,8 +50,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 			};
 		},
 		run({ field }) {
-			session.withResult();
-			view.field = oneOf('field', field, offeredFields());
+			view.field = offeredOn(session.withResult(), field);
 			update('toolbar', 'legend', 'viewer', 'dock', 'markers');
 			return mapResult(field, view.maps[FIELDS[field].map]);
 		},
@@ -70,7 +77,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 					ramp: {
 						type: 'string',
 						description:
-							'Colour ramp: for cp coolwarm, turbo or viridis; for drag tealorange, coolwarm or brownteal; for sigma purples, viridis or inferno; for an added field, the ones it was added with.',
+							'Colour ramp: for cp and cfd coolwarm, turbo or viridis; for drag tealorange, coolwarm or brownteal; for sigma purples, viridis or inferno; for error and change coolwarm, purplegreen or brownteal; for an added field, the ones it was added with.',
 					},
 					banded: { type: 'boolean', description: 'Split the ramp into discrete bands at round values.' },
 					reset: { type: 'boolean', description: 'Back to the default range, before min and max are applied.' },
@@ -80,9 +87,9 @@ export function defineDisplayOperations({ session, viewer, update }) {
 		},
 		run({ field = view.field, min, max, ramp, banded, reset }) {
 			const c = session.withResult();
-			oneOf('field', field, offeredFields());
-			const name = FIELDS[field].map;
-			// An added field starts at the scale it was added with; the model's start from the surface's values.
+			const name = FIELDS[offeredOn(c, field)].map;
+			view.maps[name] ??= defaultMaps(c.result.mesh)[name];
+			// An added field starts at the scale it was added with; the model's and the CFD's from the surface's values.
 			if (reset)
 				view.maps[name] = {
 					...(MAPS[name].start ?? defaultMaps(c.result.mesh)[name]),

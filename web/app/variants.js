@@ -1,9 +1,10 @@
 // Variants of a car: its geometry changed on the page and predicted again. A variant stretches the car along an axis,
 // or raises or lowers the body on its wheels. It is made from the working mesh the car is drawn with (about
 // 600,000 triangles) and predicted there by the engine's quick prediction, in a second or two. The car itself is
-// predicted unchanged on the same mesh, once, and a variant is compared with that (`comparedAs`), so the difference
-// between them is the change alone. Each variant opens as a case beside its car, its surface kept in the workspace
-// under variants/ with the prediction as cell arrays.
+// predicted unchanged on the same mesh, once, so a variant and its car have the same vertices and differ by the change
+// alone: a variant's Change field is its Cp minus the car's, vertex for vertex, each point of the body against itself
+// before the change, and its section plot draws the car's line beside its own. Each variant opens as a case beside
+// its car, its surface kept in the workspace under variants/ with the prediction as cell arrays.
 //
 // A car and its open variants are one study, shown as one table whoever made the rows: the Variants tab and the
 // assistant both call make_variant, and read_study reads the table.
@@ -13,6 +14,7 @@ import { writeVtp } from '../engine/vtp.js';
 import { finite, oneOf, round } from './checks.js';
 import { coefficient, failureNote, h, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
+import { MAPS, addField, scaleEnd } from './fields.js';
 import { csv, parseNumber, signed } from './format.js';
 import { defineOperation } from './operations.js';
 
@@ -64,21 +66,24 @@ const CHANGE_SCHEMA = {
 };
 
 /**
- * Case x as it is compared with case y. A car beside one of its variants is its surface predicted unchanged the way
- * the variant was, so the two differ by the change alone; any other case is itself.
+ * A variant's car predicted unchanged on the variant's mesh: its Cp at each of the variant's working-mesh vertices,
+ * the same vertices before the change. Null for a case that is not a variant.
  */
-export function comparedAs(x, y) {
-	return x.baseline && y?.variant?.root === x ? { ...x, result: x.baseline } : x;
-}
+export const unchangedCp = (c) => c?.variant?.root.baseline.mesh.cp ?? null;
 
-/**
- * Whether two cases have the same vertices: a car and its variants, all made from its simplified mesh. They are
- * compared vertex for vertex, each point of the body against itself before the change, where the nearest point would
- * be another part of the body once it has moved.
- */
-export function sameVertices(x, y) {
-	const root = (c) => (c.variant?.root ?? c).id;
-	return Boolean(x.variant || y.variant) && root(x) === root(y);
+/** The field a variant offers: its Cp minus its car's predicted unchanged, at each vertex. */
+const CHANGE = 'change';
+
+/** Per variant's result, its change at each vertex and the end of a scale spanning 98 % of it; worked out once. */
+const changeByResult = new WeakMap();
+function changeOf(c) {
+	const before = unchangedCp(c);
+	if (!before) return null;
+	if (!changeByResult.has(c.result)) {
+		const values = Float32Array.from(c.result.mesh.cp, (cp, v) => cp - before[v]);
+		changeByResult.set(c.result, { values, end: scaleEnd(values.length, (v) => values[v]) });
+	}
+	return changeByResult.get(c.result);
 }
 
 /** The name a case goes by beside its car: a variant's own name without the car's at its start ("length +5 %"). */
@@ -185,9 +190,42 @@ const rounded = (values) => Object.fromEntries(Object.entries(values).map(([key,
 
 // ---- the operations and the tab ---------------------------------------------------------------------------------------
 
-/** context: { session, engine, workspace, update, run }. The variant operations, the study export and the Variants tab. */
-export function createVariants({ session, engine, workspace, update, run }) {
+/** context: { session, engine, workspace, run }. The variant operations, the Change field, the study export and the Variants tab. */
+export function createVariants({ session, engine, workspace, run }) {
 	const view = session.view;
+
+	addField(
+		CHANGE,
+		{
+			label: 'Change',
+			title: 'ΔCp variant − unchanged',
+			symbol: 'ΔCp',
+			tip: "The variant's Cp minus its car's, predicted unchanged on the same mesh",
+			values: (c) => changeOf(c)?.values ?? null,
+			unavailable: (c) =>
+				changeOf(c)
+					? null
+					: `${c.name} is not a variant: Change is a variant's Cp minus its car's. Make one with make_variant.`,
+		},
+		{ ramps: MAPS.error.ramps, diverging: true, start: { ramp: 'coolwarm', lo: -1, hi: 1, bands: 0 } },
+	);
+
+	/** The variant the Change scale was last started for: each variant's starts at 98 % of its own change. */
+	let scaledFor = null;
+	/** The Change field on case c, when c is a variant; a variant not shown with it before restarts its scale. */
+	function fields(c) {
+		const change = c?.result ? changeOf(c) : null;
+		if (!change) return [];
+		if (scaledFor !== c.result) {
+			const start = { ramp: 'coolwarm', lo: -change.end, hi: change.end, bands: 0 };
+			MAPS[CHANGE].start = start;
+			view.maps ??= {};
+			view.maps[CHANGE] = { ...start };
+			scaledFor = c.result;
+		}
+		return [CHANGE];
+	}
+
 	/** Per car, its unchanged prediction while it is being made, so it is asked for once. */
 	const baselines = new WeakMap();
 
@@ -273,10 +311,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		);
 		const c = session.openVariant(result, { name: label, root, changes: made, path });
 		workspace.link(path, c.id);
-		// Compared with its car from the start: the difference map and the table are one choice away.
-		if (session.cases.includes(root)) view.compare = { with: root.id, sideBySide: view.compare?.sideBySide ?? false };
-		update('toolbar', 'legend', 'viewer', 'dock');
-		return { ...rowOut(c, root), compared_with: root.id };
+		return rowOut(c, root);
 	}
 
 	/** A car and its open variants, for any case of the study. */
@@ -342,7 +377,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	defineOperation({
 		name: 'make_variant',
 		description:
-			'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
+			'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car, offering the field change (set_field "change": its Cp minus its car\'s, predicted unchanged on the same mesh, which shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -432,7 +467,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	const note = failureNote();
 	const table = h('table', { class: 'data-table variants-table' });
 	const basis = h('p', { class: 'variants-basis' }, PREDICTED_ON);
-	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
+	// The section plot sits beside the study table: shown on a variant, it draws the variant's line and its car's.
 	const sectionSlot = h('div', { class: 'section-slot' });
 	const el = h(
 		'div',
@@ -508,6 +543,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	return {
 		/** The study of case c, as read_study gives it, or null when its car has no variants open. */
 		study: (c) => (studyOf(c).variants.length ? studyOut(c) : null),
+		fields,
 		panel: { el, render, count, sectionSlot },
 	};
 }

@@ -10,13 +10,12 @@ import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
 import { Viewer } from '../viewer/viewer.js';
 import { createAnnotations } from './annotations.js';
-import { createComparison } from './compare.js';
 import { defineCaseOperations } from './cases.js';
 import { defineDisplayOperations } from './display.js';
 import { createDock } from './dock.js';
 import { h } from './dom.js';
 import { baseName, createExportMenu, defineExport, defineExportOperations, pictureOf } from './export.js';
-import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
+import { CFD_FIELDS, FIELDS, RESULT_FIELDS, defaultMaps, isAdded } from './fields.js';
 import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
@@ -39,7 +38,6 @@ const overlay = $('[data-overlay]');
 const center = $('[data-center]');
 const strip = $('[data-strip]');
 const card = $('[data-card]');
-const paneLabels = $('[data-pane-labels]');
 const modelHost = $('[data-model]');
 const assistantHost = $('[data-assistant]');
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
@@ -63,29 +61,27 @@ const run = (name, args) => runOperation(name, args, { session, viewer, engine, 
 /** The camera frames the first car; after that it stays where the engineer put it, whichever car is shown. */
 let framed = false;
 
-function mapFor(field) {
+/** The colour map a field is drawn with, as the view keeps it; a map not used yet starts from the case on screen. */
+function mapOf(field) {
 	const name = FIELDS[field].map;
 	if (!name || !view.maps) return null;
 	view.maps[name] ??= defaultMaps(active().result.mesh)[name];
-	const map = view.maps[name];
-	return { ...map, bands: bandCount(map) };
+	return view.maps[name];
 }
 
-/** The fields case c can be coloured by: the model's, then a comparison's and the annotations'. */
-const fieldsOf = (c) => [...RESULT_FIELDS, ...comparison.fields(c), ...annotations.fields(c)];
+/** The fields case c can be coloured by: the model's, the CFD's on a case that carries it, a variant's, the annotations'. */
+const fieldsOf = (c) => [
+	...RESULT_FIELDS,
+	...(c?.result?.mesh.cfd ? CFD_FIELDS : []),
+	...variants.fields(c),
+	...annotations.fields(c),
+];
 
 /** The field the car shows: the view's, when the case on screen has it, else pressure. */
 const shownField = () => (fieldsOf(active()).includes(view.field) ? view.field : 'cp');
 
-/** The panes the car is drawn in: the shared field, or this car beside what it is compared with. */
-function panes() {
-	const field = active()?.result ? shownField() : 'none';
-	const sideBySide = field === 'none' ? null : comparison.panes(active(), field);
-	return (sideBySide ?? [{ field }]).map((pane) => ({ ...pane, map: mapFor(pane.field) }));
-}
-
-/** The field the legend shows and edits: the first pane drawn in colour. */
-const legendField = () => panes().find((pane) => FIELDS[pane.field].map)?.field ?? 'none';
+/** The field the car is drawn in, which the legend shows and edits: the one shown once the case has a result, else none. */
+const drawnField = () => (active()?.result ? shownField() : 'none');
 
 // ---- operations ---------------------------------------------------------------------------------------------------------
 
@@ -95,8 +91,7 @@ defineCaseOperations(context);
 defineSectionOperations(context);
 defineProbeOperations(context);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
-const comparison = createComparison({ session, engine, update, run });
-const variants = createVariants({ session, engine, workspace, update, run });
+const variants = createVariants({ session, engine, workspace, run });
 defineFileOperations(context);
 
 defineExport({
@@ -145,7 +140,7 @@ function toggle(what) {
 	}
 }
 
-const legend = createLegend({ change: (patch) => run('set_colour_scale', { field: legendField(), ...patch }) });
+const legend = createLegend({ change: (patch) => run('set_colour_scale', { field: drawnField(), ...patch }) });
 $('[data-legend]').append(legend.el);
 
 const probes = createProbes({
@@ -156,15 +151,12 @@ const probes = createProbes({
 	session,
 	update,
 	run,
-	fieldIn: (pane) => panes()[pane]?.field ?? shownField(),
+	field: drawnField,
 });
-const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
-defineReport({ session, engine, section, comparison, variants });
-/** The dock's panel tabs after Section and Probes. */
-const panels = [
-	{ name: 'compare', label: 'Compare', ...comparison.panel },
-	{ name: 'variants', label: 'Variants', ...variants.panel },
-];
+const section = createSectionTool({ host: overlay, viewport, viewer, active, view, run });
+defineReport({ session, engine, section, variants });
+/** The dock's panel tab after Section and Probes. */
+const panels = [{ name: 'variants', label: 'Variants', ...variants.panel }];
 
 const dock = createDock({
 	section,
@@ -433,24 +425,20 @@ function renderToolbar() {
 }
 
 function renderLegend() {
-	const field = legendField();
+	const field = drawnField();
 	const mapName = FIELDS[field].map;
-	const title = panes().length > 1 ? FIELDS[field].symbol : FIELDS[field].title;
-	legend.render({ field, title, map: mapName ? view.maps[mapName] : null, mapName });
+	legend.render({ field, title: FIELDS[field].title, map: mapOf(field), mapName });
 }
 
 function applyViewer() {
 	const c = active();
-	const shown = panes();
-	viewer.setPanes(shown);
-	// The one field the app supplies (fields.addField), for whichever pane draws one.
-	const supplied = (c?.result && shown.map((pane) => FIELDS[pane.field].values?.(c)).find(Boolean)) || null;
+	const field = drawnField();
+	const map = mapOf(field);
+	viewer.setPanes([{ field, map: map && { ...map, bands: bandCount(map) } }]);
+	// A field added at run time is drawn from the values the app supplies (fields.addField); the viewer reads the
+	// others from the mesh.
+	const supplied = (c?.result && isAdded(field) && FIELDS[field].values(c)) || null;
 	if (supplied !== viewer.custom) viewer.setCustomField(supplied);
-	paneLabels.replaceChildren(
-		...(shown.length > 1 ? shown.map((pane) => h('span', { class: 'pane-label' }, pane.label)) : []),
-	);
-	// Two cars side by side take the whole view; the comparison table in the dock carries the card's numbers.
-	body.classList.toggle('side-by-side', shown.length > 1);
 	const s = view.section;
 	viewer.setSection(
 		c?.result && s.on ? { axis: s.axis, offset: s.offset, plane: Boolean(viewer.section?.plane) } : null,
@@ -527,7 +515,7 @@ function present(c) {
 
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
 	switch (what) {
-		// The Compare targets and the study table depend on which cases are open.
+		// The study table depends on which cases are open.
 		case 'cases':
 			update('tabs', 'dock');
 			return;

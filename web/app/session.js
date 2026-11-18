@@ -42,8 +42,6 @@ export class Session extends EventTarget {
 			dockCollapsed: false,
 			/** The probe set in use: the one clicks add to and the probe table shows; or null. */
 			probeSet: null,
-			/** What the car on screen is compared with, {with: 'cfd' or a case id, sideBySide}; or null. */
-			compare: null,
 		};
 		/** Probe sets, {id, name, probes: [{n, point, label?}], next}, which every car reads at its own cells. */
 		this.probeSets = [];

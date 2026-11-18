@@ -1,4 +1,4 @@
-/** Nearest-point queries over a point set, through a uniform grid of buckets, and sampling one mesh's fields at another's vertices. */
+/** Nearest-point queries over a point set, through a uniform grid of buckets. */
 
 import { boundsOf } from './geometry.js';
 
@@ -85,36 +85,6 @@ export function pointsWithin(grid, x, y, z, radius, visit) {
 			}
 		}
 	}
-}
-
-/**
- * The fields of mesh `from` at the vertices of `at`, for comparing two cars: each `at` vertex takes
- * the values of the `from` vertex nearest it among those not facing away from its normal, so a point
- * on one side of a thin panel never takes the other side's pressure.
- * @param {{ positions: Float32Array, normals: Float32Array, cp?: Float32Array, sigma?: Float32Array, cfd?: Float32Array }} from
- *   per vertex, as a `DisplayMesh` with its fields
- * @param {{ positions: Float32Array, normals: Float32Array }} at
- * @returns {{ cp?: Float32Array, sigma?: Float32Array, cfd?: Float32Array }} one value per `at` vertex
- *   for each field `from` has; NaN where every `from` vertex faces away
- */
-export function sampleFields(from, at) {
-	const grid = buildPointGrid(from.positions);
-	const names = ['cp', 'sigma', 'cfd'].filter((name) => from[name]);
-	const count = at.positions.length / 3;
-	const sampled = Object.fromEntries(names.map((name) => [name, new Float32Array(count)]));
-	const { normals } = from;
-	let nx = 0,
-		ny = 0,
-		nz = 0;
-	const facing = (i) => normals[3 * i] * nx + normals[3 * i + 1] * ny + normals[3 * i + 2] * nz >= 0;
-	for (let v = 0; v < count; v++) {
-		nx = at.normals[3 * v];
-		ny = at.normals[3 * v + 1];
-		nz = at.normals[3 * v + 2];
-		const i = nearestPoint(grid, at.positions[3 * v], at.positions[3 * v + 1], at.positions[3 * v + 2], facing);
-		for (const name of names) sampled[name][v] = i < 0 ? NaN : from[name][i];
-	}
-	return sampled;
 }
 
 function clamp(index, size) {

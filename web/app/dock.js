@@ -1,5 +1,5 @@
-// The dock under the 3D view: the section plot, the probe table, and the panels for comparing cars and making
-// variants. What each shows is exported from the Export menu.
+// The dock under the 3D view: the section plot, the probe table, and the panel for making variants. What each shows
+// is exported from the Export menu.
 
 import { h, s } from './dom.js';
 import { icon } from './icons.js';
@@ -13,7 +13,7 @@ const DOCK_MAX_SHARE = 0.6;
 /**
  * view: the shared view (its dock tab and section). actions: tab(name), collapse(). resizer: the edge above the dock,
  * dragged to set its height. The section tool supplies the section plot and its controls, the probes their table and
- * its actions. Each of `panels` is a tab of its own, {name, label, el, controls?, render(), count?(), sectionSlot?},
+ * its actions. Each of `panels` is a tab of its own, {name, label, el, render(), count?(), sectionSlot?},
  * its count shown in the tab when above zero. A panel's `sectionSlot` is the place in its layout where the section
  * plot sits, beside its numbers, while the section is on.
  */
@@ -126,12 +126,7 @@ export function createDock({ section, probes, panels, active, view, actions, res
 			svg.replaceChildren();
 			return;
 		}
-		const wanted =
-			view.dock === 'section'
-				? section.controls(c)
-				: view.dock === 'probes'
-					? probes.actions(c)
-					: panelShown().controls;
+		const wanted = view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : null;
 		// The section controls are one element updated in place; detaching it would end a drag on its slider.
 		if (!wanted) controls.replaceChildren();
 		else if (controls.firstChild !== wanted || controls.childNodes.length !== 1) controls.replaceChildren(wanted);

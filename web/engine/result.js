@@ -7,9 +7,8 @@
  * normals, and over the lookups as raw arrays; see `packResult`), so the interface never needs to
  * know which of the two it is showing.
  *
- * Beside the `Engine`, three plain functions run on whatever thread calls them: `writeVtp` (vtp.js)
- * writes any surface with cell and point arrays as a .vtp file, `sampleFields` (nearest.js) reads
- * one car's fields at another car's vertices, for difference maps, and `boundsOf` (geometry.js) gives
+ * Beside the `Engine`, two plain functions run on whatever thread calls them: `writeVtp` (vtp.js)
+ * writes any surface with cell and point arrays as a .vtp file, and `boundsOf` (geometry.js) gives
  * the bounds of a set of points.
  *
  * Frame: metres, x downstream, z up, the car's centre plane at y = 0.

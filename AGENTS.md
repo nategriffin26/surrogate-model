@@ -31,7 +31,7 @@ Choose between designs on cross-validation over the ten training cars. Seeds 42,
 ## Checks
 
 - `uv run pytest`: the Python pipeline, the browser engine against it, and the assistant's proxies (the engine's tests need Bun or Deno, the Worker's and the Markdown tests need Deno; full-car tests need the files in `data/raw/`).
-- `deno test --allow-read tests/meshes.test.js tests/result.test.js tests/nearest.test.js`: the engine's meshes, file format and sampling between cars.
+- `deno test --allow-read tests/meshes.test.js tests/result.test.js`: the engine's meshes and file format.
 - `uv run ruff check`, `uv run ruff format --check` and `bunx prettier --check web tests deploy`: the lint and the formatting (JavaScript in tabs, single quotes, width 120).
 - An interface change is checked in a real browser with WebGPU, on a bundled example and on a full DrivAerML file. A browser without WebGPU exercises only the CPU path.
 - A change to the assistant's prompt (`web/assistant/prompt.js`), its tools or its kernel is checked with real conversations in that browser against a cheap test model set through `ASSISTANT_MODEL`: the tools it calls, and that every number in its reply comes from a tool result.

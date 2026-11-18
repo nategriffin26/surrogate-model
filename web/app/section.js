@@ -1,10 +1,10 @@
 // The section tool: a plane normal to x, y or z, placed by typing, by its slider or by dragging its line on the car;
 // its line drawn on the car, and the shown field plotted along the outer surface it cuts. Beside the predicted Cp the
-// plot draws the car it is compared with, or else the CFD when the file carries CFD. A cursor on the plot, moved by
-// the pointer or a finger, reads every curve and marks the place on the car; hovering the car moves it there.
+// plot draws the CFD on a case that carries it, and on a variant its car's Cp predicted unchanged. A cursor on the
+// plot, moved by the pointer or a finger, reads every curve and marks the place on the car; hovering the car moves it
+// there.
 
 import { finite, oneOf, round } from './checks.js';
-import { COMPARED, counterpart } from './compare.js';
 import { h, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
@@ -12,6 +12,7 @@ import { csv, niceTicks, parseNumber, signed } from './format.js';
 import { defineOperation } from './operations.js';
 import { drawCursor, drawPlot, valueAlong } from './plots.js';
 import { CUT_AXES, branches, cut, interpolated } from './mesh-cut.js';
+import { shortName, unchangedCp } from './variants.js';
 
 const AXIS_NAMES = ['x', 'y', 'z'];
 /** How near the cut line, in px, a press grabs it: a fingertip covers far more of the screen than a cursor's tip. */
@@ -43,9 +44,20 @@ const QUANTITY = {
 	},
 };
 
+/** On a variant, its car's Cp predicted unchanged, read along the variant's cut at the same vertices (variants.js). */
+const UNCHANGED = {
+	label: 'Cp',
+	key: 'cp',
+	invert: true,
+	read: (c) => {
+		const cp = unchangedCp(c);
+		return cp ? (q) => interpolated(cp, q) : null;
+	},
+};
+
 /**
- * What the plot shows for a field: one above, or one added at run time (a comparison's, an annotation's), read from
- * its values at the working-mesh vertices; its reader is null on a case without it.
+ * What the plot shows for a field: one above, or another the app reads from its values at the working-mesh vertices
+ * (the error against the CFD, a variant's change, an annotation's); its reader is null on a case without it.
  */
 function quantityOf(field) {
 	if (QUANTITY[field]) return QUANTITY[field];
@@ -80,10 +92,10 @@ function sectionOf(c, { axis, offset }) {
 	return made;
 }
 
-/** Plot rows of a section on a case: per branch, rows {along, value, p} in path order, `along` in metres. */
-function sectionRows(c, plane, field) {
+/** Plot rows of a quantity along a section on a case: per branch, rows {along, value, p} in path order, `along` in metres. */
+function sectionRows(c, plane, quantity) {
 	const { along } = CUT_AXES[plane.axis];
-	const read = quantityOf(field).read(c);
+	const read = quantity.read(c);
 	const cuts = sectionOf(c, plane).branches;
 	if (!read) return cuts.map(() => []);
 	return cuts.map((paths) => paths.map((path) => path.map((p) => ({ along: p.p[along], value: read(p), p: p.p }))));
@@ -94,7 +106,7 @@ function sectionRows(c, plane, field) {
  * lower), each in the middle of its share of the branch's span: the stations of a row of probes.
  */
 export function sectionStations(c, plane, count, branch) {
-	const paths = sectionRows(c, plane, 'cp')[branch];
+	const paths = sectionRows(c, plane, QUANTITY.cp)[branch];
 	const along = paths.flat().map((r) => r.along);
 	if (along.length === 0) return [];
 	const from = Math.min(...along),
@@ -128,43 +140,42 @@ function valueRange(lines) {
 const planeLabel = ({ axis, offset }) => `${AXIS_NAMES[axis]} = ${signed(offset, 3)} m`;
 
 /**
- * What the section plot shows on the car shown: the field on it, and beside its Cp what it is set against: the car
- * or CFD it is compared with, read on its surface along the same cut, or else its file's CFD. Series carry their
- * field, how they are drawn, the name of what they show (`source`) and their label in the key; `against` marks the
- * second.
+ * What the section plot shows on the car shown: the field on it, and beside its Cp what it is set against: on a
+ * variant its car predicted unchanged, read along the same cut, or else the CFD the case carries. Series carry their
+ * quantity, how they are drawn, the name of what they show (`source`) and their label in the key; `against` marks
+ * the second.
  */
-function plotSeries(view, shown, cases) {
+function plotSeries(view, shown) {
 	const field = plottedField(view.field, shown);
-	const own = { case: shown, field, source: shown.name, ...OWN, label: null };
+	const own = { case: shown, quantity: quantityOf(field), source: shown.name, ...OWN, label: null };
 	if (field !== 'cp') return [own];
-	const pair = counterpart(view, cases, shown);
-	if (pair)
+	if (unchangedCp(shown))
 		return [
-			{ ...own, label: pair.mine },
+			{ ...own, label: shortName(shown) },
 			{
 				case: shown,
-				field: COMPARED,
+				quantity: UNCHANGED,
 				against: true,
-				source: pair.other?.name ?? pair.label,
+				source: `${shown.variant.root.name}, unchanged`,
 				...AGAINST,
-				label: pair.label,
+				label: 'Unchanged',
 			},
 		];
 	if (shown.result.mesh.cfd)
 		return [
 			{ ...own, label: 'Predicted' },
-			{ case: shown, field: 'cfd', against: true, source: `${shown.name} CFD`, ...AGAINST, label: 'CFD' },
+			{ case: shown, quantity: QUANTITY.cfd, against: true, source: `${shown.name} CFD`, ...AGAINST, label: 'CFD' },
 		];
 	return [own];
 }
 
 /** The plot's points for every series: what it shows, the section, branch, the point and the value. */
-function sectionCsv(view, shown, cases) {
+function sectionCsv(view, shown) {
 	const names = CUT_AXES[view.section.axis].branches;
 	const plane = `${AXIS_NAMES[view.section.axis]}=${view.section.offset}`;
 	const rows = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', quantityOf(plottedField(view.field, shown)).key]];
-	for (const series of plotSeries(view, shown, cases)) {
-		sectionRows(series.case, view.section, series.field).forEach((paths, branch) =>
+	for (const series of plotSeries(view, shown)) {
+		sectionRows(series.case, view.section, series.quantity).forEach((paths, branch) =>
 			paths.forEach((path) => {
 				for (const r of path)
 					rows.push([series.source, plane, names[branch], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)]);
@@ -182,7 +193,7 @@ export function defineSectionOperations({ session, update }) {
 	defineOperation({
 		name: 'set_section',
 		description:
-			"Place the section: a plane normal to x, y or z at a position in metres, its line drawn on the car and the shown field plotted along the outer surface it cuts (Cp with negative values up). Beside the predicted Cp the plot draws the car or CFD it is compared with (set_comparison), or else the CFD when the file carries CFD. y = 0 is the car's centreline. Turning it on brings its plot up in the dock. Every car is seen through the same section.",
+			"Place the section: a plane normal to x, y or z at a position in metres, its line drawn on the car and the shown field plotted along the outer surface it cuts (Cp with negative values up). Beside the predicted Cp the plot draws the CFD on a case that carries it, and on a variant its car's Cp predicted unchanged. y = 0 is the car's centreline. Turning it on brings its plot up in the dock. Every car is seen through the same section.",
 		parameters: {
 			type: 'object',
 			properties: {
@@ -239,7 +250,7 @@ export function defineSectionOperations({ session, update }) {
 				field: {
 					type: 'string',
 					description:
-						"cp, drag (−Cp·nₓ), sigma, cfd (the CFD's Cp, on a file that carries CFD), or a field added to the case, such as a comparison's compared and difference; default cp.",
+						"cp, drag (−Cp·nₓ), sigma, cfd (the CFD's Cp, on a case that carries CFD), error (Cp minus CFD), change (on a variant, its Cp minus its car's predicted unchanged), or a field added to the case; default cp.",
 				},
 				at_m: {
 					type: 'array',
@@ -265,7 +276,7 @@ export function defineSectionOperations({ session, update }) {
 				axis: AXIS_NAMES[plane.axis],
 				position_m: plane.offset,
 				plot_axis: AXIS_NAMES[along],
-				branches: sectionRows(c, plane, field).map((paths, b) => {
+				branches: sectionRows(c, plane, quantityOf(field)).map((paths, b) => {
 					const rows = paths.flat();
 					if (rows.length === 0) return { name: names[b], points: 0 };
 					const low = rows.reduce((m, r) => (r.value < m.value ? r : m));
@@ -297,17 +308,17 @@ export function defineSectionOperations({ session, update }) {
 		format: 'CSV',
 		title: "The section plot's points: what each curve shows, the section, branch, x, y, z and the value",
 		unavailable: () => (view.section.on ? null : 'The section is off. Turn it on to export its plot.'),
-		make: async (c) => new Blob([sectionCsv(view, c, session.cases)], { type: 'text/csv' }),
+		make: async (c) => new Blob([sectionCsv(view, c)], { type: 'text/csv' }),
 		fileName: (c) => `${baseName(c)}-section.csv`,
 	});
 }
 
 /**
  * host: the overlay over the 3D view (markers for the plot cursor); viewport: the element the car is dragged in;
- * view: the shared view, whose section and field this tool reads; cases(): every open case. run(name, args) runs an
- * operation: the controls change the section through `set_section`.
+ * view: the shared view, whose section and field this tool reads. run(name, args) runs an operation: the controls
+ * change the section through `set_section`.
  */
-export function createSectionTool({ host, viewport, viewer, active, cases, view, run }) {
+export function createSectionTool({ host, viewport, viewer, active, view, run }) {
 	const markers = [];
 	let plot = null;
 	let cursorAt = null;
@@ -391,7 +402,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		if (Boolean(viewer.section?.plane) !== near) viewer.setSection({ ...view.section, plane: near });
 	});
 
-	const seriesNow = () => plotSeries(view, active(), cases());
+	const seriesNow = () => plotSeries(view, active());
 
 	/** Markers on the car where the plot cursor meets each branch of the section, the lower one dotted. */
 	function placeMarkers() {
@@ -423,7 +434,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	function plotInto(svg, width, height) {
 		const c = active();
 		const { along, branches: names } = CUT_AXES[view.section.axis];
-		const series = seriesNow().map((one) => ({ ...one, rows: sectionRows(one.case, view.section, one.field) }));
+		const series = seriesNow().map((one) => ({ ...one, rows: sectionRows(one.case, view.section, one.quantity) }));
 		// What the car is set against is drawn first, under its own curve.
 		const lines = [...series].reverse().flatMap((one) =>
 			one.rows.flatMap((paths, b) =>
@@ -437,7 +448,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 			),
 		);
 		const bounds = c.result.geometry.bounds;
-		const q = quantityOf(series[0].field);
+		const q = series[0].quantity;
 		const frame = drawPlot(svg, {
 			width,
 			height,
