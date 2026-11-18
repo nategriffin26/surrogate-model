@@ -2,7 +2,7 @@
 // first use and kept for the conversation.
 //
 // No network. The server sends this script with a Content-Security-Policy (KERNEL_POLICY in src/surrogate/server.py
-// and deploy/assistant-worker/worker.js) under which it may load Pyodide from its CDN and reach nothing else: not
+// and deploy/assistant-worker/assistant.js) under which it may load Pyodide from its CDN and reach nothing else: not
 // another address, not the page's own server, not another script or worker. Once Pyodide and its packages are in,
 // the functions that could load more from the CDN are removed as well, so code run here has no network at all; it
 // reaches the page only through the messages below, and the page decides what each may do.

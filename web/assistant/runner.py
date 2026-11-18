@@ -7,22 +7,21 @@ import io
 import traceback
 
 import js
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 import pandas as pd
+import pressure
+from _page import emit
 from cycler import cycler
 from matplotlib.figure import Figure
 from pyodide.code import eval_code_async
 from pyodide.ffi import to_js
 
-import pressure
-from _page import emit
-
 CELL = "<cell>"
+# A table is shown in the panel up to TABLE_ROWS rows; the model is sent its text up to MODEL_TABLE_ROWS rows and
+# MODEL_TABLE_COLUMNS columns.
 TABLE_ROWS = 200
+MODEL_TABLE_ROWS = 40
+MODEL_TABLE_COLUMNS = 12
 
 # Figures in the tool's light theme (web/app/theme.css): hairline axes, quiet grid, its blues and accents.
 plt.rcParams.update(
@@ -85,7 +84,7 @@ async def run(code: str) -> str | None:
         if value is not None:
             display(value)
         return None
-    except BaseException as error:  # noqa: BLE001 - every error in the code is the assistant's to read
+    except BaseException as error:  # Every error in the code, KeyboardInterrupt included, is the assistant's to read.
         return _traceback(error)
     finally:
         _show()
@@ -98,7 +97,8 @@ def set_cases(message: str) -> None:
 def _traceback(error: BaseException) -> str:
     frames = traceback.extract_tb(error.__traceback__)
     first = next((i for i, frame in enumerate(frames) if frame.filename == CELL), len(frames))
-    return "".join(["Traceback (most recent call last):\n", *traceback.format_list(frames[first:]), *traceback.format_exception_only(error)])
+    shown = traceback.format_list(frames[first:])
+    return "".join(["Traceback (most recent call last):\n", *shown, *traceback.format_exception_only(error)])
 
 
 def _figure(figure: Figure) -> None:
@@ -112,7 +112,8 @@ def _describe(figure: Figure) -> str:
     """What the figure shows, in its own words: its titles and axis labels."""
     parts = [figure.get_suptitle()] if figure.get_suptitle() else []
     for axes in figure.axes:
-        labels = [axes.get_title(), axes.get_xlabel() and f"x: {axes.get_xlabel()}", axes.get_ylabel() and f"y: {axes.get_ylabel()}"]
+        x_label, y_label = axes.get_xlabel(), axes.get_ylabel()
+        labels = [axes.get_title(), x_label and f"x: {x_label}", y_label and f"y: {y_label}"]
         parts.append(", ".join(label for label in labels if label))
     return "; ".join(part for part in parts if part) or "untitled"
 
@@ -121,8 +122,11 @@ def _table(frame: pd.DataFrame) -> None:
     shown = frame.head(TABLE_ROWS)
     index = not isinstance(frame.index, pd.RangeIndex)
     columns = ([str(frame.index.name or "")] if index else []) + [str(column) for column in frame.columns]
-    rows = [([_cell(label)] if index else []) + [_cell(value) for value in row] for label, row in zip(shown.index, shown.itertuples(index=False))]
-    text = frame.to_string(max_rows=40, max_cols=12, index=index)
+    rows = [
+        ([_cell(label)] if index else []) + [_cell(value) for value in row]
+        for label, row in zip(shown.index, shown.itertuples(index=False), strict=True)
+    ]
+    text = frame.to_string(max_rows=MODEL_TABLE_ROWS, max_cols=MODEL_TABLE_COLUMNS, index=index)
     _emit({"kind": "table", "columns": columns, "rows": rows, "total": len(frame), "text": text})
 
 

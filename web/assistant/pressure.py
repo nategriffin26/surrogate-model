@@ -1,5 +1,6 @@
-"""The tool from Python: the open cases as numpy arrays, every operation of the tool, the model's prediction on
-new geometry, so a study is a loop of deform, predict, measure, collect, and drawing on the car to show what was found.
+"""The tool from Python: the open cases as numpy arrays, every operation of the tool, and the model's prediction on
+new geometry, so a study is a loop of deform, predict, measure and collect; and drawing on the car to show what was
+found.
 
 The working directory is the tool's workspace. Files the engineer added are here to read (they cannot be changed in
 place: write a new file instead), and every file written here appears in the workspace. Calls that reach the tool are
@@ -50,11 +51,22 @@ from functools import cached_property
 
 import js
 import numpy as np
+from _page import request
 from pyodide.ffi import JsProxy, to_js
 
-from _page import request
-
-__all__ = ["Case", "Prediction", "Surface", "ToolError", "View", "active", "cases", "predict", "run", "view", "write_vtp"]
+__all__ = [
+    "Case",
+    "Prediction",
+    "Surface",
+    "ToolError",
+    "View",
+    "active",
+    "cases",
+    "predict",
+    "run",
+    "view",
+    "write_vtp",
+]
 
 
 class ToolError(Exception):
@@ -64,20 +76,42 @@ class ToolError(Exception):
 class Surface:
     """A surface as polygons: `points` (P, 3) and each cell's corners in `connectivity`, cell c owning
     `connectivity[offsets[c]:offsets[c + 1]]`. Per cell: `centers` (C, 3), outward unit `normals` (C, 3), `areas` (C,)
-    in m², and when predicted `cp` (C,) and `spread` (C,); `reference` (C,), the case's reference field (CFD read from the
-    file or attached to it; `Case.reference` says which), else None. Arrays are
-    numpy, made from the tool's data on first use."""
+    in m², and when predicted `cp` (C,) and `spread` (C,); `reference` (C,), the case's reference field (CFD read from
+    the file or attached to it; `Case.reference` says which), else None. Arrays are numpy, made from the tool's data
+    on first use."""
 
-    def __init__(self, points, connectivity, offsets, *, centers=None, normals=None, areas=None, cp=None, spread=None, reference=None):
-        self._sources = dict(
-            points=points, connectivity=connectivity, offsets=offsets, centers=centers, normals=normals, areas=areas, cp=cp, spread=spread, reference=reference
-        )
+    def __init__(
+        self,
+        points,
+        connectivity,
+        offsets,
+        *,
+        centers=None,
+        normals=None,
+        areas=None,
+        cp=None,
+        spread=None,
+        reference=None,
+    ):
+        self._sources = {
+            "points": points,
+            "connectivity": connectivity,
+            "offsets": offsets,
+            "centers": centers,
+            "normals": normals,
+            "areas": areas,
+            "cp": cp,
+            "spread": spread,
+            "reference": reference,
+        }
 
     @classmethod
     def from_triangles(cls, points, triangles) -> Surface:
-        """A surface of triangles: `points` (P, 3) and `triangles` (T, 3) point indices, wound counter-clockwise seen from outside."""
+        """A surface of triangles: `points` (P, 3) and `triangles` (T, 3) point indices, wound counter-clockwise seen
+        from outside."""
         triangles = np.asarray(triangles, dtype=np.uint32)
-        return cls(np.asarray(points, dtype=np.float32), triangles.ravel(), np.arange(0, 3 * len(triangles) + 1, 3, dtype=np.uint32))
+        offsets = np.arange(0, 3 * len(triangles) + 1, 3, dtype=np.uint32)
+        return cls(np.asarray(points, dtype=np.float32), triangles.ravel(), offsets)
 
     def with_points(self, points) -> Surface:
         """The same cells on moved points: a deformed copy, without fields until it is predicted."""
@@ -114,15 +148,21 @@ class Surface:
 
     @cached_property
     def centers(self) -> np.ndarray:
-        return _numpy(self._sources["centers"], np.float32, 3) if self._sources["centers"] is not None else self._geometry[0]
+        if self._sources["centers"] is None:
+            return self._geometry[0]
+        return _numpy(self._sources["centers"], np.float32, 3)
 
     @cached_property
     def normals(self) -> np.ndarray:
-        return _numpy(self._sources["normals"], np.float32, 3) if self._sources["normals"] is not None else self._geometry[1]
+        if self._sources["normals"] is None:
+            return self._geometry[1]
+        return _numpy(self._sources["normals"], np.float32, 3)
 
     @cached_property
     def areas(self) -> np.ndarray:
-        return _numpy(self._sources["areas"], np.float64) if self._sources["areas"] is not None else self._geometry[2]
+        if self._sources["areas"] is None:
+            return self._geometry[2]
+        return _numpy(self._sources["areas"], np.float64)
 
     @cached_property
     def cp(self) -> np.ndarray | None:
@@ -138,7 +178,8 @@ class Surface:
 
     @cached_property
     def _geometry(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Centres, unit normals and areas of the cells, each polygon split into a fan of triangles from its first corner."""
+        """Centres, unit normals and areas of the cells, each polygon split into a fan of triangles from its first
+        corner."""
         counts = np.diff(self.offsets).astype(np.int64)
         cell = np.repeat(np.arange(len(counts)), counts - 2)
         first = np.repeat(self.offsets[:-1].astype(np.int64), counts - 2)
@@ -207,13 +248,28 @@ class Case:
         """Marks drawn on this case, whichever case is on screen."""
         return View(self)
 
-    async def show(self, values, name: str, *, unit: str = "", cmap: str | None = None, range: tuple[float, float] | None = None) -> dict:
-        """Colour the car by `values`, one per cell (C,) or per point (P,) of the working mesh, as a field called `name`,
-        offered beside Pressure with its own legend, colour scale and probe readout. `cmap` is one of the tool's ramps
-        (coolwarm, turbo, viridis, purplegreen, brownteal, purples, inferno, tealorange): by default coolwarm for values
-        either side of zero, else viridis. `range` is (min, max), by default from the values. Showing a name again
-        replaces its values. Returns the values' min, max and area-weighted mean, and the scale."""
-        arguments = {"name": name, "values": _typed(np.asarray(values, dtype=np.float32).ravel()), "unit": unit, "ramp": cmap, "case_id": self.id}
+    async def show(
+        self,
+        values,
+        name: str,
+        *,
+        unit: str = "",
+        cmap: str | None = None,
+        range: tuple[float, float] | None = None,
+    ) -> dict:
+        """Colour the car by `values`, one per cell (C,) or per point (P,) of the working mesh, as a field called
+        `name`, offered beside Pressure with its own legend, colour scale and probe readout. `unit` titles the legend.
+        `cmap` is one of the tool's ramps (coolwarm, turbo, viridis, purplegreen, brownteal, purples, inferno,
+        tealorange): by default coolwarm for values either side of zero, else viridis. `range` is (min, max), by
+        default from the values. Showing a name again replaces its values. Returns the values' min, max and
+        area-weighted mean, and the scale."""
+        arguments = {
+            "name": name,
+            "values": _typed(np.asarray(values, dtype=np.float32).ravel()),
+            "unit": unit,
+            "ramp": cmap,
+            "case_id": self.id,
+        }
         if range is not None:
             arguments["min"], arguments["max"] = (float(v) for v in range)
         return await _operation("show_field", arguments)
@@ -260,41 +316,93 @@ class View:
         """Label points with text: one point and a string, or (N, 3) points and N strings. Labels keep clear of each
         other, with a leader when moved; `offset` [right, down] in px puts them there first."""
         texts = [texts] if isinstance(texts, str) else [str(text) for text in texts]
-        return await self._draw("draw_labels", color, points=_points(points), texts=texts, layer=layer, offset_px=None if offset is None else [float(v) for v in offset])
+        return await self._draw(
+            "draw_labels", color, points=_points(points), texts=texts, layer=layer, offset_px=_floats(offset)
+        )
 
     async def points(self, points, *, size: float | None = None, layer: str | None = None, color=None) -> dict:
         """Dots at points, `size` px across."""
         points = _points(points)
         return await self._draw("draw_points", color, points.length // 3, points=points, size_px=size, layer=layer)
 
-    async def line(self, points, *, closed: bool = False, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+    async def line(
+        self,
+        points,
+        *,
+        closed: bool = False,
+        layer: str | None = None,
+        color: str | None = None,
+        width: float | None = None,
+    ) -> dict:
         """One polyline through (N, 3) points."""
         return await self.lines([points], closed=closed, layer=layer, color=color, width=width)
 
-    async def lines(self, polylines, *, closed: bool = False, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+    async def lines(
+        self,
+        polylines,
+        *,
+        closed: bool = False,
+        layer: str | None = None,
+        color: str | None = None,
+        width: float | None = None,
+    ) -> dict:
         """Many polylines in one call, each (N, 3) points."""
-        return await self._draw("draw_lines", color, lines=[_points(line) for line in polylines], closed=closed, layer=layer, width_px=width)
+        lines = [_points(line) for line in polylines]
+        return await self._draw("draw_lines", color, lines=lines, closed=closed, layer=layer, width_px=width)
 
-    async def arrows(self, points, vectors, *, scale: float | None = None, layer: str | None = None, color=None, width: float | None = None) -> dict:
+    async def arrows(
+        self,
+        points,
+        vectors,
+        *,
+        scale: float | None = None,
+        layer: str | None = None,
+        color=None,
+        width: float | None = None,
+    ) -> dict:
         """Arrows from (N, 3) points along (N, 3) vectors, `scale` metres per unit of vector; by default the longest is
         drawn 6 % of the car's length. Returns the scale used."""
         points = _points(points)
-        return await self._draw("draw_arrows", color, points.length // 3, points=points, vectors=_points(vectors), scale=None if scale is None else float(scale), layer=layer, width_px=width)
+        scale = None if scale is None else float(scale)
+        return await self._draw(
+            "draw_arrows",
+            color,
+            points.length // 3,
+            points=points,
+            vectors=_points(vectors),
+            scale=scale,
+            layer=layer,
+            width_px=width,
+        )
 
-    async def box(self, lo, hi, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+    async def box(
+        self, lo, hi, *, layer: str | None = None, color: str | None = None, width: float | None = None
+    ) -> dict:
         """A box along the axes from corner `lo` to corner `hi`, [x, y, z] each."""
-        return await self._draw("draw_box", color, min=[float(v) for v in lo], max=[float(v) for v in hi], layer=layer, width_px=width)
+        return await self._draw("draw_box", color, min=_floats(lo), max=_floats(hi), layer=layer, width_px=width)
 
-    async def plane(self, point, normal, size=None, *, layer: str | None = None, color: str | None = None, width: float | None = None) -> dict:
+    async def plane(
+        self,
+        point,
+        normal,
+        size=None,
+        *,
+        layer: str | None = None,
+        color: str | None = None,
+        width: float | None = None,
+    ) -> dict:
         """A rectangle of the plane through `point` square to `normal`, `size` (width, height) in metres."""
-        size = None if size is None else [float(v) for v in np.broadcast_to(size, 2)]
-        return await self._draw("draw_plane", color, point=[float(v) for v in point], normal=[float(v) for v in normal], size_m=size, layer=layer, width_px=width)
+        size = None if size is None else _floats(np.broadcast_to(size, 2))
+        return await self._draw(
+            "draw_plane", color, point=_floats(point), normal=_floats(normal), size_m=size, layer=layer, width_px=width
+        )
 
     async def layers(self) -> list[dict]:
         """The case's layers, in drawing order: name, kind, who made it, whether it shows, and what it holds."""
         return (await _operation("list_layers", {"case_id": self._id()}))["layers"]
 
     async def hide(self, layer: str) -> dict:
+        """Hide a layer; `show` brings it back."""
         return await _operation("set_layer", {"layer": layer, "visible": False, "case_id": self._id()})
 
     async def show(self, layer: str) -> dict:
@@ -310,9 +418,9 @@ class View:
 class Prediction:
     """The model's prediction on a surface: `cells`, the surface with `cp` and `spread` per cell, and the numbers the
     tool reports for an open case (`list_cases`), under the same names: `cx`, `cy` and `cz`, the pressure force
-    coefficients on `reference_area_m2` (`cx` is pressure drag); `cx_by_network`; `area_m2` and `mean_cp`; `cp_min` and
-    `cp_max`, each `{"value", "center_m", "normal"}`; `length_m`, `width_m`, `height_m` and `outside_training`. `summary`
-    holds them all as a dict, for a table row. `seconds` is the time the prediction took."""
+    coefficients on `reference_area_m2` (`cx` is pressure drag); `cx_by_network`; `area_m2` and `mean_cp`; `cp_min`
+    and `cp_max`, each `{"value", "center_m", "normal"}`; `length_m`, `width_m`, `height_m` and `outside_training`.
+    `summary` holds them all as a dict, for a table row. `seconds` is the time the prediction took."""
 
     def __init__(self, name: str, summary: dict, cells: JsProxy, seconds: float) -> None:
         self.name = name
@@ -344,14 +452,17 @@ view = View()
 
 async def run(name: str, **arguments) -> dict:
     """Run one of the tool's operations, as the engineer's controls and the assistant do, and return its result. What
-    it changes shows on screen; operations that open, write, download or delete ask the engineer first."""
-    return _json(await _ask("operation", {"name": name, "args": json.loads(json.dumps(arguments, default=_plain))}))
+    it changes shows on screen. An operation the assistant needs the engineer's approval for (closing a case,
+    downloading, deleting a file, moving the engineer's file, removing the engineer's layer) asks them here too."""
+    plain = json.loads(json.dumps(arguments, default=_plain))
+    return _json(await _ask("operation", {"name": name, "args": plain}))
 
 
 async def predict(surface: Surface, name: str = "prediction") -> Prediction:
     """Predict Cp on every cell of `surface` with the model, as the tool does for a file, on the cells as given (the
-    working mesh's resolution is what a study needs, and coarser starves the model's inputs). Nothing opens in the tool."""
-    result = await _ask("predict", {"name": name, **_geometry(surface)})
+    working mesh's resolution is what a study needs, and coarser starves the model's inputs). Nothing opens in the
+    tool."""
+    result = await _ask("predict", {"name": name, **_polygons(surface)})
     return Prediction(name, _json(result.summary), result.cells, float(result.seconds))
 
 
@@ -360,12 +471,15 @@ async def write_vtp(path: str, surface: Surface, cell_data: dict | None = None, 
     or one row each). By default the cells carry the surface's prediction as `CpPredicted` and `CpSpread`, the names
     the tool's own export uses. Returns the path."""
     if cell_data is None:
-        cell_data = {label: values for label, values in (("CpPredicted", surface.cp), ("CpSpread", surface.spread)) if values is not None}
+        predicted = (("CpPredicted", surface.cp), ("CpSpread", surface.spread))
+        cell_data = {label: values for label, values in predicted if values is not None}
     arrays = {
         "cellData": {name: _typed(np.asarray(values, dtype=np.float32)) for name, values in cell_data.items()},
-        "pointData": {name: _typed(np.asarray(values, dtype=np.float32)) for name, values in (point_data or {}).items()},
+        "pointData": {
+            name: _typed(np.asarray(values, dtype=np.float32)) for name, values in (point_data or {}).items()
+        },
     }
-    await _ask("write_vtp", {"path": path, **_geometry(surface), **arrays})
+    await _ask("write_vtp", {"path": path, **_polygons(surface), **arrays})
     return path
 
 
@@ -391,7 +505,8 @@ async def _ask(kind: str, payload: dict):
 
 async def _operation(name: str, arguments: dict) -> dict:
     """Run an operation with its arrays sent as typed arrays, not JSON; arguments left as None are left out."""
-    return _json(await _ask("operation", {"name": name, "args": {key: value for key, value in arguments.items() if value is not None}}))
+    given = {key: value for key, value in arguments.items() if value is not None}
+    return _json(await _ask("operation", {"name": name, "args": given}))
 
 
 def _points(points) -> JsProxy:
@@ -400,6 +515,11 @@ def _points(points) -> JsProxy:
     if points.shape[-1:] != (3,) or points.ndim > 2:
         raise ValueError(f"Expected points of shape (N, 3) or (3,), got {points.shape}.")
     return _typed(points.reshape(-1, 3))
+
+
+def _floats(values) -> list[float] | None:
+    """A sequence of numbers as plain floats, for an operation's JSON arguments; None stays None."""
+    return None if values is None else [float(v) for v in values]
 
 
 def _colours(colours, count: int) -> JsProxy:
@@ -414,7 +534,8 @@ def _colours(colours, count: int) -> JsProxy:
     return _typed(colours)
 
 
-def _geometry(surface: Surface) -> dict:
+def _polygons(surface: Surface) -> dict:
+    """The surface's points, connectivity and offsets as typed arrays, as the page takes a geometry."""
     return {
         "points": _typed(np.ascontiguousarray(surface.points, dtype=np.float32)),
         "connectivity": _typed(np.ascontiguousarray(surface.connectivity, dtype=np.uint32)),
@@ -424,9 +545,7 @@ def _geometry(surface: Surface) -> dict:
 
 _TYPED = {
     np.dtype(np.float32): "Float32Array",
-    np.dtype(np.float64): "Float64Array",
     np.dtype(np.uint32): "Uint32Array",
-    np.dtype(np.int32): "Int32Array",
     np.dtype(np.uint8): "Uint8Array",
 }
 
@@ -449,8 +568,15 @@ def _numpy(source, dtype, width: int | None = None) -> np.ndarray | None:
 
 def _surface(cells: JsProxy) -> Surface:
     return Surface(
-        cells.points, cells.connectivity, cells.offsets,
-        centers=cells.centers, normals=cells.normals, areas=cells.areas, cp=cells.cp, spread=cells.sigma, reference=cells.cfd,
+        cells.points,
+        cells.connectivity,
+        cells.offsets,
+        centers=cells.centers,
+        normals=cells.normals,
+        areas=cells.areas,
+        cp=cells.cp,
+        spread=cells.sigma,
+        reference=cells.cfd,
     )
 
 
