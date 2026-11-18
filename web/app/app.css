@@ -64,7 +64,7 @@ body:is([data-screen="start"], [data-screen="notice"]) :is(.toolbar-host, .dock-
 /* The model's page takes the whole area under the top bar; the tool waits, as it was, until it comes back. */
 body[data-mode="model"] .work { grid-template-columns: 0px minmax(0, 1fr); }
 body[data-mode="model"] :is(.stage, .files, .assistant-host, .files-button, .cases, [data-export], .assistant-button) { display: none !important; }
-:is(.assistant-button, .files-button)[aria-pressed="true"] { border-color: var(--link); color: var(--link); background: var(--tint); }
+:is(.assistant-button, .files-button)[aria-pressed="true"] { border-color: var(--tint); color: var(--link); background: var(--tint); }
 .files-button { align-self: center; flex: none; }
 
 .dock-resizer { position: relative; z-index: 6; }
@@ -482,7 +482,7 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .file-state.ready { color: var(--link); }
 .file-state.failed { color: var(--rose); }
 .file-action {
-	height: 24px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 12px; background: #fff; color: var(--heading);
+	height: 24px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; color: var(--heading);
 	font-size: 12px; font-weight: 500; transition: border-color 0.12s, color 0.12s;
 }
 .file-action:hover { border-color: var(--link); color: var(--link); }
