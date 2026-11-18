@@ -90,7 +90,7 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .toolbar-end { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
 /* A layer is a chip after the fields, behind a hairline: a tap shows or hides it, its cross removes it. */
 .layer-chips { display: flex; flex: none; align-items: center; gap: 6px; padding-left: 16px; border-left: 1px solid var(--hair); }
-.chip { display: inline-flex; flex: none; align-items: center; height: 26px; border: 1px solid var(--rule); border-radius: 13px; background: #fff; transition: opacity 0.15s; }
+.chip { display: inline-flex; flex: none; align-items: center; height: 26px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; transition: opacity 0.15s; }
 .chip[data-hidden="true"] { opacity: 0.5; }
 .chip-toggle { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 2px 0 10px; color: var(--heading); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
 .chip-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
@@ -542,7 +542,7 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	.case-tab:not([aria-selected="true"]) .case-close { display: none; }
 	.case-tab:not([aria-selected="true"]) .case-open { padding-right: 12px; }
 	.field { min-width: 40px; justify-content: center; }
-	.chip { height: 36px; border-radius: 18px; }
+	.chip { height: 36px; }
 	.chip-remove, .field-item .chip-remove { width: 36px; height: 36px; }
 	.tool { height: 40px; min-width: 40px; justify-content: center; }
 	.tool-quiet { display: none; }
