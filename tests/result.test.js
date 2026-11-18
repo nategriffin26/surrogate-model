@@ -34,7 +34,7 @@ function wavySheet(withCfd) {
   return { source: { name: 'sheet.vtp', cells: rows * columns }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
 }
 
-/** `SurfaceLookups` with small slice rasters and a surface scale of irregular values. */
+/** `ResultLookups` with small slice rasters and a surface scale of irregular values. */
 function lookups() {
   const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
   return {
@@ -49,7 +49,7 @@ function lookups() {
   };
 }
 
-/** Every array of `SurfaceLookups`, by name, for comparing two of them value for value. */
+/** Every array of `ResultLookups`, by name, for comparing two of them value for value. */
 function lookupArrays({ yOut, zTop, zBottom, sliceArea, scales }) {
   const names = (scale) => (scale.readsAtVertices ? ['readsAtVertices'] : ['kept', 'whole', 'ahead']);
   return { yOut, zTop, zBottom, sliceArea, ...Object.fromEntries(scales.flatMap((scale, k) => names(scale).map((name) => [`${name}${k}`, scale[name]]))) };
