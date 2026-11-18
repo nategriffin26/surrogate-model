@@ -90,16 +90,16 @@ const legendField = () => panes().find((pane) => FIELDS[pane.field].map)?.field 
 
 // ---- operations ---------------------------------------------------------------------------------------------------------
 
-const tool = { session, viewer, engine, workspace, update };
-defineDisplayOperations(tool);
-defineCaseOperations(tool);
-defineSectionOperations(tool);
-defineProbeOperations(tool);
+const context = { session, viewer, engine, workspace, update };
+defineDisplayOperations(context);
+defineCaseOperations(context);
+defineSectionOperations(context);
+defineProbeOperations(context);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
 const comparison = createComparison({ session, engine, update, run });
 const variants = createVariants({ session, engine, workspace, update, run });
-defineExportOperations(tool);
-defineFileOperations(tool);
+defineExportOperations(context);
+defineFileOperations(context);
 
 defineExport({
 	name: 'picture',
@@ -361,7 +361,6 @@ function renderLayout() {
 	body.classList.toggle('dock-closed', view.dockCollapsed);
 }
 
-/** While the Model view owns the car, the field picker and the section wait until Result is back. */
 function renderToolbar() {
 	const c = active();
 	const enabled = Boolean(c?.result);
@@ -468,7 +467,7 @@ function present(c) {
 
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
 	switch (what) {
-		// The section plot can show every open car, and its All cars control needs two of them.
+		// The Compare targets and the study table depend on which cases are open.
 		case 'cases':
 			update('tabs', 'dock');
 			return;

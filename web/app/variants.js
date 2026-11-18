@@ -1,5 +1,5 @@
 // Variants of a car: its geometry changed on the page and predicted again. A variant stretches the car along an axis,
-// or raises or lowers the body on its wheels. It is made from the simplified working mesh the car is drawn with (about
+// or raises or lowers the body on its wheels. It is made from the working mesh the car is drawn with (about
 // 600,000 triangles) and predicted there by the engine's quick prediction, in a second or two. The car itself is
 // predicted unchanged on the same mesh, once, and a variant is compared with that (`comparedAs`), so the difference
 // between them is the change alone. Each variant opens as a case beside its car, its surface kept in the workspace
@@ -39,7 +39,7 @@ const WHEEL_GAP = [0.01, 0.12];
 const TYRE_SIDE = [0.03, 0.13];
 /** Bounds on a change: beyond them the surface would describe another car rather than a variant of this one. */
 const LIMITS = { percent: 20, offset_mm: 200 };
-const PREDICTED_ON = 'Each variant is predicted on the simplified working mesh, about 600,000 triangles, and so is its car, unchanged: differences between them are the change alone.';
+const PREDICTED_ON = 'Each variant is predicted on the simplified mesh the car is drawn with, about 600,000 triangles, and so is its car, unchanged: differences between them are the change alone.';
 
 const CHANGE_SCHEMA = {
 	type: 'object',
@@ -157,7 +157,7 @@ const rounded = (values) => Object.fromEntries(Object.entries(values).map(([key,
 
 // ---- the operations and the tab ---------------------------------------------------------------------------------------
 
-/** app: { session, engine, workspace, update, run }. The variant operations, the study export and the Variants tab. */
+/** context: { session, engine, workspace, update, run }. The variant operations, the study export and the Variants tab. */
 export function createVariants({ session, engine, workspace, update, run }) {
 	const view = session.view;
 	/** Per car, its unchanged prediction while it is being made, so it is asked for once. */
@@ -280,7 +280,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 
 	defineOperation({
 		name: 'make_variant',
-		description: 'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the simplified working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
+		description: 'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car and is compared with it at once (set_field "difference" shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -307,7 +307,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 
 	defineExport({
 		name: 'study',
-		label: 'Study',
+		label: 'Variants',
 		format: 'CSV',
 		title: 'The study table: the car predicted unchanged and each variant, with their differences',
 		unavailable: (c) => (studyOf(c).variants.length ? null : 'This car has no variants open. Make one in the Variants tab.'),
@@ -341,7 +341,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	const form = h('form', { class: 'variants-form', onsubmit: (e) => submit(e) }, kinds.el, ...Object.values(parts), make);
 	const note = failureNote();
 	const table = h('table', { class: 'variants-table' });
-	const basis = h('p', { class: 'variants-basis' }, 'Variants are predicted on the simplified mesh of 600,000 triangles, and compared with their car predicted unchanged on it.');
+	const basis = h('p', { class: 'variants-basis' }, PREDICTED_ON);
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });
 	const el = h('div', { class: 'variants' }, form, note.el, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));

@@ -62,7 +62,7 @@ export function resultSummary(r, fromSample) {
 	};
 }
 
-/** app: { session } */
+/** context: { session } */
 export function defineCaseOperations({ session }) {
 	defineOperation({
 		name: 'list_cases',

@@ -24,7 +24,7 @@ function carOnScreen(session) {
 	if (!session.active?.surface) throw new Error('No car is on screen. Open a file or an example first.');
 }
 
-/** app: { session, viewer, update } */
+/** context: { session, viewer, update } */
 export function defineDisplayOperations({ session, viewer, update }) {
 	const view = session.view;
 

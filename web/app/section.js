@@ -16,6 +16,8 @@ import { CUT_AXES, branches, cut, interpolated } from './mesh-cut.js';
 const AXIS_NAMES = ['x', 'y', 'z'];
 /** How near the cut line, in px, a press grabs it: a fingertip covers far more of the screen than a cursor's tip. */
 const GRAB_PX = { mouse: 8, pen: 10, touch: 22 };
+/** The least speed, in px per metre along its normal, at which the plane moves on screen for a drag to take it: nearer edge-on, a small move of the pointer would throw it far. */
+const MIN_PLANE_PX_PER_M = 20;
 /**
  * How the curves are drawn: the car's own in the ink its line is drawn in on the car; what it is set against as a
  * wide pale band under it, so where they agree the ink runs inside the band and where they part it leaves it.
@@ -145,7 +147,7 @@ function sectionCsv(view, shown, cases) {
 	return lines.join('\n') + '\n';
 }
 
-/** app: { session, update }. The section as operations, and its plot's points as an export. */
+/** context: { session, update }. The section as operations, and its plot's points as an export. */
 export function defineSectionOperations({ session, update }) {
 	const view = session.view;
 	const shown = () => {
@@ -259,7 +261,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	let plot = null;
 	let cursorAt = null;
 
-	// The cut line can be grabbed only while it is drawn: not with the section off, nor while the Model view owns the car.
+	// The cut line can be grabbed only while it is drawn.
 	const enabled = () => Boolean(active()?.result && viewer.section);
 
 	/** Distance in pixels from a client point to the cut line on screen, and the cut point nearest to it. */
@@ -298,8 +300,8 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const near = nearestOnScreen(e.clientX, e.clientY);
 		if (near.d > (GRAB_PX[e.pointerType] ?? GRAB_PX.mouse)) return;
 		const n = screenNormal(near.point);
-		const perMetre = n.x * n.x + n.y * n.y;
-		if (perMetre < 400) return;
+		const squared = n.x * n.x + n.y * n.y;
+		if (squared < MIN_PLANE_PX_PER_M ** 2) return;
 		e.stopPropagation();
 		e.preventDefault();
 		dragging = true;
@@ -307,7 +309,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const start = { x: e.clientX, y: e.clientY, offset: view.section.offset };
 		viewer.setSection({ ...view.section, plane: true });
 		const move = (ev) => {
-			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / perMetre;
+			const offset = start.offset + ((ev.clientX - start.x) * n.x + (ev.clientY - start.y) * n.y) / squared;
 			run('set_section', { position_m: Number(offset.toFixed(3)) });
 		};
 		const end = () => {

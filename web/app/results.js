@@ -94,7 +94,7 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 		return h('dl', { class: 'result-forces against' },
 			h('dt', { class: 'result-label' }, 'Whole car'),
 			h('dd', { class: 'result-head' }, 'Predicted'),
-			h('dd', { class: 'result-head', title: 'Summed from the CFD in the file, over the same polygons' }, 'CFD'),
+			h('dd', { class: 'result-head', title: 'Summed from the CFD in the file, over the same cells' }, 'CFD'),
 			rows);
 	}
 

@@ -14,7 +14,7 @@ export const baseName = (c) => (c.result?.source.name ?? c.name).replace(/\.[^.]
  * @typedef {Object} Export
  * @property {string} name      snake_case id, as the operations take it
  * @property {string} label     the menu's word for it
- * @property {string} format    file type, shown beside the label: PNG, CSV, VTP
+ * @property {string} format    file type, shown beside the label: PNG, CSV, VTP, HTML
  * @property {string} [title]   tooltip
  * @property {(c: object) => string | null} unavailable  why it cannot be made now, or null when it can
  * @property {(c: object) => Promise<Blob>} make
@@ -61,7 +61,7 @@ export function pictureOf(c, viewer, { field, map, marks }) {
 }
 
 /** The export's file for the case on screen, or an error saying why it cannot be made now. */
-async function made(name, session) {
+async function makeExport(name, session) {
 	const spec = EXPORTS.get(name);
 	if (!spec) throw new Error(`There is no export "${name}". Exports: ${[...EXPORTS.keys()].join(', ')}.`);
 	const c = session.active;
@@ -84,14 +84,14 @@ function saveFile(workspace, path, fileName, blob, by) {
 	return workspace.write(target, blob, by);
 }
 
-/** app: { session, workspace } */
+/** context: { session, workspace } */
 export function defineExportOperations({ session, workspace }) {
 	const describe = () => [...EXPORTS.values()].map((e) => `${e.name} (${e.label}, ${e.format})`).join(', ');
 	const exportParameter = () => ({ type: 'string', enum: [...EXPORTS.keys()], description: `What to export: ${describe()}.` });
 
 	defineOperation({
 		name: 'save_export',
-		description: 'Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section: the section plot\'s points as CSV. probes: the probe table as CSV. Returns the path and size.',
+		description: 'Make an export of the case on screen and save it into the workspace as a file, where the engineer sees it and the Python kernel can read it. picture: the 3D view as drawn, with the colour legend. surface: the analysed .vtp with CpPredicted and CpSpread cell arrays added (a dropped file once every polygon is predicted). section, probes, comparison and study: the section plot\'s points, the probe table, the Compare table and the Variants table, as CSV. report: one HTML page with the picture, the whole-car numbers, and the section, probes, comparison and study the car has. Returns the path and size.',
 		get parameters() {
 			return {
 				type: 'object',
@@ -104,7 +104,7 @@ export function defineExportOperations({ session, workspace }) {
 			};
 		},
 		async run({ export: name, path }, { by }) {
-			const { blob, fileName } = await made(name, session);
+			const { blob, fileName } = await makeExport(name, session);
 			const file = saveFile(workspace, path, fileName, blob, by);
 			return { path: file.path, size_bytes: file.size };
 		},
@@ -118,7 +118,7 @@ export function defineExportOperations({ session, workspace }) {
 		},
 		confirm: true,
 		async run({ export: name }) {
-			const { blob, fileName } = await made(name, session);
+			const { blob, fileName } = await makeExport(name, session);
 			download(blob, fileName);
 			return { file_name: fileName, size_bytes: blob.size };
 		},

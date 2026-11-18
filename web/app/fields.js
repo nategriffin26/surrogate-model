@@ -1,6 +1,6 @@
 // The fields the car can be coloured by, how each is read from a mesh, and the colour maps that suit it. The Result
 // view offers pressure, its drag contribution and the spread between the networks; CFD pressure and the error against
-// it are defined here for the Model view, and share the pressure colour map so they read on the same scale.
+// it are defined here for the Model page, and share the pressure colour map so they read on the same scale.
 
 import { niceTicks } from './format.js';
 

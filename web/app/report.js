@@ -10,16 +10,16 @@ import { readSet } from './probes.js';
 
 const PLOT = { width: 900, height: 300 };
 
-const escape = (text) => String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+const escapeHtml = (text) => String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
 const number = (v, digits = 3) => (v === null || v === undefined ? '' : signed(v, digits));
 /** Markup set into a table as it is, for a coefficient's name; every other cell is text. */
 const markup = (html) => ({ html });
 /** A force coefficient's name as the screen writes it, C with its axis subscripted. */
 const coefficient = (axis) => `C<sub>${axis}</sub>`;
-const cell = (content) => content.html ?? escape(content);
+const cell = (content) => content.html ?? escapeHtml(content);
 /** A table; with a null head, rows of a label and its value. */
 const table = (head, rows) => `<table>${head ? `<thead><tr>${head.map((content) => `<th>${cell(content)}</th>`).join('')}</tr></thead>` : ''}<tbody>${rows.map((row) => `<tr>${row.map((content) => `<td>${cell(content)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-const note = (text) => `<p class="basis">${escape(text)}</p>`;
+const note = (text) => `<p class="basis">${escapeHtml(text)}</p>`;
 
 const STYLE = `
 body { margin: 0; background: #fff; color: var(--ink); font: 400 14px/1.45 var(--body); }
@@ -64,7 +64,7 @@ async function carriedFaces() {
 	return inlined.join('\n');
 }
 
-/** app: { session, engine, section, comparison, variants }. Defines the report export. */
+/** context: { session, engine, section, comparison, variants }. Defines the report export. */
 export function defineReport({ session, engine, section, comparison, variants }) {
 	const view = session.view;
 
@@ -87,8 +87,8 @@ export function defineReport({ session, engine, section, comparison, variants })
 	function sectionPart() {
 		if (!view.section.on) return '';
 		const { svg, key, plane } = section.picture(PLOT.width, PLOT.height);
-		const items = key.map(({ label, colour, width, opacity, dashed }) => `<span><i style="border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${escape(colour)}; opacity: ${opacity}"></i>${escape(label)}</span>`);
-		return `<h2>Section ${escape(plane)}</h2>${new XMLSerializer().serializeToString(svg)}<div class="key">${items.join('')}</div>`;
+		const items = key.map(({ label, colour, width, opacity, dashed }) => `<span><i style="border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${escapeHtml(colour)}; opacity: ${opacity}"></i>${escapeHtml(label)}</span>`);
+		return `<h2>Section ${escapeHtml(plane)}</h2>${new XMLSerializer().serializeToString(svg)}<div class="key">${items.join('')}</div>`;
 	}
 
 	async function probesPart(c) {
@@ -96,7 +96,7 @@ export function defineReport({ session, engine, section, comparison, variants })
 		if (!set?.probes.length) return '';
 		const sites = await readSet(engine, c, set);
 		const rows = set.probes.map((p, i) => [p.n, ...sites[i].point.map((v) => signed(v, 3)), number(sites[i].cp), number(sites[i].sigma)]);
-		return `<h2>Probes: ${escape(set.name)}</h2>${table(['Probe', 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
+		return `<h2>Probes: ${escapeHtml(set.name)}</h2>${table(['Probe', 'x, m', 'y, m', 'z, m', 'Cp', 'σ'], rows)}`;
 	}
 
 	function comparisonPart(c) {
@@ -105,10 +105,10 @@ export function defineReport({ session, engine, section, comparison, variants })
 		const other = out.compared_with === 'cfd' ? 'CFD' : out.compared_with.name;
 		const mine = out.compared_with === 'cfd' ? 'Predicted' : c.name;
 		const columns = [['cx', coefficient('x')], ['cz', coefficient('z')], ['mean_cp', 'Mean Cp']];
-		const head = ['', ...columns.flatMap(([, name]) => [markup(`${name}, ${escape(mine)}`), markup(`${name}, ${escape(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
+		const head = ['', ...columns.flatMap(([, name]) => [markup(`${name}, ${escapeHtml(mine)}`), markup(`${name}, ${escapeHtml(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
 		const whole = out.whole_car;
 		const rows = [['Whole car', ...columns.flatMap(([key]) => [number(whole.this_car[key]), number(whole.other[key]), number(whole.difference[key])]), number(whole.rms_dcp)]];
-		return `<h2>Compared with ${escape(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
+		return `<h2>Compared with ${escapeHtml(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
 	}
 
 	function studyPart(c) {
@@ -129,7 +129,7 @@ export function defineReport({ session, engine, section, comparison, variants })
 		const meta = [
 			c.variant ? `Variant of ${c.variant.root.name}` : 'Predicted surface pressure',
 			made,
-			`${r.source.cells.toLocaleString('en-US')} polygons`,
+			`${r.source.cells.toLocaleString('en-US')} cells`,
 			`model ${r.model.slice(0, 8)}`,
 		].join(' · ');
 		const parts = [wholeCar(c), sectionPart(), await probesPart(c), comparisonPart(c), studyPart(c)];
@@ -138,14 +138,14 @@ export function defineReport({ session, engine, section, comparison, variants })
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escape(c.name)}, report</title>
+<title>${escapeHtml(c.name)}, report</title>
 <style>${await carriedFaces()}${carriedStyles()}${STYLE}</style>
 </head>
 <body>
 <main>
-<h1>${escape(c.name)}</h1>
-<p class="meta">${escape(meta)}</p>
-<img alt="${escape(`${c.name} as drawn`)}" src="${picture}">
+<h1>${escapeHtml(c.name)}</h1>
+<p class="meta">${escapeHtml(meta)}</p>
+<img alt="${escapeHtml(`${c.name} as drawn`)}" src="${picture}">
 ${parts.join('\n')}
 </main>
 </body>

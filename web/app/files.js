@@ -50,13 +50,13 @@ function settled(session, c) {
 /** The engine reads a File; a workspace blob becomes one named for its path, without copying its bytes. */
 const fileFor = (path, blob) => (blob instanceof File && blob.name === baseOf(path) ? blob : new File([blob], baseOf(path)));
 
-/** app: { session, workspace, engine, update }. */
+/** context: { session, workspace, engine, update }. */
 export function defineFileOperations({ session, workspace, engine, update }) {
 	const fileAt = (path) => {
 		const file = workspace.file(normalPath(path));
 		if (!file) {
-			const near = workspace.files().map((f) => f.path).slice(0, 20);
-			throw new Error(`There is no file "${path}". Files: ${near.join(', ') || 'none'}.`);
+			const listed = workspace.files().map((f) => f.path).slice(0, 20);
+			throw new Error(`There is no file "${path}". Files: ${listed.join(', ') || 'none'}.`);
 		}
 		return file;
 	};
@@ -245,7 +245,7 @@ const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', min
 const runFacts = (r) => [`${millions(r.source.cells)} cells`, seconds(r.timings.reduce((sum, t) => sum + t.seconds, 0)), r.device];
 
 /**
- * app: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
+ * context: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
  * row offers its CFD to the cars without CFD of their own; the engine holds the car analysed last only, so another is
  * analysed again first (attach_reference).
  */
@@ -256,7 +256,7 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 	} });
 	const list = h('div', { class: 'files-list', role: 'tree', 'aria-label': 'Files' });
 	const examples = h('div', { class: 'files-examples' });
-	const close = h('button', { type: 'button', class: 'icon-button', title: 'Close files', onclick: () => setOpen(false) }, icon('close'));
+	const close = h('button', { type: 'button', class: 'icon-button', title: 'Close the Files panel', onclick: () => setOpen(false) }, icon('close'));
 	const el = h('aside', { class: 'files', id: 'files', 'aria-label': 'Files' },
 		h('div', { class: 'files-head' },
 			h('span', { class: 'files-title' }, 'Files'),

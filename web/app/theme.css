@@ -1,5 +1,4 @@
-/* Rescale's light theme (docs.rescale.com tokens, rescale.com faces) for a product screen.
-   Values and sources: ~/Projects/rescale-pages-restyle/rescale-tokens.md, "Light mode". */
+/* Rescale's light theme (docs.rescale.com tokens, rescale.com faces) for a product screen. */
 
 /* The faces are vendored (web/vendor/fonts, SIL Open Font License), so the tool looks the same offline and on
    networks that block font services. Each file is a variable font over the weights used, split as Google Fonts

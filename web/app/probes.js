@@ -145,7 +145,7 @@ const probeResult = (p, site) => ({
 	sigma: round(site.sigma),
 });
 
-/** app: { session, engine, update }. Probe sets as operations, and the probe table as an export. */
+/** context: { session, engine, update }. Probe sets as operations, and the probe table as an export. */
 export function defineProbeOperations({ session, engine, update }) {
 	const view = session.view;
 	let nextSet = 1;
@@ -166,7 +166,7 @@ export function defineProbeOperations({ session, engine, update }) {
 		if (!set) throw new Error('No probe set is in use. Place a probe or make a set with use_probe_set first.');
 		return set;
 	};
-	const freeName = (name) => {
+	const checkedSetName = (name) => {
 		const label = String(name).trim();
 		if (!label) throw new Error('name must not be empty.');
 		if (session.probeSets.some((x) => x.name === label)) throw new Error(`A probe set is already named ${JSON.stringify(label)}. Choose another name.`);
@@ -174,7 +174,7 @@ export function defineProbeOperations({ session, engine, update }) {
 	};
 	/** A new set in use, holding probes at `points` ([x, y, z] each) snapped to the cells of case c. */
 	async function addSet(name, points, c) {
-		const set = { id: nextSet++, name: freeName(name), probes: [], next: 1 };
+		const set = { id: nextSet++, name: checkedSetName(name), probes: [], next: 1 };
 		await addProbes(set, points, c);
 		session.probeSets.push(set);
 		view.probeSet = set.id;
@@ -266,7 +266,7 @@ export function defineProbeOperations({ session, engine, update }) {
 				return setSummary(await addSet(name, [], null));
 			}
 			const set = setById(set_id);
-			if (name !== undefined && name.trim() !== set.name) set.name = freeName(name);
+			if (name !== undefined && name.trim() !== set.name) set.name = checkedSetName(name);
 			view.probeSet = set.id;
 			update('dock', 'layout', 'markers');
 			return setSummary(set);

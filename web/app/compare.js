@@ -109,7 +109,7 @@ function measure(cells, cp, referenceArea) {
 }
 
 /**
- * app: { session, engine, update, run }. The comparison: its fields, its side-by-side panes, its operations and the
+ * context: { session, engine, update, run }. The comparison: its fields, its side-by-side panes, its operations and the
  * Compare tab.
  */
 export function createComparison({ session, engine, update, run }) {
