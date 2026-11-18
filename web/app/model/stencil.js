@@ -1,84 +1,45 @@
-// What the networks were told at a point, drawn on the car where each input was read, at true scale: the point and
-// its normal; a sphere for each regional scale the bend is averaged over; the stations of its own slice, the
-// neighbouring slices and the plan-view outline; and, from each station, the distance the input measured, out to the
-// body surface or plane it found. Lines and dots hidden by the car are drawn dashed and faint.
+// The marks of `measures.js` drawn on the viewer's car. Everything is depth-tested against the car: what lies on
+// the surface or in front of it is drawn in full, what the car hides is drawn faintly, so the eye can tell which is
+// which. Cuts are the car's own outlines, lifted a hair off the surface; regional boxes are shaded volumes, and
+// the surface inside them is tinted by the weight each voxel has in the input. The point is a handle the reader
+// drags.
 
 import * as THREE from 'three';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { SurfaceCutter } from './cuts.js';
 import { KIND_COLORS } from './inputs.js';
 
 /** Length of the drawn normal, in metres. */
-const NORMAL_LENGTH = 0.22;
+const NORMAL_LENGTH = 0.2;
+/** Cuts sit this far off the surface, in metres, so the car does not hide them. */
+const CUT_LIFT = 0.003;
+/** Cuts are drawn this far beyond the stations at their ends, in metres. */
+const SPAN_MARGIN = 0.06;
+/** Dots are drawn this far towards the camera, in metres, so those on the surface are not lost in it. */
+const DOT_LIFT = 0.012;
 /** Dot diameters in CSS pixels. */
-const DOT = { point: 11, flag: 7, station: 5, end: 4 };
-/** Dots are drawn this far towards the camera, in metres, so those lying on the surface are not lost in it. */
-const LIFT = 0.012;
-
-/**
- * @typedef {{ type: 'segment', from: number[], to: number[] } | { type: 'dot', at: number[], size: number, hollow?: boolean }
- *   | { type: 'sphere', at: number[], radius: number } | { type: 'arrow', from: number[], to: number[] }} Shape
- * @typedef {Shape & { kind: string, group: string | null }} Mark
- *   `group` null for the point and its normal, which every input is about.
- */
-
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const times = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
-
-/**
- * Every mark of the stencil for an explanation. Offsets and directions are given outboard-positive, so on the car's
- * −y side their y flips, as the engine reads them.
- * @param {import('../../engine/result.js').ModelColumn[]} columns
- * @param {import('./inputs.js').InputGroup[]} groups
- * @param {import('../../engine/result.js').Explanation} explanation
- * @param {number} yCenter  the car's centre plane
- * @returns {Mark[]}
- */
-export function stencilMarks(columns, groups, { position, normal, features }, yCenter) {
-	const side = position[1] - yCenter >= 0 ? 1 : -1;
-	const world = ([x, y, z]) => [x, side * y, z];
-	const marks = [];
-	for (const group of groups) {
-		const base = { kind: group.kind, group: group.label };
-		if (group.kind === 'bend') marks.push({ ...base, type: 'sphere', at: position, radius: group.scale });
-		const stations = new Set();
-		for (const i of group.columns) {
-			const { offset, along } = columns[i];
-			const place = add(position, world(offset));
-			if (along) {
-				const to = add(place, times(world(along), features[i]));
-				marks.push({ ...base, type: 'segment', from: place, to }, { ...base, type: 'dot', at: to, size: DOT.end });
-			}
-			if (group.kind === 'flag') {
-				marks.push({ ...base, type: 'dot', at: place, size: DOT.flag, hollow: features[i] < 0.5 });
-			} else if (offset.some(Boolean) && !stations.has(place.join())) {
-				stations.add(place.join());
-				marks.push({ ...base, type: 'dot', at: place, size: DOT.station });
-			}
-		}
-	}
-	marks.push(
-		{ kind: 'position', group: null, type: 'arrow', from: position, to: add(position, times(normal, NORMAL_LENGTH)) },
-		{ kind: 'position', group: null, type: 'dot', at: position, size: DOT.point },
-	);
-	return marks;
-}
-
-/** Whether a mark stands out: no input group is focused, or the focused one is its own. */
-export function emphasized(mark, focusedGroup) {
-	return !focusedGroup || mark.group === null || mark.group === focusedGroup;
-}
+const DOT = { handle: 21, reading: 6, flag: 8 };
+/** How near the pointer, in CSS pixels, a mark must be to be under it. */
+const REACH = { handle: 14, reading: 7, line: 5 };
+/** Opacity of marks outside the focus. */
+const FAINT = 0.22;
+/** At most this many regional boxes are tinted on the surface at once (four scales, three samples each). */
+const BLOCKS = 12;
+const INK = KIND_COLORS.position;
 
 const DOT_VERTEX = /* glsl */ `
 attribute vec3 color;
 attribute float size;
-attribute float hollow;
+attribute float style;
+attribute float alpha;
 uniform float uPixelRatio;
 uniform float uLift;
 varying vec3 vColor;
-varying float vHollow;
+varying float vStyle;
 varying float vSize;
+varying float vAlpha;
 void main() {
 	vec4 view = modelViewMatrix * vec4(position, 1.0);
 	view.xyz += (isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-view.xyz)) * uLift;
@@ -86,142 +47,291 @@ void main() {
 	vSize = size * uPixelRatio;
 	gl_PointSize = vSize;
 	vColor = color;
-	vHollow = hollow;
+	vStyle = style;
+	vAlpha = alpha;
 }`;
 
-// A disc in the mark's colour inside a white rim, or a ring with a white middle for a hollow dot.
+// A disc in the mark's colour inside a white rim (style 0), a ring around a white middle (1), or the handle: a white
+// disc with an ink ring and core on a soft shadow (2).
 const DOT_FRAGMENT = /* glsl */ `
 uniform float uOpacity;
 uniform float uPixelRatio;
 varying vec3 vColor;
-varying float vHollow;
+varying float vStyle;
 varying float vSize;
+varying float vAlpha;
 void main() {
 	float r = length(gl_PointCoord - 0.5) * vSize;
 	float edge = 0.5 * vSize;
 	float px = uPixelRatio;
-	float inside = 1.0 - smoothstep(edge - px, edge, r);
-	if (inside <= 0.0) discard;
-	float ink = 1.0 - smoothstep(edge - 2.5 * px, edge - 1.5 * px, r);
-	float hole = vHollow * (1.0 - smoothstep(edge - 4.5 * px, edge - 3.5 * px, r));
-	gl_FragColor = vec4(mix(vec3(1.0), vColor, ink * (1.0 - hole)), inside * uOpacity);
+	vec3 color;
+	float cover;
+	if (vStyle > 1.5) {
+		float disc = 1.0 - smoothstep(edge - 3.0 * px, edge - 2.0 * px, r);
+		float shadow = (1.0 - smoothstep(edge - 3.0 * px, edge, r)) * 0.35;
+		float ring = smoothstep(edge - 6.0 * px, edge - 5.0 * px, r);
+		float core = 1.0 - smoothstep(2.0 * px, 3.0 * px, r);
+		color = mix(vec3(1.0), vColor, max(ring, core));
+		cover = max(disc, shadow);
+		color = mix(vec3(0.05, 0.13, 0.2), color, disc / max(cover, 1e-3));
+	} else {
+		cover = 1.0 - smoothstep(edge - px, edge, r);
+		float ink = 1.0 - smoothstep(edge - 2.5 * px, edge - 1.5 * px, r);
+		float hole = vStyle * (1.0 - smoothstep(edge - 4.5 * px, edge - 3.5 * px, r));
+		color = mix(vec3(1.0), vColor, ink * (1.0 - hole));
+	}
+	if (cover <= 0.0) discard;
+	gl_FragColor = vec4(color, cover * uOpacity * vAlpha);
 	#include <colorspace_fragment>
 }`;
 
-// A sphere seen as its outline: opaque at the silhouette, nearly clear facing the camera.
-const SPHERE_VERTEX = /* glsl */ `
+const BOX_VERTEX = /* glsl */ `
 varying vec3 vNormal;
-varying vec3 vView;
 void main() {
-	vec4 view = modelViewMatrix * vec4(position, 1.0);
-	vNormal = normalize(normalMatrix * normal);
-	vView = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-view.xyz);
-	gl_Position = projectionMatrix * view;
+	vNormal = normalize(mat3(modelMatrix) * normal);
+	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
-const SPHERE_FRAGMENT = /* glsl */ `
+// Each face lit by the viewer's key light, so a box reads as a solid.
+const BOX_FRAGMENT = /* glsl */ `
 uniform vec3 uColor;
 uniform float uOpacity;
 varying vec3 vNormal;
-varying vec3 vView;
 void main() {
-	float rim = 1.0 - abs(dot(normalize(vNormal), normalize(vView)));
-	gl_FragColor = vec4(uColor, uOpacity * (0.03 + pow(rim, 5.0)));
+	float light = 0.55 + 0.45 * max(dot(normalize(vNormal), normalize(vec3(-0.45, -0.55, 0.7))), 0.0);
+	gl_FragColor = vec4(uColor * light, uOpacity * (gl_FrontFacing ? 1.0 : 0.55));
 	#include <colorspace_fragment>
 }`;
 
-/** Draw order: spheres, then the lines' halos, the lines, the dots and the normal's arrowhead. */
-const ORDER = { sphere: 4, halo: 5, line: 6, dot: 7, arrow: 8 };
+const TINT_VERTEX = /* glsl */ `
+uniform float uLift;
+varying vec3 vWorld;
+void main() {
+	vec4 world = modelMatrix * vec4(position + normal * uLift, 1.0);
+	vWorld = world.xyz;
+	gl_Position = projectionMatrix * viewMatrix * world;
+}`;
 
-/** The stencil on the viewer's car. One instance per viewer; `draw` replaces what it drew before. */
+// The weight a surface element has in a regional input: the voxel grid is averaged with its mirror image across
+// the centre plane, so an element counts half in its own voxel and half in its mirror's.
+const TINT_FRAGMENT = /* glsl */ `
+uniform vec3 uMin[${BLOCKS}];
+uniform vec3 uWeights[${BLOCKS}];
+uniform float uCell[${BLOCKS}];
+uniform float uStrength[${BLOCKS}];
+uniform float uMirrorY;
+uniform float uSizes;
+uniform vec3 uColor;
+varying vec3 vWorld;
+float blockWeight(vec3 q, int b) {
+	vec3 cell = floor((q - uMin[b]) / uCell[b]);
+	if (any(lessThan(cell, vec3(0.0))) || any(greaterThan(cell, vec3(1.0)))) return 0.0;
+	vec3 w = mix(vec3(1.0) - uWeights[b], uWeights[b], cell);
+	return w.x * w.y * w.z;
+}
+void main() {
+	vec3 mirrored = vec3(vWorld.x, uMirrorY - vWorld.y, vWorld.z);
+	float total = 0.0;
+	for (int b = 0; b < ${BLOCKS}; b++) {
+		if (uStrength[b] > 0.0) total += uStrength[b] * 0.5 * (blockWeight(vWorld, b) + blockWeight(mirrored, b));
+	}
+	float alpha = 0.75 * clamp(total / max(uSizes, 1.0), 0.0, 1.0);
+	if (alpha < 0.01) discard;
+	gl_FragColor = vec4(uColor, alpha);
+	#include <colorspace_fragment>
+}`;
+
+/** Draw order: the surface tint, box backs, lines, box fronts, dots, the handle. */
+const ORDER = { tint: 3, back: 4, line: 5, front: 6, dot: 7, handle: 8 };
+
+const BOX_EDGES = [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+const corner = ({ min, max }, k) => [k & 4 ? max[0] : min[0], k & 2 ? max[1] : min[1], k & 1 ? max[2] : min[2]];
+
 export class Stencil {
 	constructor(viewer) {
 		this.viewer = viewer;
 		this.object = null;
+		this.drawn = [];
+		this.car = null;
 		const pixelRatio = viewer.renderer.getPixelRatio();
-		const line = (options) => new LineMaterial({ vertexColors: true, transparent: true, depthWrite: false, ...options });
-		const hidden = { dashed: true, dashSize: 0.025, gapSize: 0.02, depthFunc: THREE.GreaterDepth };
-		// Strong lines sit on a white halo so they read over any colour the car shows.
-		const halo = new LineMaterial({ color: 0xffffff, linewidth: 5, transparent: true, opacity: 0.85, depthWrite: false });
-		this.lines = {
-			strong: [[halo, ORDER.halo], [line({ linewidth: 2 }), ORDER.line], [line({ linewidth: 1.5, opacity: 0.45, ...hidden }), ORDER.line]],
-			faint: [[line({ linewidth: 1.5, opacity: 0.16 }), ORDER.line], [line({ linewidth: 1, opacity: 0.08, ...hidden }), ORDER.line]],
-		};
-		const dots = (opacity, depthFunc) => new THREE.ShaderMaterial({
-			uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: LIFT } },
-			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
+		const line = (linewidth, opacity, hidden) => new LineMaterial({
+			vertexColors: true, transparent: true, depthWrite: false, linewidth, opacity,
+			...(hidden ? { depthFunc: THREE.GreaterDepth, opacity: opacity * 0.2 } : {}),
 		});
-		this.dots = {
-			strong: [dots(1, THREE.LessEqualDepth), dots(0.35, THREE.GreaterDepth)],
-			faint: [dots(0.2, THREE.LessEqualDepth), dots(0.07, THREE.GreaterDepth)],
-		};
-		const sphere = (opacity) => new THREE.ShaderMaterial({
-			uniforms: { uColor: { value: new THREE.Color(KIND_COLORS.bend) }, uOpacity: { value: opacity } },
-			vertexShader: SPHERE_VERTEX, fragmentShader: SPHERE_FRAGMENT, transparent: true, depthWrite: false, depthTest: false,
-		});
-		this.spheres = { strong: sphere(0.6), faint: sphere(0.12) };
-		this.sphereGeometry = new THREE.SphereGeometry(1, 64, 32);
-		this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.045, 20), new THREE.MeshBasicMaterial({ color: KIND_COLORS.position }));
-		this.cone.renderOrder = ORDER.arrow;
-	}
-
-	/** Draw marks, each strong or faint by `strong(mark)`. */
-	draw(marks, strong) {
-		const group = new THREE.Group();
-		for (const level of ['strong', 'faint']) {
-			const chosen = marks.filter((m) => strong(m) === (level === 'strong'));
-			this.addLines(group, chosen, this.lines[level]);
-			this.addDots(group, chosen, this.dots[level]);
-			for (const m of chosen) {
-				if (m.type !== 'sphere') continue;
-				const mesh = new THREE.Mesh(this.sphereGeometry, this.spheres[level]);
-				mesh.position.fromArray(m.at);
-				mesh.scale.setScalar(m.radius);
-				mesh.renderOrder = ORDER.sphere;
-				group.add(mesh);
+		// Per width and strength: the part of a line in view, then the part the car hides.
+		this.lines = {};
+		for (const [name, width] of [['major', 2.5], ['minor', 1.5]]) {
+			for (const [strength, opacity] of [['strong', 1], ['faint', FAINT]]) {
+				this.lines[`${name}:${strength}`] = [line(width, opacity, false), line(width * 0.7, opacity, true)];
 			}
 		}
-		const arrow = marks.find((m) => m.type === 'arrow');
-		if (arrow) {
-			const direction = new THREE.Vector3(...arrow.to).sub(new THREE.Vector3(...arrow.from)).normalize();
-			this.cone.position.fromArray(arrow.to);
-			this.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-			group.add(this.cone);
+		const dots = (opacity, depthFunc) => new THREE.ShaderMaterial({
+			uniforms: { uOpacity: { value: opacity }, uPixelRatio: { value: pixelRatio }, uLift: { value: DOT_LIFT } },
+			vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT, transparent: true, depthWrite: false, depthFunc,
+		});
+		this.dots = [dots(1, THREE.LessEqualDepth), dots(0.3, THREE.GreaterDepth)];
+		const box = (side, opacity) => new THREE.ShaderMaterial({
+			uniforms: { uColor: { value: new THREE.Color(KIND_COLORS.bend) }, uOpacity: { value: opacity } },
+			vertexShader: BOX_VERTEX, fragmentShader: BOX_FRAGMENT, transparent: true, depthWrite: false, side,
+		});
+		this.boxes = { back: box(THREE.BackSide, 0.045), front: box(THREE.FrontSide, 0.07) };
+		this.boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+		this.cone = new THREE.Mesh(new THREE.ConeGeometry(0.013, 0.04, 20), new THREE.MeshBasicMaterial({ color: INK }));
+		this.cone.renderOrder = ORDER.handle;
+		this.tintMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uMin: { value: Array.from({ length: BLOCKS }, () => new THREE.Vector3()) },
+				uWeights: { value: Array.from({ length: BLOCKS }, () => new THREE.Vector3()) },
+				uCell: { value: new Array(BLOCKS).fill(1) },
+				uStrength: { value: new Array(BLOCKS).fill(0) },
+				uMirrorY: { value: 0 },
+				uSizes: { value: 1 },
+				uColor: { value: new THREE.Color(KIND_COLORS.bend) },
+				uLift: { value: 0.002 },
+			},
+			vertexShader: TINT_VERTEX, fragmentShader: TINT_FRAGMENT, transparent: true, depthWrite: false,
+			polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
+		});
+	}
+
+	/** The car the marks are drawn on; its working mesh is cut for the slices and tinted inside the boxes. */
+	setCar(result) {
+		if (this.car?.result === result) return;
+		this.car?.tint.geometry.dispose();
+		const { mesh, lookups } = result;
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+		geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+		geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+		const tint = new THREE.Mesh(geometry, this.tintMaterial);
+		tint.renderOrder = ORDER.tint;
+		tint.frustumCulled = false;
+		this.tintMaterial.uniforms.uMirrorY.value = 2 * Math.fround(lookups.yCenter);
+		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), tint, segments: new WeakMap() };
+	}
+
+	/**
+	 * The part of a cut its inputs are read along: within its span of x (and a little beyond, so its ends are
+	 * seen to be ends), and for a plan-view outline on the point's side of the centre plane.
+	 */
+	segments(mark) {
+		const kept = this.car.segments.get(mark);
+		if (kept) return kept;
+		const { positions, normals } = this.car.cutter.cut(mark.axis, mark.value);
+		const yCenter = this.car.result.lookups.yCenter;
+		const [lo, hi] = [mark.span[0] - SPAN_MARGIN, mark.span[1] + SPAN_MARGIN];
+		const p = [];
+		const n = [];
+		for (let i = 0; i < positions.length; i += 6) {
+			const x = (positions[i] + positions[i + 3]) / 2;
+			const y = (positions[i + 1] + positions[i + 4]) / 2;
+			if (x < lo || x > hi || (mark.axis === 2 && (y - yCenter) * mark.side < 0)) continue;
+			for (let k = 0; k < 6; k++) {
+				p.push(positions[i + k]);
+				n.push(normals[i + k]);
+			}
 		}
+		const segments = { positions: Float32Array.from(p), normals: Float32Array.from(n) };
+		this.car.segments.set(mark, segments);
+		return segments;
+	}
+
+	/**
+	 * Draw the point, and the marks of the layers shown. `strong(mark)` says whether a mark stands out or recedes;
+	 * `beside` (prediction beside CFD) draws the point alone, so the two fields can be compared.
+	 * @param {{ position: number[], normal: number[] }} point
+	 * @param {import('./measures.js').Mark[]} marks
+	 * @param {(mark: import('./measures.js').Mark) => boolean} strong
+	 */
+	draw(point, marks, strong, beside = false) {
+		const group = new THREE.Group();
+		const drawn = beside ? [] : marks;
+		const lines = {};
+		const addLine = (style, on, from, to, color) => {
+			const key = `${style}:${on ? 'strong' : 'faint'}`;
+			lines[key] ??= { positions: [], colors: [] };
+			lines[key].positions.push(...from, ...to);
+			lines[key].colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+		};
+		const dots = [];
+		const tint = this.tintMaterial.uniforms;
+		tint.uStrength.value.fill(0);
+		let blocks = 0;
+		const tinted = new Set();
+		const color = (kind) => new THREE.Color(KIND_COLORS[kind]);
+
+		for (const mark of drawn) {
+			const on = strong(mark);
+			if (mark.type === 'reading') {
+				dots.push({ at: mark.at, size: mark.kind === 'flag' ? DOT.flag : DOT.reading, style: mark.hollow ? 1 : 0, color: color(mark.kind), alpha: on ? 1 : FAINT });
+			} else if (mark.type === 'guide') {
+				addLine('minor', on, mark.from, mark.to, color(mark.kind));
+			} else if (mark.type === 'cut') {
+				const { positions, normals } = this.segments(mark);
+				const style = mark.own ? 'major' : 'minor';
+				const c = color(mark.layer);
+				for (let i = 0; i < positions.length; i += 6) {
+					const lift = (k) => positions[i + k] + normals[i + k] * CUT_LIFT;
+					addLine(style, on, [lift(0), lift(1), lift(2)], [lift(3), lift(4), lift(5)], c);
+				}
+			} else if (mark.type === 'block') {
+				for (const [a, b] of BOX_EDGES) addLine(mark.sample === 'here' ? 'major' : 'minor', on, corner(mark, a), corner(mark, b), color('bend'));
+				if (mark.sample === 'here') {
+					for (const side of ['back', 'front']) {
+						const box = new THREE.Mesh(this.boxGeometry, this.boxes[side]);
+						box.position.set(...mark.min.map((v, k) => (v + mark.max[k]) / 2));
+						box.scale.set(...mark.max.map((v, k) => v - mark.min[k]));
+						box.renderOrder = ORDER[side];
+						box.visible = on;
+						group.add(box);
+					}
+				}
+				if (on && blocks < BLOCKS) {
+					tint.uMin.value[blocks].fromArray(mark.min);
+					tint.uWeights.value[blocks].fromArray(mark.weights);
+					tint.uCell.value[blocks] = mark.cell;
+					tint.uStrength.value[blocks] = 1;
+					tinted.add(mark.scale);
+					blocks++;
+				}
+			}
+		}
+		// Each size's weights are averaged, so surface near the point, counted at every size, is tinted the most.
+		tint.uSizes.value = tinted.size;
+		if (blocks) group.add(this.car.tint);
+
+		// The point: its facing as an arrow, and the handle.
+		const tip = point.position.map((p, k) => p + point.normal[k] * NORMAL_LENGTH);
+		addLine('major', true, point.position, tip, color('position'));
+		this.cone.position.fromArray(tip);
+		this.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...point.normal));
+		group.add(this.cone);
+		dots.push({ at: point.position, size: DOT.handle, style: 2, color: color('position'), alpha: 1 });
+
+		for (const [key, { positions, colors }] of Object.entries(lines)) {
+			const geometry = new LineSegmentsGeometry().setPositions(positions).setColors(colors);
+			for (const material of this.lines[key]) {
+				const segments = new LineSegments2(geometry, material);
+				segments.renderOrder = ORDER.line;
+				group.add(segments);
+			}
+		}
+		this.addDots(group, dots);
 		this.release();
 		this.object = group;
+		this.drawn = drawn;
+		this.point = point.position;
 		this.viewer.setMarkers(group);
 	}
 
-	addLines(group, marks, materials) {
-		const positions = [];
-		const colors = [];
-		const color = new THREE.Color();
-		for (const m of marks) {
-			if (m.type !== 'segment' && m.type !== 'arrow') continue;
-			positions.push(...m.from, ...m.to);
-			color.set(KIND_COLORS[m.kind]);
-			colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
-		}
-		if (!positions.length) return;
-		const geometry = new LineSegmentsGeometry().setPositions(positions).setColors(colors);
-		for (const [material, order] of materials) {
-			const lines = new LineSegments2(geometry, material).computeLineDistances();
-			lines.renderOrder = order;
-			group.add(lines);
-		}
-	}
-
-	addDots(group, marks, materials) {
-		const dots = marks.filter((m) => m.type === 'dot').sort((a, b) => a.size - b.size);
-		if (!dots.length) return;
+	addDots(group, dots) {
 		const geometry = new THREE.BufferGeometry();
-		const color = new THREE.Color();
-		geometry.setAttribute('position', new THREE.Float32BufferAttribute(dots.flatMap((m) => m.at), 3));
-		geometry.setAttribute('color', new THREE.Float32BufferAttribute(dots.flatMap((m) => color.set(KIND_COLORS[m.kind]).toArray()), 3));
-		geometry.setAttribute('size', new THREE.Float32BufferAttribute(dots.map((m) => m.size), 1));
-		geometry.setAttribute('hollow', new THREE.Float32BufferAttribute(dots.map((m) => (m.hollow ? 1 : 0)), 1));
-		for (const material of materials) {
+		geometry.setAttribute('position', new THREE.Float32BufferAttribute(dots.flatMap((d) => d.at), 3));
+		geometry.setAttribute('color', new THREE.Float32BufferAttribute(dots.flatMap((d) => d.color.toArray()), 3));
+		geometry.setAttribute('size', new THREE.Float32BufferAttribute(dots.map((d) => d.size), 1));
+		geometry.setAttribute('style', new THREE.Float32BufferAttribute(dots.map((d) => d.style), 1));
+		geometry.setAttribute('alpha', new THREE.Float32BufferAttribute(dots.map((d) => d.alpha), 1));
+		for (const material of this.dots) {
 			const points = new THREE.Points(geometry, material);
 			points.frustumCulled = false;
 			points.renderOrder = ORDER.dot;
@@ -229,21 +339,83 @@ export class Stencil {
 		}
 	}
 
-	/** Take the stencil off the car. */
+	/** Take the marks off the car. */
 	clear() {
 		this.release();
+		this.drawn = [];
+		this.point = null;
 		this.viewer.setMarkers(null);
 	}
 
-	/** Free the geometry of what was drawn; materials, the sphere and the cone are kept for the next drawing. */
+	/** Free what the last drawing made; materials, the box, the cone and the car's tint mesh are kept. */
 	release() {
 		if (!this.object) return;
 		const freed = new Set();
 		this.object.traverse((o) => {
-			if (o === this.cone || o.geometry === this.sphereGeometry || !o.geometry || freed.has(o.geometry)) return;
+			if (!o.geometry || o === this.cone || o === this.car?.tint || o.geometry === this.boxGeometry || freed.has(o.geometry)) return;
 			freed.add(o.geometry);
 			o.geometry.dispose();
 		});
 		this.object = null;
+	}
+
+	/** Screen position, in client pixels, of world points as the camera sees them in the pane under (clientX, clientY). */
+	projector(clientX, clientY) {
+		const at = this.viewer.paneAt(clientX, clientY);
+		if (!at) return null;
+		const rect = this.viewer.canvas.getBoundingClientRect();
+		const camera = this.viewer.camera;
+		const m = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
+		const left = rect.left + at.index * at.w;
+		return (p) => {
+			const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+			const x = (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w;
+			const y = (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w;
+			return [left + (x * 0.5 + 0.5) * at.w, rect.top + (0.5 - y * 0.5) * at.h];
+		};
+	}
+
+	/** Whether (clientX, clientY) is on the point's handle. */
+	onHandle(clientX, clientY) {
+		const project = this.point && this.projector(clientX, clientY);
+		if (!project) return false;
+		const [x, y] = project(this.point);
+		return Math.hypot(x - clientX, y - clientY) <= REACH.handle;
+	}
+
+	/** The drawn mark under (clientX, clientY): a reading before a line, the nearest of each. */
+	markAt(clientX, clientY) {
+		const project = this.projector(clientX, clientY);
+		if (!project) return null;
+		let best = null;
+		let bestDistance = Infinity;
+		const consider = (mark, distance, reach) => {
+			if (distance <= reach && distance < bestDistance) {
+				best = mark;
+				bestDistance = distance;
+			}
+		};
+		const toSegment = (a, b) => {
+			const [ax, ay] = project(a);
+			const [bx, by] = project(b);
+			const dx = bx - ax, dy = by - ay;
+			const t = Math.max(0, Math.min(1, ((clientX - ax) * dx + (clientY - ay) * dy) / (dx * dx + dy * dy || 1)));
+			return Math.hypot(ax + t * dx - clientX, ay + t * dy - clientY);
+		};
+		for (const mark of this.drawn) {
+			if (mark.type !== 'reading') continue;
+			const [x, y] = project(mark.at);
+			consider(mark, Math.hypot(x - clientX, y - clientY), REACH.reading);
+		}
+		if (best) return best;
+		for (const mark of this.drawn) {
+			if (mark.type === 'guide') consider(mark, toSegment(mark.from, mark.to), REACH.line);
+			else if (mark.type === 'block') for (const [a, b] of BOX_EDGES) consider(mark, toSegment(corner(mark, a), corner(mark, b)), REACH.line);
+			else if (mark.type === 'cut') {
+				const { positions } = this.segments(mark);
+				for (let i = 0; i < positions.length; i += 6) consider(mark, toSegment(positions.subarray(i, i + 3), positions.subarray(i + 3, i + 6)), REACH.line);
+			}
+		}
+		return best;
 	}
 }
