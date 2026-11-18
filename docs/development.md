@@ -79,7 +79,7 @@ web/                 Surrogate Model, the browser tool
   vendor/              three.js, meshoptimizer, and the Hanken Grotesk and TASA Orbiter typefaces
 artifacts/           ensemble.pt, metrics.json
 tests/               the Python pipeline and its command, the browser engine against it, and the assistant's two proxies
-deploy/              assistant-worker/assistant.js: the assistant's route for a public site's Cloudflare Worker
+deploy/              assistant-worker/: the Cloudflare Worker that publishes web/ and the assistant's route at nategriffin.dev/surrogate/ (deploy.sh)
 docs/                the model (approach, inputs, results, limitations), the web app, the assistant, the demo outline, this file
 data/                the dataset's description and license; the surface files are fetched into raw/ (data/README.md)
 ```

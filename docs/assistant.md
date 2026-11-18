@@ -40,4 +40,4 @@ The page sends the conversation to `/api/assistant`, and the server adds the key
 - Without a key, or on a host without the route, the panel says the assistant is not available and the rest of the tool works.
 - A host that serves the route but not the kernel's Content-Security-Policy does not start the Python kernel: `run_python` fails with a message saying so, and the rest of the tool works.
 
-`deploy/assistant-worker/assistant.js` serves the same route from a public site's Cloudflare Worker, with limits of 120 requests a minute overall, 30 a minute per visitor and 5,000 a day. Its header comment says how to mount it.
+The tool is also published at https://nategriffin.dev/surrogate/ by `deploy/assistant-worker/deploy.sh`: a Cloudflare Worker (`worker.js`, `wrangler.jsonc`) serves `web/` as static files and the same route from `assistant.js`, with limits of 120 requests a minute overall, 60 a minute from one address and 5,000 a day, and a credit limit on its key at OpenRouter behind them.

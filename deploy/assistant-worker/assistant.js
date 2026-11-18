@@ -5,21 +5,19 @@
  * the hard stop behind them. It also serves the kernel's worker script with the policy that keeps the Python
  * kernel off the network.
  *
- * Mounting it in the site's Worker, with `web/` published under TOOL_PATH as the Worker's static assets (`ASSETS`):
- * - this file beside the site's main module, which imports `{ route, AssistantLimits }` from it, exports
- *   `AssistantLimits` (a Worker's main module exports only its handler and its Durable Object classes), and in
- *   `fetch` first runs `const handled = await route(request, env); if (handled) return handled;`
- * - in the site's wrangler configuration, the limits' Durable Object and its migration:
- *   `"durable_objects": { "bindings": [{ "name": "ASSISTANT_LIMITS", "class_name": "AssistantLimits" }] }` and
- *   `"migrations": [{ "tag": "assistant-limits", "new_sqlite_classes": ["AssistantLimits"] }]`
- * - the key as a secret: `wrangler secret put OPENROUTER_API_KEY`.
- * `vars.ASSISTANT_MODEL` overrides DEFAULT_MODEL. Switch the assistant off with `vars.ASSISTANT_ENABLED = "0"` (or
- * by deleting the secret) and deploy; the rest of the tool works without it.
+ * `worker.js` beside this file is the Worker that serves it, with `web/` as its static assets under TOOL_PATH;
+ * `deploy.sh` publishes both. The key is a secret (`wrangler secret put OPENROUTER_API_KEY`), `vars.ASSISTANT_MODEL`
+ * overrides DEFAULT_MODEL, and `vars.ASSISTANT_ENABLED = "0"` (or deleting the secret) switches the assistant off at
+ * the next deploy; the rest of the tool works without it.
  */
 
-/** Requests a minute from everyone, a minute from one visitor (by IP address, held in memory only), and a day. */
-export const LIMITS = { perMinute: 120, perVisitorPerMinute: 30, perDay: 5000 };
-export const TOOL_PATH = '/surrogate-model/';
+/**
+ * Requests a minute from everyone, a minute from one visitor (by IP address, held in memory only), and a day. One
+ * address can be a whole office: a reply takes up to ten requests in its minute, so the visitor limit leaves room
+ * for five people behind one address asking at once.
+ */
+export const LIMITS = { perMinute: 120, perVisitorPerMinute: 60, perDay: 5000 };
+export const TOOL_PATH = '/surrogate/';
 export const ALLOWED_ORIGINS = ['https://nategriffin.dev'];
 
 // The rest of the contract, as in src/surrogate/server.py; tests/test_assistant_proxy.py holds the two equal.

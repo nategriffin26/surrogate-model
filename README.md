@@ -4,6 +4,8 @@ A model that predicts the mean pressure coefficient $C_p$ on every cell of a Dri
 
 ![Surrogate Model showing the predicted pressure on DrivAerML run 1](docs/images/surrogate-model.png)
 
+To try it without installing anything, the web app is live at https://nategriffin.dev/surrogate/.
+
 ## Quick start
 
 The one prerequisite is [uv](https://docs.astral.sh/uv/getting-started/installation/). The first command you run installs the dependencies, about 300 MB of packages that are mostly PyTorch and VTK (20 s on my machine), plus Python itself if you don't have 3.11 to 3.13.
