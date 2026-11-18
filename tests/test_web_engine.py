@@ -317,6 +317,15 @@ def _assert_totals(numbers: dict, surface: SurfaceMesh, cp: np.ndarray, frontal_
         np.testing.assert_allclose(totals[name]["normal"], surface.normals[index], atol=1e-5)
 
 
+def _assert_reference_totals(numbers: dict, surface: SurfaceMesh, cfd: np.ndarray, frontal_area: float) -> None:
+    """`referenceTotals` as result.js defines it, against the reference field at every polygon."""
+    cfd = np.asarray(cfd, dtype=np.float64)
+    totals = numbers["referenceTotals"]
+    assert totals["meanCp"] == pytest.approx((cfd * surface.areas).sum() / surface.areas.sum(), abs=1e-6)
+    force = -(cfd[:, None] * surface.normals * surface.areas[:, None]).sum(axis=0) / frontal_area
+    np.testing.assert_allclose(totals["coefficients"], force, atol=1e-6)
+
+
 @requires_runtime
 def test_drag_split_and_totals_follow_their_definitions(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches a drag split or whole-car totals that sum the wrong polygons, weights, normals or field,
@@ -464,10 +473,10 @@ def test_quick_prediction_matches_the_reference_at_every_polygon(car: pv.PolyDat
 @requires_runtime
 def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches a CFD field attached from a second file giving other numbers or fields than the same
-    field read with the car's own file (agreement, CFD drag, working-mesh field, file polygons,
-    export), mapping a file of other polygons onto the wrong polygons or onto the far side of a thin
-    panel, taking another car's field, a refusal that does not say why, or a detach that leaves the
-    field behind."""
+    field read with the car's own file (agreement, the CFD's whole-car mean Cp and coefficients,
+    working-mesh field, file polygons, export), mapping a file of other polygons onto the wrong
+    polygons or onto the far side of a thin panel, taking another car's field, a refusal that does not
+    say why, or a detach that leaves the field behind."""
     case = car.copy()
     case.cell_data.clear()
     bare = case.copy()
@@ -492,7 +501,8 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
 
     alone = outcome["alone"]
     assert alone["reference"] == {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "own"}
-    assert outcome["before"] == {"reference": None, "cdPCfd": None, "accuracy": None, "meshHasCfd": False}
+    _assert_reference_totals(alone, read_vtp_surface(files[0]), cfd, outcome["geometry"]["frontalArea"])
+    assert outcome["before"] == {"reference": None, "referenceTotals": None, "accuracy": None, "meshHasCfd": False}
     assert outcome["names"] == {"withCfd": ["CpMeanTrim", "pMeanTrim"], "bare": []}
     assert "no cell array of one number per polygon" in outcome["refusals"]["bare"]
     assert "other.vtp is not this car's surface: its polygons lie a median" in outcome["refusals"]["otherCar"]
@@ -514,8 +524,7 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     np.testing.assert_array_equal(_array(out, "nearest_file_cfd.f32"), expected)
     nearest = outcome["nearest"]
     assert nearest["reference"] == {"file": "remeshed.vtp", "array": "CpMeanTrim", "mapping": "nearest"}
-    drag = -(expected.astype(np.float64) * polygons.normals[:, 0] * polygons.areas).sum() / outcome["geometry"]["frontalArea"]
-    assert nearest["cdPCfd"] == pytest.approx(drag, abs=1e-6)
+    _assert_reference_totals(nearest, polygons, expected, outcome["geometry"]["frontalArea"])
 
     assert outcome["detached"] == outcome["before"]
     assert outcome["fileCellsAfterDetach"] is None

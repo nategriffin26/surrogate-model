@@ -202,6 +202,25 @@ export class Session extends EventTarget {
 		}
 	}
 
+	/**
+	 * Analyse a ready file case's file again, so the engine holds its polygons once more: it holds the car analysed
+	 * last only, and taking another file's CFD needs them. The car stays on screen while it runs; the new result, the
+	 * same numbers summed over every polygon, then replaces the old, with the working mesh drawn from it and the
+	 * cuts and probe sites made on the old one dropped. Resolves once every polygon is predicted.
+	 */
+	async analyseAgain(c, file) {
+		let everyPolygon;
+		const exact = new Promise((resolve) => (everyPolygon = resolve));
+		const result = await this.engine.analyze(file, { exact: everyPolygon }, { signal: c.abort.signal });
+		c.exact = await exact;
+		c.result = { ...result, ...c.exact };
+		c.surface.setWorking(result.mesh);
+		c.cuts = null;
+		c.sites = null;
+		this.notify(c, 'geometry');
+		this.notify(c, 'numbers');
+	}
+
 	/** Close a case: its analysis stops, its GPU memory is released, and a neighbouring case is shown. */
 	close(c) {
 		const i = this.cases.indexOf(c);

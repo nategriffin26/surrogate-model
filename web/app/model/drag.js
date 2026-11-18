@@ -11,11 +11,11 @@ const WIDTH = 560;
 const LEFT = 120;
 const ROW = 40;
 
-/** The training cars' CFD drag, their average, and the open car's prediction by each network, their mean and its CFD. */
-function dragLine(training, forces, name) {
+/** The training cars' CFD drag, their average, and the open car's prediction by each network, their mean and its CFD drag (or null). */
+function dragLine(training, forces, cfdDrag, name) {
 	const trained = training.cars.map((car) => car.cdP);
 	const average = trained.reduce((a, b) => a + b, 0) / trained.length;
-	const values = [...trained, ...forces.cdPModels, forces.cdP, ...(forces.cdPCfd === null ? [] : [forces.cdPCfd])];
+	const values = [...trained, ...forces.cdPModels, forces.cdP, ...(cfdDrag === null ? [] : [cfdDrag])];
 	const lo = Math.floor(Math.min(...values) / 0.01) * 0.01;
 	const hi = Math.ceil(Math.max(...values) / 0.01) * 0.01;
 	const x = (v) => LEFT + ((v - lo) / (hi - lo)) * (WIDTH - LEFT - 12);
@@ -34,7 +34,7 @@ function dragLine(training, forces, name) {
 		s('text', { x: 0, y: ROW * 1.5 + 10, class: 'row-name' }, name),
 		forces.cdPModels.map((v) => s('line', { x1: x(v), y1: ROW * 1.5 - 2, x2: x(v), y2: ROW * 1.5 + 14, class: 'network-drag' })),
 		s('circle', { cx: x(forces.cdP), cy: ROW * 1.5 + 6, r: 5.5, class: 'predicted-drag' }),
-		forces.cdPCfd === null ? null : s('path', { d: `M${x(forces.cdPCfd)} ${ROW * 1.5 - 1} l7 7 l-7 7 l-7 -7 z`, class: 'cfd-drag' }));
+		cfdDrag === null ? null : s('path', { d: `M${x(cfdDrag)} ${ROW * 1.5 - 1} l7 7 l-7 7 l-7 -7 z`, class: 'cfd-drag' }));
 }
 
 /** This car's predicted drag as the sum of what its rearward-facing and its forward-facing surfaces contribute. */
@@ -92,11 +92,12 @@ export function createDrag({ card, groups, training }) {
 		el,
 		setCase({ result }) {
 			const { forces } = result;
-			line.replaceChildren(dragLine(training, forces, 'This car'));
+			const cfdDrag = result.referenceTotals?.coefficients[0] ?? null;
+			line.replaceChildren(dragLine(training, forces, cfdDrag, 'This car'));
 			split.replaceChildren(facingSplit(forces));
-			thisCar.textContent = forces.cdPCfd === null
+			thisCar.textContent = cfdDrag === null
 				? `Predicted ${forces.cdP.toFixed(3)}`
-				: `Predicted ${forces.cdP.toFixed(3)}, CFD ${forces.cdPCfd.toFixed(3)}: ${signed(Math.round((forces.cdP - forces.cdPCfd) / DRAG_COUNT), 0)} counts`;
+				: `Predicted ${forces.cdP.toFixed(3)}, CFD ${cfdDrag.toFixed(3)}: ${signed(Math.round((forces.cdP - cfdDrag) / DRAG_COUNT), 0)} counts`;
 		},
 		setPoint() {},
 	};

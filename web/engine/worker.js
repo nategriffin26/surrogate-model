@@ -33,7 +33,7 @@ import { createGpuNetworks } from './gpu.js';
 import { createGridOperations } from './grid-gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint, surfaceMesh } from './meshes.js';
-import { Agreement, cfdDrag, coverage, evenPicks, surfaceAgreement, SurfaceTally } from './analysis.js';
+import { Agreement, coverage, evenPicks, referenceTotals, surfaceAgreement, SurfaceTally } from './analysis.js';
 import { describePolygon, distanceToPolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
 import { nearestPoint } from './nearest.js';
 
@@ -295,8 +295,9 @@ async function analyze(current, input) {
       form: 'full',
       source: { name: surface.name, cells: cells.areas.length },
       geometry: geometryOf(car),
-      ...surfaceNumbers(estimate, agreement ? agreement.accuracy() : null, car.cdPCfd),
+      ...surfaceNumbers(estimate, agreement ? agreement.accuracy() : null),
       reference,
+      referenceTotals: car.referenceTotals,
       coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: stages.timings,
       device,
@@ -365,8 +366,9 @@ async function predictQuick(current, given) {
       form: 'quick',
       source: { name: surface.name, cells: count },
       geometry: geometryOf(car),
-      ...surfaceNumbers(tally, accuracy, car.cdPCfd),
+      ...surfaceNumbers(tally, accuracy),
       reference: ownReference(surface),
+      referenceTotals: car.referenceTotals,
       coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: [
         { stage: 'measuring', seconds: (measured - started) / 1000 },
@@ -402,7 +404,10 @@ function geometryOf({ bounds, frontal }) {
   };
 }
 
-/** Polygon geometry, the frontal area, the feature lookups, the polygon-to-point operator and the CFD drag. */
+/**
+ * Polygon geometry, the frontal area, the feature lookups, the polygon-to-point operator and the
+ * reference field's whole-car totals.
+ */
 async function measure(surface, layout, grids, progress) {
   const cells = measureCells(surface);
   progress(0.5);
@@ -412,13 +417,15 @@ async function measure(surface, layout, grids, progress) {
   progress(0.8);
   const average = cellToPoint(surface, cells.areas);
   progress(0.95);
-  const cdPCfd = surface.cfd ? cfdDrag(cells, surface.cfd, frontal) : null;
-  return { cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds, cdPCfd };
+  return {
+    cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds,
+    referenceTotals: surface.cfd ? referenceTotals(cells, surface.cfd, frontal) : null,
+  };
 }
 
 /** The Result's surface numbers: the forces and totals of a tally over polygons, and the agreement with CFD. */
-function surfaceNumbers(tally, accuracy, cdPCfd) {
-  return { forces: tally.forces(cdPCfd), accuracy, totals: tally.totals() };
+function surfaceNumbers(tally, accuracy) {
+  return { forces: tally.forces(), accuracy, totals: tally.totals() };
 }
 
 /** `Result.reference` for a surface's own CFD, as its file or its arrays carried it. */
@@ -627,7 +634,7 @@ async function completeSurface(current, runners, post, job) {
     if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
   }, true);
   const accuracy = surface.cfd ? surfaceAgreement(cells.areas, predicted.cp, surface.cfd) : null;
-  post({ type: 'exact', numbers: surfaceNumbers(exact, accuracy, car.cdPCfd) });
+  post({ type: 'exact', numbers: surfaceNumbers(exact, accuracy) });
   if (showFull) send();
   return true;
 }
@@ -933,17 +940,18 @@ async function nearestCellValues(cells, { surface, cells: { normals }, index: { 
 
 /**
  * What a reference changes in the car's Result, as `attachReference` and `detachReference` resolve
- * with it: the CFD drag and agreement over every polygon, computed as the analysis computes them, and
- * the field on the working mesh and the full mesh, put on their vertices as the meshes put a file's own.
+ * with it: the reference field's whole-car totals and its agreement over every polygon, computed as the
+ * analysis computes them, and the field on the working mesh and the full mesh, put on their vertices as
+ * the meshes put a file's own.
  */
 function answerReference(id, car) {
   const { surface, cells, predicted } = car;
-  let answer = { reference: null, cdPCfd: null, accuracy: null, cfd: null, fullCfd: null };
+  let answer = { reference: null, referenceTotals: null, accuracy: null, cfd: null, fullCfd: null };
   if (surface.cfd) {
     const all = cellToPoint(surface, cells.areas).all(surface.cfd);
     answer = {
       reference: car.reference,
-      cdPCfd: cfdDrag(cells, surface.cfd, car.frontal),
+      referenceTotals: referenceTotals(cells, surface.cfd, car.frontal),
       accuracy: surfaceAgreement(cells.areas, predicted.cp, surface.cfd),
       cfd: Float32Array.from(car.sourcePoint, (p) => all[p]),
       fullCfd: car.showFull ? all : null,

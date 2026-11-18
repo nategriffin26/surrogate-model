@@ -72,12 +72,12 @@ export class SurfaceTally {
     if (cp > this.highest.cp) this.highest = { cp, cell };
   }
 
-  forces(cdPCfd) {
+  forces() {
     const mean = (drag) => drag.reduce((sum, value) => sum + value, 0) / this.networks / this.frontalArea;
     const cdPModels = Array.from(this.dragForward, (value, f) => (value + this.dragRearward[f]) / this.frontalArea);
     const cdP = cdPModels.reduce((sum, value) => sum + value, 0) / this.networks;
     const cdPStd = Math.sqrt(cdPModels.reduce((sum, value) => sum + (value - cdP) ** 2, 0) / this.networks);
-    return { cdP, cdPStd, cdPModels, cdPCfd, byFacing: { forward: mean(this.dragForward), rearward: mean(this.dragRearward) } };
+    return { cdP, cdPStd, cdPModels, byFacing: { forward: mean(this.dragForward), rearward: mean(this.dragRearward) } };
   }
 
   /** @returns {import('./result.js').Totals} */
@@ -91,7 +91,7 @@ export class SurfaceTally {
     return {
       area: this.area,
       meanCp: this.pressure / this.area,
-      coefficients: [this.forces(null).cdP, this.forceY / this.frontalArea, this.forceZ / this.frontalArea],
+      coefficients: [this.forces().cdP, this.forceY / this.frontalArea, this.forceZ / this.frontalArea],
       cpMin: extreme(this.lowest),
       cpMax: extreme(this.highest),
     };
@@ -131,13 +131,21 @@ export function surfaceAgreement(areas, cp, cfd) {
 }
 
 /**
- * Pressure drag from CFD on the file's own polygons, C_d,p = -(1/A) Σ Cp n_x dA.
+ * The reference field's whole-car sums over the file's own polygons, as `SurfaceTally.totals` sums the
+ * prediction's: its area-weighted mean Cp and [Cx, Cy, Cz] = −(1/A) Σ Cp n dA, so Cx is its pressure drag.
  * @param {import('./geometry.js').CellGeometry} cells
+ * @returns {import('./result.js').ReferenceTotals}
  */
-export function cfdDrag({ normals, areas }, cfd, frontalArea) {
-  let total = 0;
-  for (let c = 0; c < areas.length; c++) total -= cfd[c] * normals[3 * c] * areas[c];
-  return total / frontalArea;
+export function referenceTotals({ normals, areas }, cfd, frontalArea) {
+  let area = 0, pressure = 0, forceX = 0, forceY = 0, forceZ = 0;
+  for (let c = 0; c < areas.length; c++) {
+    area += areas[c];
+    pressure += cfd[c] * areas[c];
+    forceX -= cfd[c] * normals[3 * c] * areas[c];
+    forceY -= cfd[c] * normals[3 * c + 1] * areas[c];
+    forceZ -= cfd[c] * normals[3 * c + 2] * areas[c];
+  }
+  return { meanCp: pressure / area, coefficients: [forceX / frontalArea, forceY / frontalArea, forceZ / frontalArea] };
 }
 
 /**

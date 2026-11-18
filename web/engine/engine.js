@@ -240,13 +240,13 @@ export function createEngine() {
   async function changeReference(result, message, onProgress) {
     const current = completeAnalysis(result);
     if (!current) throw new Error('A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.');
-    const { reference, cdPCfd, accuracy, cfd, fullCfd } = await ask({ ...message, analysis: current.id }, onProgress);
+    const { reference, referenceTotals, accuracy, cfd, fullCfd } = await ask({ ...message, analysis: current.id }, onProgress);
     result.reference = reference;
-    result.forces.cdPCfd = cdPCfd;
+    result.referenceTotals = referenceTotals;
     result.accuracy = accuracy;
     if (cfd) result.mesh.cfd = cfd;
     else delete result.mesh.cfd;
-    return { reference, forces: result.forces, accuracy, cfd, fullCfd };
+    return { reference, referenceTotals, accuracy, cfd, fullCfd };
   }
 
   return {

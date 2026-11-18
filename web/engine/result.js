@@ -21,12 +21,11 @@
  * @property {{ name: string, cells: number }} source  The surface analysed: its name (the file's) and polygon count.
  * @property {{ bounds: number[], length: number, width: number, height: number, frontalArea: number }} geometry
  *   `bounds` is [xmin, xmax, ymin, ymax, zmin, zmax]. `frontalArea` is the reference area for coefficients.
- * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null,
+ * @property {{ cdP: number, cdPStd: number, cdPModels: number[],
  *              byFacing: { forward: number, rearward: number } }} forces
- *   Pressure drag coefficient: mean of the ensemble's networks, their standard deviation, each
- *   network's value, and the value of the reference field (`reference`) when there is one.
- *   `byFacing` splits the networks' mean between polygons facing forward (outward n_x < 0) and the
- *   rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
+ *   Pressure drag coefficient: mean of the ensemble's networks, their standard deviation and each
+ *   network's value. `byFacing` splits the networks' mean between polygons facing forward (outward
+ *   n_x < 0) and the rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
  * @property {{ r2: number } | null} accuracy
  *   Area-weighted agreement with the reference field over the surface. Null when there is none.
  * @property {Totals} totals  The whole car's sums of the networks' mean Cp.
@@ -37,6 +36,9 @@
  * @property {ReferenceSource | null} reference  Where the field the prediction is compared with came
  *   from (shown as CFD, `mesh.cfd`): the surface's own `CpMeanTrim`, or a cell array of another file
  *   attached afterwards (`attachReference`). Null when there is none.
+ * @property {ReferenceTotals | null} referenceTotals  The reference field's whole-car sums over every
+ *   polygon of the surface, from the start (it needs no prediction), as `totals` sums the prediction's.
+ *   Null when there is no reference.
  * @property {Coverage} coverage
  * @property {{ stage: Stage, seconds: number }[]} timings
  * @property {string} device  What ran the networks, as `Engine.device` names it.
@@ -52,6 +54,11 @@
  *   only; Cx is `forces.cdP`
  * @property {CpExtreme} cpMin
  * @property {CpExtreme} cpMax
+ *
+ * @typedef {Object} ReferenceTotals
+ * @property {number} meanCp          area-weighted
+ * @property {number[]} coefficients  [Cx, Cy, Cz] = −Σ Cp n dA / `geometry.frontalArea`, pressure only;
+ *   Cx is the reference's pressure drag
  *
  * @typedef {Object} CpExtreme  The polygon where the networks' mean Cp is lowest or highest.
  * @property {number} value
@@ -177,7 +184,7 @@
  *              Promise<ReferenceChange>} attachReference
  *   Gives the car a reference field from a second file: its cell array `array` (default `CpMeanTrim`),
  *   put on the car's polygons as `ReferenceSource.mapping` says. The car then answers as if its own
- *   file had carried the field: `result.reference`, `result.forces.cdPCfd`, `result.accuracy` and
+ *   file had carried the field: `result.reference`, `result.referenceTotals`, `result.accuracy` and
  *   `result.mesh.cfd` are written into `result` itself, computed over every polygon exactly as the
  *   analysis computes them, and `fileCells`, `explain` and `exportVtp` use the field. Of the second
  *   file, only that array is kept. Runs while `canExportVtp(result)`; rejects otherwise, with a
@@ -194,7 +201,7 @@
  * @typedef {Object} ReferenceChange  What a change of reference wrote into the Result, and the field
  *   for the full mesh, which the page draws and must update itself.
  * @property {ReferenceSource | null} reference
- * @property {Result['forces']} forces
+ * @property {ReferenceTotals | null} referenceTotals
  * @property {Result['accuracy']} accuracy
  * @property {Float32Array | null} cfd       (V) the new `mesh.cfd`
  * @property {Float32Array | null} fullCfd   (P) the field at every vertex of the full mesh, when

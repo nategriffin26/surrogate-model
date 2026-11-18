@@ -273,7 +273,7 @@ if (mode === 'reference') {
     const result = await engine.analyze(file, { exact });
     return Object.assign(result, await everyPolygon);
   };
-  const numbers = ({ reference, forces, accuracy, mesh }) => ({ reference, cdPCfd: forces.cdPCfd, accuracy, meshHasCfd: 'cfd' in mesh });
+  const numbers = ({ reference, referenceTotals, accuracy, mesh }) => ({ reference, referenceTotals, accuracy, meshHasCfd: 'cfd' in mesh });
   const refusal = (promise) => promise.then(() => null, (error) => error.message);
 
   const alone = await analyse(withCfd);

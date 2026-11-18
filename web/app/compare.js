@@ -133,7 +133,7 @@ export function createComparison({ session, regions, update, run }) {
 	 * The rows of the table: the whole car, the selection, each saved region; each side summed on its own polygons
 	 * (regions.measureOn: a dropped file's own, a bundled example's simplified mesh, a variant's own), with the RMS of
 	 * ΔCp over this car's. A whole car the simplified mesh would only approach comes from the exact numbers its result
-	 * carries.
+	 * carries: the prediction's totals, and the reference field's.
 	 */
 	function rows(c) {
 		const pair = compared(c);
@@ -151,10 +151,9 @@ export function createComparison({ session, regions, update, run }) {
 		const sum = regions.measureOn(x, terms, { cfd });
 		if (terms || sum.exact) return { ...sum.part, over: sum.over };
 		const r = x.result;
-		const over = caseSummary(x, null).totals_over;
-		return cfd
-			? { faces: r.source.cells, area: r.totals.area, meanCp: null, coefficients: [r.forces.cdPCfd, null, null], over: `${over}, its Cx` }
-			: { faces: r.source.cells, area: r.totals.area, meanCp: r.totals.meanCp, coefficients: r.totals.coefficients, over };
+		// The reference's totals are summed over every polygon from the start; the prediction's once `exact` arrives.
+		if (cfd) return { faces: r.source.cells, area: r.totals.area, ...r.referenceTotals, over: 'every polygon' };
+		return { faces: r.source.cells, area: r.totals.area, meanCp: r.totals.meanCp, coefficients: r.totals.coefficients, over: caseSummary(x, null).totals_over };
 	}
 
 	/**

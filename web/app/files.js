@@ -141,7 +141,7 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 
 	defineOperation({
 		name: 'attach_reference',
-		description: 'Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car\'s polygons. The car can then be compared with it (set_comparison with "cfd"), and its result reports the CFD\'s Cx. The file must describe the same surface, its polygons within 5 mm of the car\'s: the CFD of another car is refused. Only the file analysed last can take one, once every polygon is predicted. Reading a DrivAerML file takes a few seconds.',
+		description: 'Give a dropped car a reference field from a .vtp in the workspace: one of its cell arrays (default CpMeanTrim, the CFD pressure DrivAerML files carry), put on the car\'s polygons. The car can then be compared with it (set_comparison with "cfd"), and its result reports the CFD\'s whole-car numbers. The file must describe the same surface, its polygons within 5 mm of the car\'s: the CFD of another car is refused. The engine holds the car analysed last only, so another car is first analysed again (about as long as its first analysis); a car whose every polygon this device could not predict cannot take one. Reading a DrivAerML file takes a few seconds.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -157,12 +157,17 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 			if (c?.kind !== 'file' || !c.result) throw new Error('A reference is attached to a dropped file\'s result. Open the geometry first.');
 			const file = fileAt(path);
 			if (!isGeometry(file.path)) throw new Error(`${file.path} is not a .vtp file.`);
+			if (!engine.canExportVtp(c.result)) {
+				if (!c.exact) throw new Error(`${c.name} cannot take a reference: this device did not predict its every polygon.`);
+				if (!c.path || !workspace.file(c.path)) throw new Error(`${c.name}'s file is no longer in the workspace, so it cannot be analysed again to take a reference.`);
+				await session.analyseAgain(c, fileFor(c.path, workspace.file(c.path).blob));
+			}
 			const { cfd, fullCfd } = await engine.attachReference(c.result, fileFor(file.path, file.blob), { array });
 			// The surface drawn takes the field too, for the views that draw CFD from the GPU.
 			c.surface.working.setFields({ cfd });
 			if (fullCfd && c.surface.full) c.surface.full.setFields({ cfd: fullCfd });
 			update('card', 'toolbar', 'dock', 'viewer');
-			return { case_id: c.id, reference: c.result.reference, cx_cfd: c.result.forces.cdPCfd, cx_predicted: c.result.forces.cdP };
+			return { case_id: c.id, reference: c.result.reference, cx_cfd: c.result.referenceTotals.coefficients[0], cx_predicted: c.result.forces.cdP };
 		},
 	});
 
@@ -228,8 +233,9 @@ export function addFiles(files, { workspace, run }) {
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 /**
- * app: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. The engine
- * says which car can take another file's CFD: the one analysed last, once every polygon is predicted.
+ * app: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
+ * row offers its CFD to the cars without CFD of their own; the engine holds the car analysed last only, so another is
+ * analysed again first (attach_reference).
  */
 export function createFilesPanel({ session, workspace, engine, run, progress }) {
 	const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => {
@@ -251,7 +257,7 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 	const folded = new Set();
 	/** The file being renamed or moved in place: { path, mode: 'rename' | 'move' }; the list holds still around it. */
 	let editing = null;
-	/** The file whose CFD is being read onto a car, or null. */
+	/** The file whose CFD is being read onto a car, and that car: { path, taker }, or null. */
 	let attaching = null;
 
 	/** Whether the panel is open: its column opens beside the stage, which narrows to make room. */
@@ -302,11 +308,20 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		else window.open(URL.createObjectURL(kindOf(file.path).text && !/\.html?$/i.test(file.path) ? new Blob([file.blob], { type: 'text/plain' }) : file.blob), '_blank', 'noopener');
 	}
 
-	/** The car a geometry's CFD can go to: the car analysed last, once every polygon is predicted, when it is another file. */
-	function referenceTaker(path) {
-		if (!isGeometry(path)) return null;
-		return session.cases.find((c) => c.kind === 'file' && c.result && c.path !== path && engine.canExportVtp(c.result)) ?? null;
+	/**
+	 * The cars a geometry's CFD can go to: every other dropped car without CFD of its own whose every polygon this
+	 * device has predicted. None when the tool knows the file carries no CFD: its own analysis found none (a car
+	 * that took CFD from another file counts as one without).
+	 */
+	function referenceTakers(path) {
+		if (!isGeometry(path)) return [];
+		const own = session.cases.find((c) => c.id === workspace.file(path)?.caseId);
+		if (own?.result && own.result.reference?.mapping !== 'own') return [];
+		return session.cases.filter((c) => c.kind === 'file' && c.status === 'ready' && c.path && c.path !== path && c.exact && c.result.reference?.mapping !== 'own');
 	}
+
+	/** The state an attaching row shows: the car analysed again while the engine no longer holds it, then the CFD read. */
+	const attachingLabel = () => (engine.canExportVtp(attaching.taker.result) ? 'Reading CFD' : 'Analysing the car again');
 
 	function rowMenu(file) {
 		let m = null;
@@ -331,15 +346,14 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 			m.close();
 			act('delete_file', { path: file.path });
 		}, 'menu-item danger');
-		const taker = referenceTaker(file.path);
-		const attach = taker && item(`Use as CFD for ${taker.name}`, async () => {
+		const attach = referenceTakers(file.path).map((taker) => item(`Use as CFD for ${taker.name}`, async () => {
 			m.close();
-			attaching = file.path;
+			attaching = { path: file.path, taker };
 			render();
 			await act('attach_reference', { path: file.path, case_id: taker.id });
 			attaching = null;
 			render();
-		});
+		}));
 		const items = h('div', { class: 'menu-list', role: 'menu' },
 			item('Download', () => {
 				m.close();
@@ -383,8 +397,8 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		const shown = geometry?.c && geometry.c === session.active;
 		const meta = [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)].join(' · ');
 		const name = editing?.path === file.path ? editor(file) : h('span', { class: 'file-name' }, baseOf(file.path));
-		const state = attaching === file.path
-			? h('span', { class: 'file-state' }, 'Reading CFD')
+		const state = attaching?.path === file.path
+			? h('span', { class: 'file-state' }, attachingLabel())
 			: geometry?.label ? h('span', { class: `file-state${geometry.ready ? ' ready' : ''}${geometry.failed ? ' failed' : ''}` }, geometry.label) : null;
 		const action = isGeometry(file.path) && !geometry.busy && !shown
 			? h('button', { type: 'button', class: 'file-action', title: geometry.c ? `Show the result of ${baseOf(file.path)}` : `Run the model on ${baseOf(file.path)}`, onclick: (e) => {
@@ -495,7 +509,7 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 			const key = `file:${file.path}`;
 			used.add(key);
 			const signature = [file.size, file.by, file.modified, file.caseId, c?.status, c === session.active, editing?.path === file.path && editing.mode,
-				referenceTaker(file.path)?.id, attaching === file.path].join('|');
+				referenceTakers(file.path).map((taker) => taker.id).join(','), attaching?.path === file.path && attachingLabel()].join('|');
 			rows.push(keyed(key, signature, () => fileRow(file, parts.length - 1)));
 		}
 		for (const key of built.keys()) if (!used.has(key)) built.delete(key);
