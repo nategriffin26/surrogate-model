@@ -1,6 +1,6 @@
 // The assistant's loop, run in the page: send the conversation and the tools to the model through the proxy
 // (`/api/assistant`, src/surrogate/server.py), stream the reply, run the tools it calls, send their results, and
-// repeat until it answers without calling one. One agent, one loop.
+// repeat until it answers without calling one.
 
 const ENDPOINT = new URL('../api/assistant', import.meta.url);
 
@@ -21,7 +21,7 @@ export async function availability() {
  * @param {object[]} messages  The conversation in the chat-completions format, system prompt first.
  * @param {{ tools: () => object[], execute: (call: object) => Promise<string>, signal: AbortSignal,
  *   onRequest: () => void, onReasoning: (text: string) => void, onText: (text: string) => void,
- *   onToolCall: (call: object) => void, onRequestEnd: () => void }} turn
+ *   onToolCall: (call: object) => void, onRequestEnd: () => void }} handlers
  *   `tools` is asked before every request, so operations added meanwhile are offered; `execute` runs one tool call
  *   (the same object `onToolCall` announced as soon as its name arrived) and returns what the model is told. The
  *   other callbacks follow one request as it streams: sent, a piece of its thinking ('' when the thinking arrives

@@ -24,10 +24,10 @@ export function renderMarkdown(text, { streaming = false, previous = [] } = {}) 
 			for (i++; i < lines.length && !lines[i].startsWith('```'); i++) code.push(lines[i]);
 			i++;
 			build = () => h('pre', { class: 'md-code' }, code.join('\n'));
-		} else if (/^#{1,6}\s/.test(line)) {
+		} else if (HEADING.test(line)) {
 			i++;
 			build = () => h('p', { class: 'md-heading' }, inline(line.replace(/^#+\s+/, '')));
-		} else if (isTableRow(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+		} else if (isTableRow(line) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1])) {
 			const rows = [];
 			for (; i < lines.length && isTableRow(lines[i]); i++) rows.push(tableCells(lines[i]));
 			const [head, , ...body] = rows;
@@ -52,7 +52,10 @@ export function renderMarkdown(text, { streaming = false, previous = [] } = {}) 
 	return blocks;
 }
 
+const HEADING = /^#{1,6}\s/;
 const LIST_ITEM = /^\s*([-*•]|\d+[.)])\s+/;
+/** The line under a table's header: dashes between pipes, optionally with alignment colons. */
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}/;
 
 /**
  * The lines of a reply still streaming that are safe to draw. The last line has no newline after it yet. A table is
@@ -82,7 +85,7 @@ function withoutOpenMarks(line) {
 }
 
 function startsBlock(line, next) {
-	return line.startsWith('```') || /^#{1,6}\s/.test(line) || LIST_ITEM.test(line) || (isTableRow(line) && /^\s*\|?\s*:?-{2,}/.test(next ?? ''));
+	return line.startsWith('```') || HEADING.test(line) || LIST_ITEM.test(line) || (isTableRow(line) && TABLE_RULE.test(next ?? ''));
 }
 
 const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);

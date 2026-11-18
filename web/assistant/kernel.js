@@ -69,11 +69,12 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 			});
 			starting = null;
 		})();
-		ready.catch(restart);
+		ready.catch(shutDown);
 		return ready;
 	}
 
-	function restart() {
+	/** Terminate the kernel's worker; the next run starts a fresh one. */
+	function shutDown() {
 		worker?.terminate();
 		worker = null;
 		ready = null;
@@ -81,7 +82,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 
 	/** The kernel broke, starting or running: say so to whoever waits on it, and start afresh next time. */
 	function fail(message) {
-		restart();
+		shutDown();
 		if (starting) starting.reject(new Error(`The Python kernel could not start: ${message}`));
 		else current?.finish({ status: 'failed', error: `The Python kernel failed and was restarted, losing its variables: ${message}` });
 	}
@@ -128,7 +129,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 	/** End the run in progress by restarting the kernel, if it is computing (not once it has ended or is asking). */
 	function end(status) {
 		if (current?.phase !== 'computing') return;
-		restart();
+		shutDown();
 		const error = status === 'timed out'
 			? `The run computed for more than ${RUN_LIMIT} s and was stopped by restarting the kernel.`
 			: 'The engineer stopped the run, which restarted the kernel.';
@@ -247,11 +248,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 		return c;
 	}
 
-	return {
-		run,
-		/** Shut the kernel down; the next run starts a fresh one. */
-		close: restart,
-	};
+	return { run, close: shutDown };
 }
 
 const buffersOf = (cells) => Object.values(cells).filter(ArrayBuffer.isView).map((array) => array.buffer);
