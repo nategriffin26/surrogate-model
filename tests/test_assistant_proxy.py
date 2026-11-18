@@ -1,10 +1,11 @@
 """The assistant route of the local server (`surrogate.server`), against a fake model service on this machine that
 replays a stream recorded from OpenRouter (`fixtures/assistant_tool_call.sse`: anthropic/claude-opus-5.5 streaming
-its thinking as text, then calling a tool); and the public site's Worker for the same route
-(`deploy/assistant-worker/`), whose tests run under Deno."""
+its thinking as text, then calling a tool); the public site's Worker for the same route (`deploy/assistant-worker/`)
+and the panel's Markdown, whose tests run under Deno; and the contract the two proxies share."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import subprocess
@@ -18,18 +19,23 @@ from pathlib import Path
 
 import pytest
 
+from surrogate import server as local_proxy
 from surrogate.server import (
     KERNEL_POLICY,
     KERNEL_WORKER,
     MAX_OUTPUT_TOKENS,
     MAX_REQUEST_BYTES,
     STREAM_TYPE,
+    WEB_ROOT,
     AssistantConfig,
     assistant_config,
     make_server,
 )
 
-RECORDED = (Path(__file__).parent / "fixtures" / "assistant_tool_call.sse").read_bytes()
+DENO = shutil.which("deno")
+TESTS = Path(__file__).parent
+WORKER = TESTS.parent / "deploy" / "assistant-worker" / "assistant.js"
+RECORDED = (TESTS / "fixtures" / "assistant_tool_call.sse").read_bytes()
 KEY = "sk-test-key"
 MODEL = "meta/muse-spark-1.3-contributor"
 CONVERSATION = {
@@ -80,8 +86,8 @@ def service() -> Iterator[FakeModelService]:
     fake.server.shutdown()
 
 
-def serve(config: AssistantConfig, root: Path | None = None) -> tuple[str, ThreadingHTTPServer]:
-    server = make_server(0, root=root, assistant=config) if root else make_server(0, assistant=config)
+def serve(config: AssistantConfig, root: Path = WEB_ROOT) -> tuple[str, ThreadingHTTPServer]:
+    server = make_server(0, root=root, assistant=config)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{server.server_address[1]}", server
 
@@ -121,7 +127,12 @@ def test_the_reply_stream_passes_through_unchanged(tool: str, service: FakeModel
 
 def test_the_server_sets_model_key_and_limits_and_the_page_cannot(tool: str, service: FakeModelService) -> None:
     """Catches the page choosing the model, the output limit or reasoning, and the key not being added."""
-    page_body = {**CONVERSATION, "model": "openai/some-expensive-model", "max_tokens": 1_000_000, "reasoning": {"effort": "max"}}
+    page_body = {
+        **CONVERSATION,
+        "model": "openai/some-expensive-model",
+        "max_tokens": 1_000_000,
+        "reasoning": {"effort": "max"},
+    }
     post(tool, json.dumps(page_body).encode())
     sent = service.requests[0]
     assert sent["headers"]["Authorization"] == f"Bearer {KEY}"
@@ -177,7 +188,11 @@ def test_status_names_the_model_and_never_the_key(tool: str) -> None:
 
 @pytest.mark.parametrize(
     ("environ", "secrets_text"),
-    [({}, None), ({"OPENROUTER_API_KEY": KEY, "ASSISTANT_ENABLED": "0"}, None), ({"ASSISTANT_ENABLED": "0"}, f"OPENROUTER_API_KEY={KEY}\n")],
+    [
+        ({}, None),
+        ({"OPENROUTER_API_KEY": KEY, "ASSISTANT_ENABLED": "0"}, None),
+        ({"ASSISTANT_ENABLED": "0"}, f"OPENROUTER_API_KEY={KEY}\n"),
+    ],
     ids=["no key", "switched off", "switched off with the key in the secrets file"],
 )
 def test_without_a_key_or_switched_off_the_route_answers_503(
@@ -187,7 +202,7 @@ def test_without_a_key_or_switched_off_the_route_answers_503(
     if secrets_text:
         secrets.write_text(secrets_text)
     config = assistant_config(environ, secrets)
-    base, server = serve(AssistantConfig(key=config.key, model=config.model, enabled=config.enabled, upstream=service.url))
+    base, server = serve(dataclasses.replace(config, upstream=service.url))
     get_status, _, get_body = get(base, "/api/assistant")
     post_status, _, post_body = post(base, json.dumps(CONVERSATION).encode())
     server.shutdown()
@@ -209,11 +224,12 @@ def test_the_key_and_model_come_from_the_environment_before_the_secrets_file(tmp
     ("body", "status"),
     [
         (b"not json", 400),
+        (b"[]", 400),
         (json.dumps({"messages": [], "tools": []}).encode(), 400),
         (json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode(), 400),
         (json.dumps({**CONVERSATION, "padding": "x" * MAX_REQUEST_BYTES}).encode(), 413),
     ],
-    ids=["not json", "no messages", "no tools", "too large"],
+    ids=["not json", "not an object", "no messages", "no tools", "too large"],
 )
 def test_malformed_or_oversized_requests_never_reach_the_model(
     tool: str, service: FakeModelService, body: bytes, status: int
@@ -257,16 +273,44 @@ def get_or_error(base: str, path: str) -> int | str:
         return type(error).__name__
 
 
-@pytest.mark.skipif(shutil.which("deno") is None, reason="the Worker's tests run under Deno")
+def run_deno_tests(script: str) -> None:
+    command = [DENO, "test", "--allow-read", str(TESTS / script)]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.skipif(DENO is None, reason="the panel's Markdown tests run under Deno")
 def test_the_panel_reads_reply_tables() -> None:
     """Runs tests/assistant_markdown.test.js: an escaped pipe inside a table cell stays in its cell."""
-    markdown_tests = Path(__file__).parent / "assistant_markdown.test.js"
-    done = subprocess.run([shutil.which("deno"), "test", "--allow-read", str(markdown_tests)], capture_output=True, text=True)
-    assert done.returncode == 0, done.stdout + done.stderr
+    run_deno_tests("assistant_markdown.test.js")
 
 
+@pytest.mark.skipif(DENO is None, reason="the Worker's tests run under Deno")
 def test_the_public_worker() -> None:
     """Runs tests/assistant_worker.test.js: requests over the Worker's limits get 429, and it keeps this contract."""
-    worker_tests = Path(__file__).parent / "assistant_worker.test.js"
-    done = subprocess.run([shutil.which("deno"), "test", "--allow-read", str(worker_tests)], capture_output=True, text=True)
-    assert done.returncode == 0, done.stdout + done.stderr
+    run_deno_tests("assistant_worker.test.js")
+
+
+SHARED = [
+    "UPSTREAM",
+    "DEFAULT_MODEL",
+    "REASONING_EFFORT",
+    "MAX_OUTPUT_TOKENS",
+    "MAX_REQUEST_BYTES",
+    "UNAVAILABLE",
+    "STREAM_TYPE",
+    "PYODIDE_CDN",
+    "KERNEL_POLICY",
+]
+
+
+@pytest.mark.skipif(DENO is None, reason="the Worker's module is read under Deno")
+def test_the_two_proxies_share_their_contract() -> None:
+    """Catches the model, a limit, a message or the kernel's policy changed in one proxy and not the other."""
+    names = json.dumps(SHARED)
+    script = (
+        f"const worker = await import({json.dumps(WORKER.as_uri())});"
+        f"console.log(JSON.stringify(Object.fromEntries({names}.map((name) => [name, worker[name] ?? null]))));"
+    )
+    done = subprocess.run([DENO, "eval", script], capture_output=True, text=True, check=True)
+    assert json.loads(done.stdout) == {name: getattr(local_proxy, name) for name in SHARED}

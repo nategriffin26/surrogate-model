@@ -10,7 +10,8 @@ adding the key, which never reaches the browser. The public site serves the same
   model's server-sent events, passed through unchanged. The model, reasoning effort, output limit and prompt
   caching are set here; anything else in the body is ignored.
 - Every refusal or failure is `{"error": {"message": "..."}}` with its status: 400 a malformed body, 413 too
-  large, 503 switched off, and the model service's own status and body when it refuses.
+  large, 503 switched off, 502 the model service unreachable, and the model service's own status and body when
+  it refuses.
 """
 
 from __future__ import annotations
@@ -24,10 +25,12 @@ from dataclasses import dataclass
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
+from urllib.parse import urlsplit
 
-ROOT = Path(__file__).resolve().parents[2]
-WEB_ROOT = ROOT / "web"
-SECRETS = ROOT / "local" / "secrets" / "assistant.env"
+REPO = Path(__file__).resolve().parents[2]
+WEB_ROOT = REPO / "web"
+SECRETS = REPO / "local" / "secrets" / "assistant.env"
 
 ASSISTANT_ROUTE = "/api/assistant"
 UPSTREAM = "https://openrouter.ai/api/v1/chat/completions"
@@ -77,7 +80,7 @@ def _read_env_file(path: Path) -> list[tuple[str, str]]:
 class ToolRequestHandler(SimpleHTTPRequestHandler):
     """Static files with the module types browsers insist on, never cached stale, and the assistant route."""
 
-    extensions_map = {
+    extensions_map: ClassVar[dict[str, str]] = {
         **SimpleHTTPRequestHandler.extensions_map,
         ".js": "text/javascript",
         ".mjs": "text/javascript",
@@ -90,38 +93,51 @@ class ToolRequestHandler(SimpleHTTPRequestHandler):
         self.assistant = assistant
         super().__init__(*args, **kwargs)
 
+    @property
+    def route(self) -> str:
+        """The request's path without its query."""
+        return urlsplit(self.path).path
+
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-cache")
-        if self.path.split("?")[0] == KERNEL_WORKER:
+        if self.route == KERNEL_WORKER:
             self.send_header("Content-Security-Policy", KERNEL_POLICY)
         super().end_headers()
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - the base class names it
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
     def do_GET(self) -> None:
-        if self.path.split("?")[0] != ASSISTANT_ROUTE:
+        if self.route != ASSISTANT_ROUTE:
             return super().do_GET()
         if not self.assistant.enabled:
             return self._send_json(503, {"enabled": False, "model": None, "error": {"message": UNAVAILABLE}})
         return self._send_json(200, {"enabled": True, "model": self.assistant.model})
 
     def do_POST(self) -> None:
-        if self.path.split("?")[0] != ASSISTANT_ROUTE:
+        if self.route != ASSISTANT_ROUTE:
             return self.send_error(404)
         if not self.assistant.enabled:
             return self._send_error(503, UNAVAILABLE)
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_REQUEST_BYTES:
+            # A client sends its whole body before it reads the answer; closing on unread bytes would reset the
+            # connection under it, and it would see a broken pipe instead of this refusal.
+            self._discard(length)
             return self._send_error(413, "This conversation is too long to send. Start a new one.")
         try:
             body = json.loads(self.rfile.read(length))
         except ValueError:
             return self._send_error(400, "The request body is not JSON.")
-        messages, tools = body.get("messages"), body.get("tools")
+        fields = body if isinstance(body, dict) else {}
+        messages, tools = fields.get("messages"), fields.get("tools")
         if not isinstance(messages, list) or not messages or not isinstance(tools, list):
             return self._send_error(400, "Send {messages, tools}: messages a non-empty list, tools a list.")
         self._forward(messages, tools)
+
+    def _discard(self, length: int) -> None:
+        while length > 0 and (chunk := self.rfile.read(min(length, 65536))):
+            length -= len(chunk)
 
     def _forward(self, messages: list, tools: list) -> None:
         upstream_body = {
@@ -131,7 +147,8 @@ class ToolRequestHandler(SimpleHTTPRequestHandler):
             "stream": True,
             "reasoning": {"effort": REASONING_EFFORT},
             "max_tokens": MAX_OUTPUT_TOKENS,
-            # The conversation's prefix is cached and moves forward each turn, so a turn pays full price only for its new part.
+            # The conversation's prefix is cached and moves forward each turn, so a turn pays full price only for
+            # its new part.
             "cache_control": {"type": "ephemeral"},
         }
         request = urllib.request.Request(

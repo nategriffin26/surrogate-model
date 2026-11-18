@@ -1,11 +1,11 @@
 // The public assistant route (deploy/assistant-worker/assistant.js): its limits, refusals and pass-through, with the
 // model service stubbed by a stream recorded from OpenRouter. Run with: deno test --allow-read tests/assistant_worker.test.js
 import { deepStrictEqual as assertEquals, ok as assert } from 'node:assert/strict';
-import { AssistantLimits, KERNEL_POLICY, LIMITS, Limiter, MAX_REQUEST_BYTES, STREAM_TYPE, TOOL_PATH, route } from '../deploy/assistant-worker/assistant.js';
+import { ALLOWED_ORIGINS, AssistantLimits, KERNEL_POLICY, LIMITS, Limiter, MAX_REQUEST_BYTES, STREAM_TYPE, TOOL_PATH, route } from '../deploy/assistant-worker/assistant.js';
 
 const RECORDED = await Deno.readFile(new URL('./fixtures/assistant_tool_call.sse', import.meta.url));
-const ORIGIN = 'https://nategriffin.dev';
-const API = `https://nategriffin.dev${TOOL_PATH}api/assistant`;
+const [ORIGIN] = ALLOWED_ORIGINS;
+const API = `${ORIGIN}${TOOL_PATH}api/assistant`;
 const CONVERSATION = { messages: [{ role: 'user', content: 'What is the lowest Cp on case 1?' }], tools: [] };
 const NOON = Date.parse('2026-11-19T12:00:00Z');
 
@@ -121,6 +121,17 @@ Deno.test("a refusal by the model service reaches the page as its own status and
 	}
 });
 
+Deno.test('an unreachable model service is a 502 with a message', async () => {
+	const service = stubModelService(() => Promise.reject(new TypeError('error sending request')));
+	try {
+		const response = await route(post(JSON.stringify(CONVERSATION)), fakeEnv());
+		assertEquals(response.status, 502);
+		assert((await response.json()).error.message.includes('could not be reached'));
+	} finally {
+		service.restore();
+	}
+});
+
 Deno.test('without a key or switched off the route answers 503, and other sites and oversized bodies are refused', async () => {
 	const service = stubModelService();
 	try {
@@ -133,6 +144,7 @@ Deno.test('without a key or switched off the route answers 503, and other sites 
 		assertEquals((await route(post(JSON.stringify(CONVERSATION), { origin: 'https://elsewhere.example' }), fakeEnv())).status, 403);
 		assertEquals((await route(post(JSON.stringify({ ...CONVERSATION, padding: 'x'.repeat(MAX_REQUEST_BYTES) })), fakeEnv())).status, 413);
 		assertEquals((await route(post(JSON.stringify({ messages: [] })), fakeEnv())).status, 400);
+		assertEquals((await route(post('null'), fakeEnv())).status, 400);
 		assertEquals(service.sent.length, 0);
 		assertEquals(await (await route(new Request(API), fakeEnv())).json(), { enabled: true, model: 'meta/muse-spark-1.3-contributor' });
 	} finally {
@@ -141,8 +153,8 @@ Deno.test('without a key or switched off the route answers 503, and other sites 
 });
 
 Deno.test("the kernel's worker script is served with its network policy and other paths are left to the site", async () => {
-	const worker = await route(new Request(`https://nategriffin.dev${TOOL_PATH}assistant/kernel-worker.js`), fakeEnv());
+	const worker = await route(new Request(`${ORIGIN}${TOOL_PATH}assistant/kernel-worker.js`), fakeEnv());
 	assertEquals(worker.headers.get('Content-Security-Policy'), KERNEL_POLICY);
 	assertEquals(await worker.text(), '// kernel');
-	assertEquals(await route(new Request(`https://nategriffin.dev${TOOL_PATH}index.html`), fakeEnv()), null);
+	assertEquals(await route(new Request(`${ORIGIN}${TOOL_PATH}index.html`), fakeEnv()), null);
 });

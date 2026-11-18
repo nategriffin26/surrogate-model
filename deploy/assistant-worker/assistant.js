@@ -1,19 +1,20 @@
 /**
  * The assistant's model route on the public site, as a Cloudflare Worker: the contract of the local server's
  * `/api/assistant` (src/surrogate/server.py), plus what a public page needs: a request limit per minute overall
- * and per visitor, a limit per day, an origin check and a size cap. The key's own $25 credit limit at OpenRouter
- * is the hard stop behind them. It also serves the kernel's worker script with the policy that keeps the Python
+ * and per visitor, a limit per day, an origin check and a size cap. A credit limit set on the key at OpenRouter is
+ * the hard stop behind them. It also serves the kernel's worker script with the policy that keeps the Python
  * kernel off the network.
  *
- * Mounting it on nategriffin.dev (~/Projects/site), with `web/` published under TOOL_PATH:
- * - this file copied beside worker.ts at publish; in worker.ts, `import { route, AssistantLimits } from './assistant.js'`,
- *   `export { AssistantLimits }` (a Worker's main module exports only its handler and its Durable Object classes),
- *   and first in `fetch`: `const handled = await route(request, env); if (handled) return handled;`
- * - wrangler.jsonc: the `durable_objects` binding ASSISTANT_LIMITS and its `migrations` entry from this folder's
- *   wrangler.jsonc, and `vars.ASSISTANT_MODEL` ("anthropic/claude-opus-5.5").
- * - the secret: `wrangler secret put OPENROUTER_API_KEY`.
- * Switch it off with `vars.ASSISTANT_ENABLED = "0"` (or by deleting the secret) and deploy; the rest of the tool
- * works without it. `worker.js` here mounts the route alone, for `wrangler dev`.
+ * Mounting it in the site's Worker, with `web/` published under TOOL_PATH as the Worker's static assets (`ASSETS`):
+ * - this file beside the site's main module, which imports `{ route, AssistantLimits }` from it, exports
+ *   `AssistantLimits` (a Worker's main module exports only its handler and its Durable Object classes), and in
+ *   `fetch` first runs `const handled = await route(request, env); if (handled) return handled;`
+ * - in the site's wrangler configuration, the limits' Durable Object and its migration:
+ *   `"durable_objects": { "bindings": [{ "name": "ASSISTANT_LIMITS", "class_name": "AssistantLimits" }] }` and
+ *   `"migrations": [{ "tag": "assistant-limits", "new_sqlite_classes": ["AssistantLimits"] }]`
+ * - the key as a secret: `wrangler secret put OPENROUTER_API_KEY`.
+ * `vars.ASSISTANT_MODEL` overrides DEFAULT_MODEL. Switch the assistant off with `vars.ASSISTANT_ENABLED = "0"` (or
+ * by deleting the secret) and deploy; the rest of the tool works without it.
  */
 
 /** Requests a minute from everyone, a minute from one visitor (by IP address, held in memory only), and a day. */
@@ -21,15 +22,15 @@ export const LIMITS = { perMinute: 120, perVisitorPerMinute: 30, perDay: 5000 };
 export const TOOL_PATH = '/surrogate-model/';
 export const ALLOWED_ORIGINS = ['https://nategriffin.dev'];
 
-// The rest of the contract, as in src/surrogate/server.py.
-const UPSTREAM = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'anthropic/claude-opus-5.5';
-const REASONING_EFFORT = 'high';
-const MAX_OUTPUT_TOKENS = 16000;
+// The rest of the contract, as in src/surrogate/server.py; tests/test_assistant_proxy.py holds the two equal.
+export const UPSTREAM = 'https://openrouter.ai/api/v1/chat/completions';
+export const DEFAULT_MODEL = 'anthropic/claude-opus-5.5';
+export const REASONING_EFFORT = 'high';
+export const MAX_OUTPUT_TOKENS = 16000;
 export const MAX_REQUEST_BYTES = 512 * 1024;
-const UNAVAILABLE = 'The assistant is not available in this copy.';
+export const UNAVAILABLE = 'The assistant is not available in this copy.';
 export const STREAM_TYPE = 'text/event-stream; charset=utf-8';
-const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/';
+export const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/';
 export const KERNEL_POLICY = `default-src 'none'; script-src ${PYODIDE_CDN} 'wasm-unsafe-eval'; connect-src ${PYODIDE_CDN}`;
 
 const REFUSALS = {
@@ -72,7 +73,7 @@ export async function route(request, env) {
 	} catch {
 		return refuse(400, 'The request body is not JSON.');
 	}
-	const { messages, tools } = body;
+	const { messages, tools } = body ?? {};
 	if (!Array.isArray(messages) || messages.length === 0 || !Array.isArray(tools)) {
 		return refuse(400, 'Send {messages, tools}: messages a non-empty list, tools a list.');
 	}
@@ -84,19 +85,24 @@ export async function route(request, env) {
 		return Response.json({ error: { message: REFUSALS[verdict.refused] } }, { status: 429, headers: { 'Retry-After': String(verdict.retryAfter) } });
 	}
 
-	const upstream = await fetch(UPSTREAM, {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			model,
-			messages,
-			tools,
-			stream: true,
-			reasoning: { effort: REASONING_EFFORT },
-			max_tokens: MAX_OUTPUT_TOKENS,
-			cache_control: { type: 'ephemeral' },
-		}),
-	});
+	let upstream;
+	try {
+		upstream = await fetch(UPSTREAM, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model,
+				messages,
+				tools,
+				stream: true,
+				reasoning: { effort: REASONING_EFFORT },
+				max_tokens: MAX_OUTPUT_TOKENS,
+				cache_control: { type: 'ephemeral' },
+			}),
+		});
+	} catch (error) {
+		return refuse(502, `The model service could not be reached (${error.message}).`);
+	}
 	if (!upstream.ok) {
 		return new Response(upstream.body, { status: upstream.status, headers: { 'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json' } });
 	}
