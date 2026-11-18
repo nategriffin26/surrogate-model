@@ -1,13 +1,9 @@
 # Data
 
-Subset of DrivAerML (Ashton et al., CC BY-SA 4.0; see `metadata/LICENSE.txt`), downloaded from
-https://huggingface.co/datasets/neashton/drivaerml. Only surface data is kept, per the assignment.
+The cars are from DrivAerML: N. Ashton, C. Mockett, M. Fuchs, L. Fliessbach, H. Hetmann, T. Knacke, N. Schonwald, V. Skaperdas, G. Fotiadis, A. Walle, B. Hupertz and D. Maddix, "DrivAerML: High-Fidelity Computational Fluid Dynamics Dataset for Road-Car External Aerodynamics", 2024, [arXiv:2408.11969](https://arxiv.org/abs/2408.11969). The dataset is at https://huggingface.co/datasets/neashton/drivaerml and is licensed CC BY-SA 4.0; the license text is `metadata/LICENSE.txt`. Only surface data is used, per the assignment.
 
 ```
-metadata/                 dataset README, license, and per-run tables for all ~500 runs
-  force_mom_all.csv         integrated Cd/Cl etc. (per-run frontal area reference)
-  force_mom_constref_all.csv  same, constant reference area
-  geo_parameters_all.csv    the 16 geometric morph parameters per run
+metadata/LICENSE.txt      the dataset's license
 raw/train/run_N/          the 10 cases the assignment allows for training
 raw/holdout/run_N/        unseen cases (run_1, run_500) for testing inference and the web app
 ```
