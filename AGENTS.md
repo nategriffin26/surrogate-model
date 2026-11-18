@@ -24,7 +24,7 @@ A surrogate for the surface pressure coefficient (`CpMeanTrim`) on DrivAerML car
 
 ## Changing the model
 
-After a change to the inputs or a retraining, in this order: `surrogate.preprocess` (inputs changed), `surrogate.train`, the same change in `web/engine/features.js` (inputs changed), `surrogate.export_web`, `surrogate.write_examples`, `uv run pytest`, then the README's input table and results from `artifacts/metrics.json`. The tests fail while a bundled example was computed with other weights.
+After a change to the inputs or a retraining, in this order: `surrogate.preprocess` (inputs changed), `surrogate.train`, the same change in `web/engine/features.js` (inputs changed), `surrogate.export_web`, `surrogate.export_training_cars` (preprocessing changed), `surrogate.write_examples`, `uv run pytest`, then the README's input table and results from `artifacts/metrics.json`. The tests fail while a bundled example was computed with other weights. The Model page (`web/app/model/`) has words and a drawing for each group of inputs, by the kind of its first input (`groups.js`, `drawings.js`); a new group stops the page with an error naming it until it has both.
 
 Choose between designs on cross-validation over the ten training cars. Two single runs that differ by less than `0.003` in CV $R^2$ or `0.004` in CV $C_{d,p}$ MAE are within seed-to-seed spread; compare on three seeds before concluding anything.
 

@@ -216,8 +216,12 @@ function answerFigure({ cpModels, cp, sigma, cfd }) {
 			cpModels.map((v, k) => h('i', { class: 'answer-network', style: `left: ${x(v)}`, title: `Network ${k + 1}` })),
 			h('i', { class: 'answer-mean', style: `left: ${x(cp)}` }),
 			cfd === null ? null : h('i', { class: 'answer-cfd', style: `left: ${x(cfd)}` })),
+		h('p', { class: 'answer-key' },
+			h('span', {}, h('i', { class: 'key-network' }), 'each network'),
+			h('span', {}, h('i', { class: 'key-mean' }), 'their mean'),
+			cfd === null ? null : h('span', {}, h('i', { class: 'key-cfd' }), 'CFD')),
 		h('dl', { class: 'answer-numbers' },
-			h('div', {}, h('dt', {}, h('i', { class: 'key-mean' }), 'Cp, mean of the five'), h('dd', { class: 'num' }, signed(cp, 3))),
-			h('div', {}, h('dt', {}, h('i', { class: 'key-network' }), 'Spread'), h('dd', { class: 'num' }, sigma.toFixed(3))),
-			cfd === null ? null : h('div', {}, h('dt', {}, h('i', { class: 'key-cfd' }), 'CFD'), h('dd', { class: 'num' }, signed(cfd, 3)))));
+			h('div', {}, h('dt', {}, 'Cp'), h('dd', { class: 'num' }, signed(cp, 3))),
+			h('div', {}, h('dt', {}, 'Spread'), h('dd', { class: 'num' }, sigma.toFixed(3))),
+			cfd === null ? null : h('div', {}, h('dt', {}, 'CFD'), h('dd', { class: 'num' }, signed(cfd, 3)))));
 }

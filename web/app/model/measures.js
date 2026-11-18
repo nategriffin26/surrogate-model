@@ -1,6 +1,6 @@
 // What the networks were told at a point, as places on and around the car, in world coordinates: each reading at
 // the place `engine/features.js` reads it, each regional box at the voxels it averages, each slice as the car's
-// own cut along the plane the raster row lies in. The stencil draws these; the view names them on hover.
+// own cut along the plane the raster row lies in. The page draws these on the car and in its flat drawings.
 
 import { featureLayout } from '../../engine/features.js';
 
@@ -13,19 +13,7 @@ const layoutOf = (definition) => {
 	return layouts.get(definition);
 };
 
-/**
- * The drawing layers, in the order the view lists them; each input belongs to one. `shown` is whether a layer is
- * drawn when the view opens: the cuts beside the point, drawn with the rest, crowd it.
- */
-export const LAYERS = [
-	{ id: 'position', label: 'Point and facing', kind: 'position', shown: true },
-	{ id: 'bend', label: 'Boxes', kind: 'bend', shown: true },
-	{ id: 'slice', label: 'Streamwise cut', kind: 'slice', shown: true },
-	{ id: 'neighbour', label: 'Cuts beside it', kind: 'neighbour', shown: false },
-	{ id: 'outline', label: 'Outline at its height', kind: 'outline', shown: true },
-];
-
-/** The layer an input is drawn in: its kind's, except a body-present flag, which belongs to the cut it is read in. */
+/** The kind of marks an input makes: its kind's, except a body-present flag, which belongs to the cut it is read in. */
 export function layerOf(column) {
 	if (column.kind === 'flag') return column.offset[1] === 0 ? 'slice' : 'neighbour';
 	return column.kind;
