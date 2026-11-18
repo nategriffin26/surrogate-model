@@ -1,6 +1,6 @@
 # Surface pressure surrogate for DrivAerML
 
-A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and a browser tool for working with the prediction on a dropped `.vtp` file. It is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On the two cars kept out of training (runs 1 and 500) it explains 94% of the variance of the CFD pressure (area-weighted $R^2$ `0.9425`).
+A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and a browser tool for working with the prediction on a dropped `.vtp` file. It is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On the two cars kept out of training (runs 1 and 500) it explains 96% of the variance of the CFD pressure (area-weighted $R^2$ `0.9631`).
 
 ## Setup
 
