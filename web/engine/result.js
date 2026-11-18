@@ -68,9 +68,9 @@
  *   Analyses run one at a time, in the order asked for, each to its end: a later one starts once
  *   every earlier one has sent its last event (`exact` and the last `fullFields`, or its failure) or
  *   was aborted, so a car is never left without its exact numbers. Its first `stage` event says it
- *   has started. Aborting `signal` abandons this analysis, waiting or running, and releases its memory:
- *   its promise rejects with a DOMException named 'AbortError' and its events stop, including those
- *   after it resolved.
+ *   has started. Aborting `signal` abandons this analysis, whether waiting, running or ended, and
+ *   releases what the engine holds of it: its promise rejects with a DOMException named 'AbortError'
+ *   if still pending, and its events stop, including those after it resolved.
  * @property {(result: Result, point: number[], normal: number[]) => Promise<Explanation>} explain
  *   For a result this engine analysed or one `loadResult` read: everything the model was told at a
  *   surface point and what each network answered. For the file analysed last, while the engine holds
@@ -79,6 +79,17 @@
  *   the working-mesh vertex nearest `point` that does not face away from `normal`, with the vertex's
  *   normal, the area-weighted mean of the polygon normals around it. `Explanation.at` says which.
  *   Rejects for a result computed with other network weights than the engine runs.
+ * @property {(result: Result) => boolean} canExportVtp  Whether `exportVtp` can run for `result`: true
+ *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
+ *   engine holds the last file's prediction only); never for a bundled example, nor on a device too
+ *   slow to predict every polygon. Check it when offering the export.
+ * @property {(result: Result, onProgress?: (fraction: number) => void) => Promise<File>} exportVtp
+ *   The analysed file with the prediction added as two Float32 cell arrays, one value per polygon:
+ *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). Every
+ *   other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and the File is
+ *   composed from slices of the original rather than a copy, so saving it streams from the user's
+ *   disk. Named `<file>_prediction.vtp`. `onProgress` reports 0 to 1. Rejects with an Error whose
+ *   message says what to do when `canExportVtp` is false or the original can no longer be read.
  * @property {Promise<string>} device  What runs the networks, short enough to show as is:
  *   "WebGPU (<adapter>)" when the browser names the adapter, "WebGPU", or "CPU (<n> threads)".
  * @property {Promise<ModelCard>} model  The model, for the model view.

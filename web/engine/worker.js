@@ -20,7 +20,7 @@
  * early.
  */
 
-import { readSurface } from './vtp.js';
+import { addCellArrays, readSurface } from './vtp.js';
 import { measureCells, frontalArea } from './geometry.js';
 import { buildContext, computeFeatures, describeColumns, featureLayout, kindsWithin } from './features.js';
 import { ensembleStatistics, loadEnsemble, predictOnCpu } from './network.js';
@@ -78,7 +78,10 @@ const jobs = new Map();
 let turn = Promise.resolve();
 /** The analysis running, if any. */
 let running = null;
-/** The file analysed last, with its polygons, for `explain`; let go when its analysis is aborted or the next starts. */
+/**
+ * The car analysed last: its file, polygons and lookups for `explain`, and once every polygon is
+ * predicted, that prediction for `exportVtp`. Let go when its analysis is aborted or the next starts.
+ */
 let lastCar = null;
 /** The lookups `explain` was last given for a result whose polygons are not held, made ready to use. */
 let explainedLookups = null;
@@ -96,33 +99,39 @@ self.onmessage = ({ data }) => {
     case 'abort': {
       const job = jobs.get(data.id);
       if (job) abort(job);
+      if (lastCar?.id === data.id) lastCar = null;
       break;
     }
     case 'explain':
       explain(data);
+      break;
+    case 'export':
+      exportVtp(data);
       break;
     default:
       throw new Error(`Unknown engine request ${data.type}`);
   }
 };
 
-/** One analysis, start to end, once those before it have ended; then the helpers let its car go. */
+/**
+ * One analysis, start to end, once those before it have ended. Starting lets go of the car analysed
+ * last and tells the page (`released`); the page lets go of aborted and failed analyses itself.
+ */
 async function run(job, file) {
   if (!job.aborted) {
     running = job;
+    if (lastCar) self.postMessage({ type: 'released', id: lastCar.id });
     lastCar = null;
     await analyze(job, file);
     running = null;
     engine.then(({ runners }) => runners.pool.broadcast({ type: 'release' }), () => {});
   }
   jobs.delete(job.id);
-  self.postMessage({ type: 'finished', id: job.id });
 }
 
 function abort(current) {
   current.aborted = true;
   current.controller.abort(new Aborted());
-  if (lastCar?.id === current.id) lastCar = null;
   if (current === running) engine.then(({ runners }) => runners.pool.clear(new Aborted()), () => {});
 }
 
@@ -248,18 +257,19 @@ async function analyze(current, file) {
       mesh,
       lookups: lookupsOf(car.context, ensemble.features),
     };
-    lastCar = { id: current.id, context: car.context, cells, average: car.average, working };
+    lastCar = { id: current.id, file, context: car.context, cells, average: car.average, working, prediction: null };
     post({ type: 'result', result });
 
     const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
     // The background prediction is the rest of this analysis: the next one waits for it.
-    await completeSurface(current, runners, post, {
+    const complete = await completeSurface(current, runners, post, {
       surface, car, shape, envelope: ensemble.envelope, working: { ...mesh, sourcePoint: working.sourcePoint },
       batches: [pickBatchDone, ringBatch], predicted, showFull: Boolean(full),
       affordable: cells.areas.length / cellsPerSecond <= FULL_PREDICTION_SECONDS,
     }).catch((error) => {
       if (!(error instanceof Aborted)) console.error(error);
     });
+    if (complete && lastCar?.id === current.id) lastCar.prediction = { cp: predicted.cp, sigma: predicted.sigma };
   } catch (error) {
     if (error instanceof Aborted || current.aborted) return;
     post({ type: 'failed', message: describeFailure(error, file) });
@@ -418,6 +428,7 @@ async function predictPoints(current, { gpu, pool, networks }, { centers, normal
  * predicted with the nearest working-mesh vertex standing in where none of a vertex's polygons is;
  * then, when affordable, every other polygon, cube by cube, the cubes where the working mesh's
  * pressure varies most first; and at the end the surface numbers summed over every polygon.
+ * @returns {Promise<boolean>} whether every polygon was predicted
  */
 async function completeSurface(current, runners, post, job) {
   const { surface, car, shape, envelope, working, batches, predicted, showFull, affordable } = job;
@@ -445,7 +456,7 @@ async function completeSurface(current, runners, post, job) {
     checkpoint(current);
     send();
   }
-  if (!affordable) return;
+  if (!affordable) return false;
 
   const exact = new SurfaceTally(runners.networks, car.frontal, car.bounds);
   for (const batch of batches) {
@@ -479,6 +490,7 @@ async function completeSurface(current, runners, post, job) {
   }, true);
   post({ type: 'exact', numbers: surfaceNumbers(exact, car, shape, envelope) });
   if (showFull) send();
+  return true;
 }
 
 /** For every file point, the index of the nearest working-mesh vertex, found in the helpers. */
@@ -622,6 +634,35 @@ function nearestPolygon({ cells, average, working }, vertex, point) {
     }
   }
   return cell;
+}
+
+/**
+ * The analysed file with its prediction added as cell arrays, beside the file's own (DrivAerML's CFD
+ * pressure coefficient is `CpMeanTrim`): `CpPredicted`, the networks' mean, and `CpSpread`, σ(Cp).
+ */
+async function exportVtp({ id, analysis }) {
+  const car = lastCar;
+  try {
+    if (car?.id !== analysis || !car.prediction) {
+      throw new Error('This car\'s prediction is no longer held, so it cannot be exported. Analyse its file again.');
+    }
+    let reported = 0;
+    const arrays = { CpPredicted: car.prediction.cp, CpSpread: car.prediction.sigma };
+    const vtp = await addCellArrays(car.file, arrays, (fraction) => {
+      if (fraction >= reported + 0.01) {
+        reported = fraction;
+        self.postMessage({ type: 'exportProgress', id, fraction });
+      }
+    });
+    const name = `${car.file.name.replace(/\.vtp$/i, '')}_prediction.vtp`;
+    self.postMessage({ type: 'exported', id, file: new File([vtp], name, { type: 'application/octet-stream' }) });
+  } catch (error) {
+    // Reading the file again fails with a DOMException when it was moved or changed after the drop.
+    const message = error instanceof DOMException
+      ? `${car.file.name} could not be read again; it may have been moved or changed since it was opened. Open it again to export its prediction.`
+      : error.message;
+    self.postMessage({ type: 'exportFailed', id, message });
+  }
 }
 
 /** The message for a failed analysis: the file's own problem as the reader words it, or what ran out. */

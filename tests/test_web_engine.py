@@ -115,11 +115,16 @@ def model_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return out
 
 
+# Every way VTK writes the binary data the reader accepts: inline base64, appended raw and appended
+# base64, each plain and zlib-compressed, with UInt32 and UInt64 headers; and ASCII.
+LAYOUTS = {"inline": {"mode": "binary"}, "appended-raw": {"mode": "appended", "encode": False}, "appended-base64": {"mode": "appended"}}
 ENCODINGS = {
-    "inline-uint64": {"mode": "binary"},
-    "appended-raw-zlib": {"mode": "appended", "encode": False, "compressor": "zlib"},
-    "appended-base64-zlib-uint32": {"mode": "appended", "compressor": "zlib", "header": "UInt32"},
-    "inline-zlib-uint32": {"mode": "binary", "compressor": "zlib", "header": "UInt32"},
+    **{
+        f"{layout}-{compression}-{header.lower()}": {**settings, "compressor": compressor, "header": header}
+        for layout, settings in LAYOUTS.items()
+        for compression, compressor in {"plain": None, "zlib": "zlib"}.items()
+        for header in ("UInt32", "UInt64")
+    },
     "ascii": {"mode": "ascii"},
 }
 
@@ -243,6 +248,56 @@ def test_a_second_analysis_waits_for_the_first_to_end(car: pv.PolyData, tmp_path
         assert own[-1] == {"car": name, "event": "fullFields", "fraction": 1}, f"the {name} car's last event: {own[-1]}"
     cars = [event["car"] for event in events]
     assert cars == sorted(cars), "the two analyses' events interleave: one ran before the other had ended"
+
+
+def _read_without_complaint(path: Path) -> pv.PolyData:
+    with pv.VtkErrorCatcher() as catcher:
+        mesh = pv.read(path)
+    assert not catcher.events, f"VTK complained reading {path.name}: {catcher.events}"
+    return mesh
+
+
+@requires_runtime
+@pytest.mark.parametrize("encoding", ENCODINGS, ids=list(ENCODINGS))
+def test_exported_vtp_is_the_file_with_the_prediction_added(car: pv.PolyData, tmp_path: Path, encoding: str) -> None:
+    """Catches an export that changes the file's own geometry or arrays, stores the prediction in
+    another polygon order than the file's, or writes a .vtp that VTK reads with complaints."""
+    path = _write_vtp(car, tmp_path / "car.vtp", **ENCODINGS[encoding])
+    outcome = _run_engine("export", path, tmp_path / "out")
+    assert outcome == {"name": "car_prediction.vtp", "exportableEarly": False, "exportable": True}
+
+    original = _read_without_complaint(path)
+    exported = _read_without_complaint(tmp_path / "out" / "exported.vtp")
+    np.testing.assert_array_equal(exported.points, original.points)
+    np.testing.assert_array_equal(exported.faces, original.faces)
+    assert set(exported.cell_data) == set(original.cell_data) | {"CpPredicted", "CpSpread"}
+    for name in original.cell_data:
+        np.testing.assert_array_equal(exported.cell_data[name], original.cell_data[name])
+
+    surface = read_vtp_surface(path)
+    features = extract_query_features(SurfaceContext.from_surface(surface), surface.centers, surface.normals)
+    expected = SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")).predict_features(features)
+    np.testing.assert_allclose(exported.cell_data["CpPredicted"], expected.cp_mean, atol=1e-4)
+    np.testing.assert_allclose(exported.cell_data["CpSpread"], expected.cp_std, atol=1e-4)
+
+
+@requires_runtime
+@pytest.mark.parametrize("encoding", ["inline-plain-uint64", "appended-base64-zlib-uint32"])
+def test_exporting_an_exported_file_replaces_its_prediction(car: pv.PolyData, tmp_path: Path, encoding: str) -> None:
+    """Catches a second export, of an exported file re-saved as ParaView would (its prediction inline
+    or appended), that adds another `CpPredicted` beside the first, which VTK would read in its place."""
+    first = tmp_path / "first"
+    _run_engine("export", _write_vtp(car, tmp_path / "car.vtp", **ENCODINGS[encoding]), first)
+    once = _read_without_complaint(first / "exported.vtp")
+    second = tmp_path / "second"
+    _run_engine("export", _write_vtp(once, tmp_path / "resaved.vtp", **ENCODINGS[encoding]), second)
+
+    text = (second / "exported.vtp").read_bytes()
+    for name in ("CpPredicted", "CpSpread"):
+        assert text.count(f'Name="{name}"'.encode()) == 1, f"{name} is in the file more than once"
+    again = _read_without_complaint(second / "exported.vtp")
+    np.testing.assert_allclose(again.cell_data["CpPredicted"], once.cell_data["CpPredicted"], atol=1e-6)
+    np.testing.assert_array_equal(again.cell_data["CpMeanTrim"], once.cell_data["CpMeanTrim"])
 
 
 @requires_runtime

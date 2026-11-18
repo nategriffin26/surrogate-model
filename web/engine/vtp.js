@@ -7,6 +7,9 @@
  * Handles inline binary (base64), appended raw and appended base64 data, zlib compression, UInt32
  * and UInt64 headers, ASCII arrays, and polygons of any size. Anything else is rejected with an Error
  * that says what is wrong and what to do about it.
+ *
+ * Also writes such a file back with cell arrays added (`addCellArrays`), composed from slices of the
+ * original rather than a copy of it.
  */
 
 /** The CFD pressure coefficient; the only solver array the engine reads, and only for comparison. */
@@ -664,6 +667,164 @@ async function skipWhitespace(source, position) {
     }
     position += bytes.length;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Writing the file back with cell arrays added
+
+/** Uncompressed size of the zlib blocks of an added array. */
+const DEFLATE_BLOCK_BYTES = 1 << 20;
+
+/**
+ * The file with Float32 cell arrays added, composed from slices of it rather than a copy: the new
+ * arrays go into its appended data (a new raw block when it has none), stored as its other binary
+ * data is (header width, zlib), and only their tags are added to its cell data. A cell array of the
+ * same name already in the file is replaced; every other byte is the file's own.
+ * @param {Blob} file  a file `readSurface` has read
+ * @param {Record<string, Float32Array>} arrays  by name, one value per polygon in the file's order
+ * @param {(fraction: number) => void} [onProgress]
+ * @returns {Promise<Blob>}
+ */
+export async function addCellArrays(file, arrays, onProgress = () => {}) {
+  const source = new SliceReader(file);
+  const names = Object.keys(arrays);
+  const layout = await locateCellData(source, names, (fraction) => onProgress(0.5 * fraction));
+  const encoding = layout.appended?.encoding ?? 'raw';
+  const end = await lastTagIn(file, layout.appended ? '</AppendedData>' : '</VTKFile>');
+
+  const stored = [];
+  for (const [k, values] of Object.values(arrays).entries()) {
+    const { header, body } = await binaryArray(values, layout.document);
+    const parts = encoding === 'raw' ? [header, ...body] : [header.toBase64(), concat(body, 0).toBase64()];
+    stored.push({ parts, length: parts.reduce((sum, part) => sum + part.length, 0) });
+    onProgress(0.5 + 0.5 * (k + 1) / names.length);
+  }
+  // Offsets count from just after the appended data's '_', in stored bytes or base64 characters.
+  let offset = layout.appended ? end - layout.appended.start : 0;
+  const tags = names.map((name, k) => {
+    const tag = `<DataArray type="Float32" Name="${name}" format="appended" offset="${offset}"/>\n`;
+    offset += stored[k].length;
+    return tag;
+  });
+  const cellData = layout.cellData.wrap ? `<CellData>\n${tags.join('')}</CellData>\n` : tags.join('');
+  const data = stored.flatMap((array) => array.parts);
+  const edits = [
+    ...layout.replaced.map(([from, to]) => ({ from, to, parts: [] })),
+    { from: layout.cellData.from, to: layout.cellData.to, parts: [cellData] },
+    { from: end, to: end, parts: layout.appended ? data : ['<AppendedData encoding="raw">\n_', ...data, '\n</AppendedData>\n'] },
+  ].sort((a, b) => a.from - b.from);
+
+  const parts = [];
+  let cursor = 0;
+  for (const edit of edits) {
+    parts.push(file.slice(cursor, edit.from), ...edit.parts);
+    cursor = edit.to;
+  }
+  parts.push(file.slice(cursor));
+  return new Blob(parts);
+}
+
+/**
+ * Walk the XML to where new cell array tags go: before `</CellData>`, or in place of an empty
+ * `<CellData/>`, or at the start of the piece when there is no cell data. Records the cell arrays
+ * named `names` (to be replaced), the file's binary settings and its appended data block.
+ */
+async function locateCellData(source, names, onProgress) {
+  const document = { headerBytes: 4, compressed: false };
+  /** @type {number[][]} [from, to) of each cell array to replace */
+  const replaced = [];
+  let cellData = null;
+  let pieceStart = null;
+  let inCellData = false;
+  let replacing = null;
+  let appended = null;
+  let position = 0;
+
+  walk: for (;;) {
+    const open = await source.indexOf(0x3c, position);
+    if (open < 0) break;
+    const close = await source.indexOf(0x3e, open);
+    if (close < 0) throw truncated(source);
+    const text = latin1.decode(await source.bytes(open + 1, close));
+    position = close + 1;
+    onProgress(position / source.size);
+    if (text.startsWith('?') || text.startsWith('!')) continue;
+    const name = /^\/?\w+/.exec(text)?.[0];
+    const attributes = parseAttributes(text);
+    const selfClosing = text.endsWith('/');
+
+    switch (name) {
+      case 'VTKFile':
+        readFileAttributes(document, attributes);
+        break;
+      case 'Piece':
+        pieceStart = position;
+        break;
+      case 'CellData':
+        if (selfClosing) cellData = { from: open, to: position, wrap: true };
+        else inCellData = true;
+        break;
+      case '/CellData':
+        cellData = { from: open, to: open, wrap: false };
+        inCellData = false;
+        break;
+      case 'DataArray': {
+        const replace = inCellData && names.includes(attributes.Name);
+        if (replace && selfClosing) replaced.push([open, position]);
+        else if (replace) replacing = open;
+        const format = attributes.format ?? 'ascii';
+        if (!selfClosing && format !== 'appended') position = await skipInline(source, document, { format }, position);
+        break;
+      }
+      case '/DataArray':
+        if (replacing !== null) replaced.push([replacing, position]);
+        replacing = null;
+        break;
+      case 'AppendedData': {
+        const underscore = await source.indexOf(0x5f, position);
+        if (underscore < 0) throw truncated(source);
+        appended = { encoding: attributes.encoding ?? 'base64', start: underscore + 1 };
+        break walk;
+      }
+      default:
+        break;
+    }
+  }
+  if (pieceStart === null) throw truncated(source);
+  return { document, replaced, appended, cellData: cellData ?? { from: pieceStart, to: pieceStart, wrap: true } };
+}
+
+/** Position of the last `tag` in the file, which ends with it and its parents' closing tags. */
+async function lastTagIn(file, tag) {
+  const from = Math.max(0, file.size - 4096);
+  const at = latin1.decode(new Uint8Array(await file.slice(from).arrayBuffer())).lastIndexOf(tag);
+  if (at < 0) throw new Error(`The file has no ${tag} at its end: it was cut off or changed since it was read. Analyse it again.`);
+  return from + at;
+}
+
+/** One array as the file stores binary data: a size header and the values, or VTK's table and zlib blocks. */
+async function binaryArray(values, { headerBytes, compressed }) {
+  const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+  if (!compressed) return { header: words(headerBytes, [bytes.length]), body: [bytes] };
+  const blocks = [];
+  for (let at = 0; at < bytes.length; at += DEFLATE_BLOCK_BYTES) blocks.push(bytes.subarray(at, at + DEFLATE_BLOCK_BYTES));
+  const body = await Promise.all(blocks.map(async (block) => {
+    const stream = new Blob([block]).stream().pipeThrough(new CompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }));
+  const table = [blocks.length, DEFLATE_BLOCK_BYTES, bytes.length % DEFLATE_BLOCK_BYTES, ...body.map((block) => block.length)];
+  return { header: words(headerBytes, table), body };
+}
+
+/** Little-endian unsigned words of `word` bytes. */
+function words(word, values) {
+  const bytes = new Uint8Array(word * values.length);
+  const view = new DataView(bytes.buffer);
+  values.forEach((value, i) => {
+    if (word === 4) view.setUint32(4 * i, value, true);
+    else view.setBigUint64(8 * i, BigInt(value), true);
+  });
+  return bytes;
 }
 
 // ---------------------------------------------------------------------------------------------

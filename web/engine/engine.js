@@ -8,11 +8,16 @@
 export function createEngine() {
   const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   let nextId = 1;
-  /** Analyses not yet ended, by id: the one the worker runs and those waiting their turn there. */
-  /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, release: () => void }>} */
+  /**
+   * Analyses the page has not let go, by id: those waiting their turn in the worker, the one it runs,
+   * and the last one, whose car the worker holds (for `explain` and, once `complete`, `exportVtp`).
+   */
+  /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, complete: boolean, release: () => void }>} */
   const analyses = new Map();
   /** @type {Map<number, { resolve: Function, reject: Function }>} */
   const explanations = new Map();
+  /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
+  const exports = new Map();
   /** Set when the worker cannot run at all: every analysis fails with it. */
   let unavailable = null;
   const device = deferred();
@@ -44,6 +49,17 @@ export function createEngine() {
         else request.reject(new Error(data.message));
         return;
       }
+      case 'exportProgress':
+        exports.get(data.id).onProgress(data.fraction);
+        return;
+      case 'exported':
+      case 'exportFailed': {
+        const request = exports.get(data.id);
+        exports.delete(data.id);
+        if (data.type === 'exported') request.resolve(data.file);
+        else request.reject(new Error(data.message));
+        return;
+      }
       default:
         break;
     }
@@ -70,13 +86,14 @@ export function createEngine() {
         current.on.fullFields?.(data.fields, data.fraction);
         break;
       case 'exact':
+        current.complete = true;
         current.on.exact?.(data.numbers);
         break;
       case 'failed':
         finish(current, new Error(data.message));
         break;
-      // Its last event has gone out: the worker has moved on to the next analysis.
-      case 'finished':
+      // The worker has let go of this car: the next analysis has started.
+      case 'released':
         finish(current);
         break;
       default:
@@ -91,11 +108,12 @@ export function createEngine() {
     device.reject(error);
     model.reject(error);
     for (const current of analyses.values()) finish(current, error);
-    for (const request of explanations.values()) request.reject(error);
+    for (const request of [...explanations.values(), ...exports.values()]) request.reject(error);
     explanations.clear();
+    exports.clear();
   };
 
-  /** End an analysis: reject it if still pending, stop its events and detach its abort listener. */
+  /** Let go of an analysis: reject it if still pending, stop its events and detach its abort listener. */
   function finish(current, error) {
     if (!current.settled) current.reject(error);
     current.settled = true;
@@ -116,7 +134,7 @@ export function createEngine() {
         worker.postMessage({ type: 'abort', id });
         finish(current, abortError());
       };
-      const current = { id, on, resolve, reject, settled: false, release: () => signal?.removeEventListener('abort', onAbort) };
+      const current = { id, on, resolve, reject, settled: false, complete: false, release: () => signal?.removeEventListener('abort', onAbort) };
       signal?.addEventListener('abort', onAbort, { once: true });
       analyses.set(id, current);
       worker.postMessage({ type: 'analyze', id, file });
@@ -137,7 +155,27 @@ export function createEngine() {
     });
   }
 
-  return { analyze, explain, device: device.promise, model: model.promise };
+  /** The analysis behind a result, while the worker still holds its car with every polygon predicted. */
+  function exportable(result) {
+    const current = analyses.get(analysed.get(result.lookups));
+    return current?.complete ? current : null;
+  }
+
+  function canExportVtp(result) {
+    return exportable(result) !== null;
+  }
+
+  function exportVtp(result, onProgress = () => {}) {
+    const current = exportable(result);
+    if (!current) return Promise.reject(new Error('This result cannot be exported: only the file analysed last can be, once every polygon is predicted.'));
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      exports.set(id, { resolve, reject, onProgress });
+      worker.postMessage({ type: 'export', id, analysis: current.id });
+    });
+  }
+
+  return { analyze, explain, canExportVtp, exportVtp, device: device.promise, model: model.promise };
 }
 
 /**

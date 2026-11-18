@@ -5,6 +5,7 @@
 //   bun tests/web_engine_outputs.mjs engine   <surface.vtp> <out dir> <model dir>
 //   bun tests/web_engine_outputs.mjs features <surface.vtp> <out dir> <feature definition.json>
 //   bun tests/web_engine_outputs.mjs sequence <surface.vtp> <out dir>
+//   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
 //
 // `parse` writes the parsed surface; `engine` adds the polygon geometry, the features at every
 // polygon centre, each network's Cp there, and the features again from the lookups as an example
@@ -12,6 +13,8 @@
 // polygon centre. A file the reader rejects gives outcome.json { "error": message } and nothing else.
 // `sequence` runs the whole engine (`createEngine`, with `web/model`) on the file twice, asking for
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
+// `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
+// predicted, as exported.vtp.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -54,6 +57,20 @@ if (mode === 'sequence') {
   const ended = () => events.some((e) => e.car === 'second' && (e.event === 'rejected' || (e.event === 'fullFields' && e.fraction === 1)));
   for (let waited = 0; waited < 60_000 && !ended(); waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
   writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ events }));
+  process.exit(0);
+}
+
+if (mode === 'export') {
+  const engine = createEngine();
+  const file = new File([readFileSync(path)], basename(path));
+  let exact;
+  const everyPolygon = new Promise((resolve) => { exact = resolve; });
+  const result = await engine.analyze(file, { exact });
+  const exportableEarly = engine.canExportVtp(result);
+  await everyPolygon;
+  const vtp = await engine.exportVtp(result);
+  writeFileSync(join(outDir, 'exported.vtp'), new Uint8Array(await vtp.arrayBuffer()));
+  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({ name: vtp.name, exportableEarly, exportable: engine.canExportVtp(result) }));
   process.exit(0);
 }
 
