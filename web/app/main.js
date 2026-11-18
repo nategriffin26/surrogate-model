@@ -138,7 +138,7 @@ const toolbar = createToolbar({
 	fit: () => run('fit_view', {}),
 	projection: (projection) => run('set_projection', { projection }),
 	toggle: (what) => toggle(what),
-});
+}, annotations.layers.el);
 $('[data-toolbar]').append(toolbar.el);
 
 function toggle(what) {
@@ -182,7 +182,6 @@ const panels = [
 	},
 	{ name: 'compare', label: 'Compare', ...comparison.panel },
 	{ name: 'variants', label: 'Variants', ...variants.panel },
-	{ name: 'layers', label: 'Layers', ...annotations.panel },
 ];
 
 const dock = createDock({
@@ -205,7 +204,6 @@ const dock = createDock({
 			view.dockCollapsed = !view.dockCollapsed;
 			update('dock', 'layout');
 		},
-		save: () => run('download_export', { export: view.dock }),
 	},
 });
 $('[data-dock]').append(dock.el);
@@ -214,7 +212,8 @@ $('[data-dock]').append(dock.el);
 
 const filesPanel = createFilesPanel({ session, workspace, engine, run, progress: (c) => progress.fraction(c) });
 $('.work').prepend(filesPanel.el);
-$('.brand').after(filesPanel.toggle);
+// The panel opens from the left edge, so its toggle leads the bar, above it.
+$('.brand').before(filesPanel.toggle);
 
 const tabs = $('[data-cases]');
 function renderTabs() {
@@ -398,6 +397,7 @@ function renderToolbar() {
 		display: view.display,
 		section: enabled && view.section.on,
 	});
+	annotations.layers.render();
 }
 
 function renderLegend() {
@@ -418,8 +418,7 @@ function applyViewer() {
 	// Two cars side by side take the whole view; the comparison table in the dock carries the card's numbers.
 	body.classList.toggle('side-by-side', shown.length > 1);
 	const s = view.section;
-	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
-	viewer.setKeptSections(c?.result && s.on ? section.keptLines() : []);
+	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, plane: Boolean(viewer.section?.plane) } : null);
 	viewer.setDisplay(view.display);
 	// The selection's tint, on the car it was worked out for; a new array only when the selection or the car changes.
 	const tint = ready() ? regions.tintOf(c) : null;
@@ -469,10 +468,9 @@ function present(c) {
 	const arriving = Boolean(c?.result && !c.arrived);
 	if (arriving) {
 		c.arrived = true;
-		// Every car opens on its centreline section; the sections kept in the plot and how it is drawn stay. A variant
-		// opens as its car was left, in the tab it was made from.
+		// Every car opens on its centreline section. A variant opens as its car was left, in the tab it was made from.
 		if (!c.variant) {
-			Object.assign(view.section, { on: true, axis: 1, offset: 0, clip: 0 });
+			Object.assign(view.section, { on: true, axis: 1, offset: 0 });
 			view.dock = 'section';
 			view.dockCollapsed = false;
 		}

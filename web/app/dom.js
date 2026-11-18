@@ -19,6 +19,9 @@ function build(element, attrs, children) {
 export const h = (tag, attrs = {}, ...children) => build(document.createElement(tag), attrs, children);
 export const s = (tag, attrs = {}, ...children) => build(document.createElementNS(SVG_NS, tag), attrs, children);
 
+/** A force coefficient's name as it is written on screen, C with its axis subscripted, after a prefix such as Δ. */
+export const coefficient = (axis, prefix = '') => [prefix, 'C', h('sub', {}, axis)];
+
 /** Replace an element's children. */
 export function put(element, ...children) {
 	element.replaceChildren();

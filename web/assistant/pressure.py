@@ -23,7 +23,7 @@ coroutines; await them.
 Drawing on the car, like plotting: every array goes to the page whole, never as JSON, so thousands of marks are one
 call. A case is coloured by a field of its own or painted; marks are drawn through `pressure.view` (the case on
 screen) or `case.view`. Each call draws into a named layer (`layer=`, made if new, added to if it exists), which the
-engineer can hide, rename, recolour or remove in the Layers tab.
+engineer can hide or remove from the Layers menu among the view tools.
 
     await car.show(w.spread / np.maximum(np.abs(w.cp), 0.05), name="Spread / |Cp|", cmap="viridis", range=(0, 1))
     await car.paint(w.cp < -1, "orange", layer="Cp below -1")          # a mask per cell, or colours per cell
@@ -159,7 +159,8 @@ class Case:
     """An open case of the tool: `id`, `name`, `kind` ('file', 'example' or 'variant'), `status` ('queued', 'analysing',
     'loading', 'ready' or 'failed'), `path`, its geometry file in the workspace when it has one, and `reference`, what
     its surfaces' `reference` field is: `{"file": ..., "array": ..., "mapping": ...}` (the file it came from, its cell
-    array, CFD when that is "CpMeanTrim", and how it reached these cells), or None."""
+    array, CFD when that is "CpMeanTrim", and how it reached these cells), or None; and for a variant, `variant_of`,
+    the id of the car it was made from (else None)."""
 
     def __init__(self, info: dict) -> None:
         self._update(info)
@@ -172,6 +173,7 @@ class Case:
         self.status: str = info["status"]
         self.path: str | None = info.get("path")
         self.reference: dict | None = info.get("reference")
+        self.variant_of: int | None = info.get("variant_of")
         self._version: int = info["version"]
 
     def __repr__(self) -> str:
@@ -183,6 +185,15 @@ class Case:
         if self._working is None or self._working[0] != self._version:
             self._working = (self._version, _surface(await _ask("working", {"case_id": self.id})))
         return self._working[1]
+
+    async def unchanged(self) -> Surface | None:
+        """For a variant: the car it was made from, predicted unchanged on this variant's own cells, so
+        `(await v.working()).cp - (await v.unchanged()).cp` is the change alone, cell by cell. None for a case that is
+        not a variant."""
+        if self.variant_of is None:
+            return None
+        cells = await _ask("unchanged", {"case_id": self.id})
+        return None if cells is None else _surface(cells)
 
     async def file(self) -> Surface | None:
         """The file's own polygons with the prediction at each, every one of them (8.8 million on a DrivAerML car): what

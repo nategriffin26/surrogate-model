@@ -1,15 +1,16 @@
-// The result card over the view: the readout of what is selected, or of the whole car when nothing is. Its area, its
-// area-weighted mean Cp and its pressure force coefficients (pressure only: the model predicts no wall shear), with a
-// selection's share of the car's; where Cp is lowest and highest, on a side view of the car and flown to on request;
-// then, for the whole car, its reference area and size, the dimensions outside the training range, the spread of Cx
-// across the networks and one line about the run.
+// The result card over the view: the readout of what is selected, or of the whole car when nothing is.
 //
-// The whole car's numbers are the Result's totals, summed over every polygon of the file. A selection's are summed
-// over the file's own polygons it picks, or on a bundled example over its simplified mesh's faces (regions.js), with
-// its shares over the same faces.
+// For the whole car: its pressure force coefficients (pressure only: the model predicts no wall shear), beside the
+// CFD's when the file carries CFD, with the spread of Cx across the networks; where Cp is highest and lowest, on a
+// side view of the car and flown to on request; then its reference area and size, and the dimensions outside the
+// training range. For a selection: its coefficients, area and area-weighted mean Cp, with its share of the car's.
+//
+// The whole car's numbers are the Result's totals, summed over every polygon of the file, and the CFD's are summed
+// over the same polygons. A selection's are summed over the file's own polygons it picks, or on a bundled example
+// over its simplified mesh's faces (regions.js), with its shares over the same faces.
 
-import { h, s } from './dom.js';
-import { millions, percent, seconds, signed } from './format.js';
+import { coefficient, h, s } from './dom.js';
+import { percent, signed } from './format.js';
 
 const DIMENSION_LABELS = { length: 'Length', width: 'Width', height: 'Height' };
 /** The card's content width, which the drawings fill: 264 px less its padding and border. */
@@ -40,7 +41,7 @@ function profileOf(mesh, bounds) {
 
 /**
  * What the card reads out for a case: the selection on it, with the whole car summed over the same faces for shares,
- * or the whole car from its totals. Extremes are {cp, point, normal}.
+ * or the whole car from its totals, with the CFD's when the file carries CFD. Extremes are {cp, point, normal}.
  */
 function subjectOf(c, regions) {
 	const at = (e) => e && { cp: e.value, point: e.center, normal: e.normal };
@@ -49,8 +50,39 @@ function subjectOf(c, regions) {
 		const { part, whole } = selection;
 		return { name: 'Selection', area: part.area, meanCp: part.meanCp, coefficients: part.coefficients, whole, extremes: { max: at(part.cpMax), min: at(part.cpMin) } };
 	}
-	const t = c.result.totals;
-	return { name: 'Whole car', area: t.area, meanCp: t.meanCp, coefficients: t.coefficients, whole: null, extremes: { max: at(t.cpMax), min: at(t.cpMin) } };
+	const r = c.result;
+	const t = r.totals;
+	return { name: 'Whole car', coefficients: t.coefficients, reference: r.referenceTotals?.coefficients ?? null, byNetwork: r.forces.cdPModels, whole: null, extremes: { max: at(t.cpMax), min: at(t.cpMin) } };
+}
+
+const COEFFICIENTS = [
+	['x', 'Pressure force along x on the frontal area: the pressure drag coefficient'],
+	['y', 'Pressure force along y on the frontal area: side force'],
+	['z', 'Pressure force along z on the frontal area: lift'],
+];
+
+/** The whole car's coefficients, with the CFD's beside them and the networks' spread of Cx under it. */
+function wholeCarRows(of, row) {
+	const cfd = of.reference;
+	const byNetwork = `${Math.min(...of.byNetwork).toFixed(3)}–${Math.max(...of.byNetwork).toFixed(3)}`;
+	return COEFFICIENTS.flatMap(([axis, title], i) => [
+		row(coefficient(axis), title, signed(of.coefficients[i], 3), cfd && signed(cfd[i], 3)),
+		i === 0 ? row([coefficient('x'), ' by network'], 'Lowest and highest Cx among the networks; the prediction is their mean', byNetwork, null, 'num quiet') : null,
+	]);
+}
+
+/** A selection's coefficients, area and mean Cp, with its share of the car's where a share means something. */
+function selectionRows(of, row) {
+	const share = (part, whole) => (Math.abs(whole) < 1e-9 ? '' : percent(part / whole));
+	const [cx, cy, cz] = of.coefficients;
+	const [wx, , wz] = of.whole.coefficients;
+	return [
+		row(coefficient('x'), COEFFICIENTS[0][1], signed(cx, 3), share(cx, wx)),
+		row(coefficient('y'), COEFFICIENTS[1][1], signed(cy, 3)),
+		row(coefficient('z'), COEFFICIENTS[2][1], signed(cz, 3), share(cz, wz)),
+		row(['Area'], 'Surface area', `${of.area.toFixed(2)} m²`, share(of.area, of.whole.area)),
+		row(['Mean Cp'], 'Area-weighted mean pressure coefficient', of.meanCp === null ? '–' : signed(of.meanCp, 3)),
+	];
 }
 
 /**
@@ -75,7 +107,7 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 			marker.hidden = !on;
 			if (!on) continue;
 			const p = viewer.project(spot.point);
-			marker.hidden = !p.visible || viewer.clipped(spot.point);
+			marker.hidden = !p.visible;
 			marker.style.transform = `translate(${p.x}px, ${p.y}px)`;
 		}
 	}
@@ -87,20 +119,20 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 	});
 
 	/**
-	 * The pressure force coefficients and the rest of the readout. A selection's share of the car's, where a share
-	 * means something, stands in a third column so the values stay aligned.
+	 * The readout as a grid whose third column holds what the values are set against: a selection's share of the
+	 * car's, or the CFD's for the whole car of a file that carries CFD. That column's head shares the title's row, so
+	 * it costs no line.
 	 */
 	function readout(of) {
-		const share = (part, whole) => h('dd', { class: 'result-share num', title: 'Share of the whole car\'s, summed over the same faces' }, whole == null || Math.abs(whole) < 1e-9 ? '' : percent(part / whole));
-		const row = (label, title, text, part, whole) => [h('dt', { title }, ...label), h('dd', { class: 'num' }, text), of.whole ? share(part, whole) : null];
-		const [cx, cy, cz] = of.coefficients;
-		const [wx, , wz] = of.whole?.coefficients ?? [];
-		return h('dl', { class: `result-forces${of.whole ? ' shares' : ''}` },
-			row(['C', h('sub', {}, 'x')], 'Pressure force along x on the frontal area: the pressure drag coefficient', signed(cx, 3), cx, wx),
-			row(['C', h('sub', {}, 'y')], 'Pressure force along y on the frontal area: side force', signed(cy, 3)),
-			row(['C', h('sub', {}, 'z')], 'Pressure force along z on the frontal area: lift', signed(cz, 3), cz, wz),
-			row(['Area'], 'Surface area', `${of.area.toFixed(2)} m²`, of.area, of.whole?.area),
-			row(['Mean Cp'], 'Area-weighted mean pressure coefficient', of.meanCp === null ? '–' : signed(of.meanCp, 3)));
+		const against = of.whole ? 'Share' : of.reference ? 'CFD' : null;
+		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), against ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
+		const rows = of.whole ? selectionRows(of, row) : wholeCarRows(of, row);
+		if (!against) return [h('div', { class: 'result-label' }, of.name), h('dl', { class: 'result-forces' }, rows)];
+		return h('dl', { class: 'result-forces against' },
+			h('dt', { class: 'result-label' }, of.name),
+			h('dd', { class: 'result-head' }, of.whole ? '' : 'Predicted'),
+			h('dd', { class: 'result-head', title: of.whole ? 'Share of the whole car\'s, summed over the same faces' : 'Summed from the CFD in the file, over the same polygons' }, against),
+			rows);
 	}
 
 	function extremes(c, of) {
@@ -135,21 +167,17 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 			h('div', { class: 'extreme-buttons' }, button('max', 'Cp max'), button('min', 'Cp min')));
 	}
 
-	/** The whole car's facts: its reference area and size, what lies outside training, the networks' spread, the run. */
+	/** The whole car's reference area and size, and which of its dimensions lie outside the training range. */
 	function facts(r) {
 		const g = r.geometry;
-		const f = r.forces;
 		const outside = r.coverage.dimensions.filter((d) => d.value < d.trainMin || d.value > d.trainMax);
-		const took = r.timings.reduce((sum, t) => sum + t.seconds, 0);
 		return [
 			h('dl', { class: 'result-facts' },
 				h('dt', {}, 'Frontal area'), h('dd', { class: 'num' }, `${g.frontalArea.toFixed(2)} m²`),
-				h('dt', {}, 'L × W × H'), h('dd', { class: 'num' }, `${g.length.toFixed(2)} × ${g.width.toFixed(2)} × ${g.height.toFixed(2)} m`),
-				h('dt', { title: 'Lowest and highest Cx among the networks; the prediction is their mean' }, 'Cx by network'), h('dd', { class: 'num' }, `${Math.min(...f.cdPModels).toFixed(3)} to ${Math.max(...f.cdPModels).toFixed(3)}`)),
+				h('dt', {}, 'L × W × H'), h('dd', { class: 'num' }, `${g.length.toFixed(2)} × ${g.width.toFixed(2)} × ${g.height.toFixed(2)} m`)),
 			outside.length === 0 ? null : h('div', { class: 'result-outside', role: 'note' },
 				h('div', {}, 'Outside the training range'),
 				outside.map((d) => h('div', { class: 'num' }, `${DIMENSION_LABELS[d.name]} ${d.value.toFixed(2)} m, trained ${d.trainMin.toFixed(2)} to ${d.trainMax.toFixed(2)} m`))),
-			h('div', { class: 'result-run num' }, `${millions(r.source.cells)} cells · ${seconds(took)} · ${r.device}`),
 		];
 	}
 
@@ -166,7 +194,6 @@ export function createResultCard({ host, overlay, viewer, active, regions, run }
 			return;
 		}
 		const card = h('div', { class: `result-card${c === shown ? ' settled' : ''}` },
-			h('div', { class: 'result-label' }, subject.name),
 			readout(subject),
 			extremes(c, subject),
 			subject.whole ? null : facts(c.result));

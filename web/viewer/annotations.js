@@ -504,12 +504,11 @@ class Occupancy {
 	}
 
 	/**
-	 * Whether the surface lies between `point` and the eye, along `towards` (unit), outside what `clipped` cuts away.
-	 * A point on a face turned away from the eye is behind the car; on one turned toward it, the walk starts where the
-	 * line is farther from the face than a cube's diagonal, so the face's own cubes are not taken for another surface.
+	 * Whether the surface lies between `point` and the eye, along `towards` (unit). A point on a face turned away from
+	 * the eye is behind the car; on one turned toward it, the walk starts where the line is farther from the face than
+	 * a cube's diagonal, so the face's own cubes are not taken for another surface.
 	 */
-	hides(point, towards, distance, clipped, normal) {
-		if (clipped(point)) return false;
+	hides(point, towards, distance, normal) {
 		let start = 2.5 * VOXEL;
 		if (normal) {
 			const facing = normal[0] * towards[0] + normal[1] * towards[1] + normal[2] * towards[2];
@@ -527,7 +526,7 @@ class Occupancy {
 				if ((i < 0 && towards[0] <= 0) || (i >= nx && towards[0] >= 0) || (j < 0 && towards[1] <= 0) || (j >= ny && towards[1] >= 0) || (k < 0 && towards[2] <= 0) || (k >= nz && towards[2] >= 0)) return false;
 				continue;
 			}
-			if (this.cells[i + nx * (j + ny * k)] && !clipped(p)) return true;
+			if (this.cells[i + nx * (j + ny * k)]) return true;
 		}
 		return false;
 	}
@@ -589,7 +588,6 @@ class Labels {
 		const camera = viewer.camera.position.toArray();
 		const look = new THREE.Vector3();
 		viewer.camera.getWorldDirection(look);
-		const clipped = (p) => viewer.clipped(p);
 		for (const item of this.items) {
 			const p = viewer.project(item.point);
 			const shown = p.visible && p.x > -40 && p.y > -40 && p.x < W + 40 && p.y < H + 40;
@@ -598,7 +596,7 @@ class Labels {
 				const towards = viewer.camera.isOrthographicCamera ? look.toArray().map((v) => -v) : camera.map((v, k) => v - item.point[k]);
 				const distance = Math.hypot(...towards);
 				if (item.normal === undefined) item.normal = occupancy.normalAt(item.point);
-				behind = occupancy.hides(item.point, towards.map((v) => v / distance), viewer.camera.isOrthographicCamera ? Infinity : distance, clipped, item.normal);
+				behind = occupancy.hides(item.point, towards.map((v) => v / distance), viewer.camera.isOrthographicCamera ? Infinity : distance, item.normal);
 			}
 			item.at = { x: Math.round(p.x), y: Math.round(p.y), behind, shown };
 		}

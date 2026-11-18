@@ -41,6 +41,8 @@ const MARGIN = 8;
 const OFF_PLANE = 0.002;
 /** A click this close to where the preview was looked up places the preview: the viewer's own tolerance for a click. */
 const CLICK_PX = 4;
+/** A screen used by touch, where a probe is placed by a tap. */
+const TOUCH = matchMedia('(pointer: coarse)');
 /** Stations along a section: at most this many, and this many when none is said. */
 const MOST_STATIONS = 200;
 const STATIONS = 20;
@@ -249,29 +251,23 @@ export function defineProbeOperations({ session, engine, workspace, update }) {
 
 	defineOperation({
 		name: 'place_probes_along_section',
-		description: `Make a probe set of stations along the live section (or a kept one, by section_id): count probes spaced evenly along the plot axis over one branch of the outer surface it cuts (upper or lower; for a z section, y > 0 or y < 0), each in the middle of its share of the branch. The set comes into use. At most ${MOST_STATIONS}.`,
+		description: `Make a probe set of stations along the section: count probes spaced evenly along the plot axis over one branch of the outer surface it cuts (upper or lower; for a z section, y > 0 or y < 0), each in the middle of its share of the branch. The set comes into use. At most ${MOST_STATIONS}.`,
 		parameters: {
 			type: 'object',
 			properties: {
 				count: { type: 'integer', description: `How many stations; default ${STATIONS}.` },
 				branch: { type: 'string', enum: ['upper', 'lower'], description: 'Default upper.' },
-				section_id: { type: 'integer', description: 'A kept section; default the live one.' },
 				name: { type: 'string', description: 'Name of the set; default the section and branch.' },
 				case_id: caseId,
 			},
 			additionalProperties: false,
 		},
-		async run({ count = STATIONS, branch = 'upper', section_id, name, case_id }) {
+		async run({ count = STATIONS, branch = 'upper', name, case_id }) {
 			const c = target(case_id);
 			if (!Number.isInteger(count) || count < 1 || count > MOST_STATIONS) throw new Error(`count must be a whole number from 1 to ${MOST_STATIONS}; got ${count}.`);
 			const b = ['upper', 'lower'].indexOf(oneOf('branch', branch, ['upper', 'lower']));
-			let plane = view.section;
-			if (section_id !== undefined) {
-				plane = view.section.kept.find((k) => k.id === section_id);
-				if (!plane) throw new Error(`There is no kept section ${section_id}.`);
-			} else if (!view.section.on) {
-				throw new Error('The section is off. Turn it on with set_section first, or give a kept section by section_id.');
-			}
+			const plane = view.section;
+			if (!plane.on) throw new Error('The section is off. Turn it on with set_section first.');
 			const points = sectionStations(c, plane, count, b);
 			if (points.length === 0) throw new Error('The section cuts no outer surface there. Move it onto the car.');
 			const axis = ['x', 'y', 'z'][plane.axis];
@@ -484,7 +480,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	function draw() {
 		const site = over && current?.c === active() ? current.site : null;
 		const pane = current?.pane ?? 0;
-		const centre = site && !viewer.clipped(site.point) ? viewer.project(site.point, pane) : null;
+		const centre = site ? viewer.project(site.point, pane) : null;
 		const field = fieldIn(pane);
 		const reading = site ? (VALUE[field] ? VALUE[field](site) : addedValue(current.c, field, current.face)) : null;
 		preview.hidden = !centre?.visible || reading === null || reading === undefined;
@@ -520,7 +516,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 			if (!site) return;
 			const p = viewer.project(site.point);
 			marker.firstChild.textContent = set.probes[i].label ?? set.probes[i].n;
-			marker.hidden = !p.visible || viewer.clipped(site.point);
+			marker.hidden = !p.visible;
 			marker.style.transform = `translate(${p.x}px, ${p.y}px)`;
 		});
 		draw();
@@ -533,8 +529,8 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 	/** The probe table: the set in use, read on the car shown. */
 	function table(c) {
 		const set = inUse();
-		// Placing a probe is a click on the car, which no control in the tab shows.
-		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, 'Click the car to place a probe');
+		// Placing a probe is a click or a tap on the car, which no control in the tab shows.
+		if (!set || set.probes.length === 0) return h('p', { class: 'plot-empty' }, `${TOUCH.matches ? 'Tap' : 'Click'} the car to place a probe`);
 		const sites = known(c, set);
 		const labels = set.probes.some((p) => p.label);
 		const remove = (n) => run('remove_probe', { number: n });
@@ -548,7 +544,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 					h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove probe ${p.n}`, onclick: () => remove(p.n) }, icon('close'))))))));
 	}
 
-	// ---- the dock's header: the set in use, stations along the section, copy, save and clear ----
+	// ---- the dock's header: the set in use, stations along the section, and clear; the table is exported from Export ----
 
 	const quietly = (promise) => promise.catch(() => {});
 	const setList = h('div', { class: 'menu-list', role: 'menu' });
@@ -605,14 +601,8 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 		branchButtons.forEach((b, k) => (b.textContent = names[k]));
 	});
 
-	const copy = h('button', { type: 'button', class: 'tool', onclick: () => {
-		const c = active();
-		const set = inUse();
-		readSet(engine, c, set).then((sites) => navigator.clipboard.writeText(probesCsv(c, set, sites).replaceAll(',', '\t')));
-	} }, icon('copy'), 'Copy');
-	const save = h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('download_export', { export: 'probes' })) }, icon('download'), 'CSV');
 	const clear = h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('clear_probes', {})) }, icon('close'), 'Clear');
-	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, picker, stations.el, copy, save, clear);
+	const actionsEl = h('div', { class: 'probe-actions' }, sets.el, picker, stations.el, clear);
 
 	/** The dock's header for the probes, brought up to date: the set in use and what can be done with it. */
 	function actions() {
@@ -620,8 +610,7 @@ export function createProbes({ host, engine, viewer, active, session, workspace,
 		setButton.replaceChildren(set ? set.name : 'No set', icon('chevron'));
 		stationsButton.disabled = !view.section.on;
 		stationsButton.title = view.section.on ? 'Probes at stations evenly spaced along the section' : 'Turn the section on to place probes along it';
-		const none = !set || set.probes.length === 0;
-		copy.disabled = save.disabled = clear.disabled = none;
+		clear.disabled = !set || set.probes.length === 0;
 		return actionsEl;
 	}
 

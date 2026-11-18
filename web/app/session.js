@@ -36,8 +36,8 @@ export class Session extends EventTarget {
 			field: 'cp',
 			maps: null,
 			display: { edges: false, ground: true },
-			/** The live section; the sections kept in the plot beside it; the plot against metres or a fraction of the car; the car shown or all. */
-			section: { on: true, axis: 1, offset: 0, clip: 0, kept: [], abscissa: 'metres', cars: 'shown' },
+			/** The section: whether it is drawn and plotted, the axis its plane is normal to, and where it crosses it, in metres. */
+			section: { on: true, axis: 1, offset: 0 },
 			dock: 'section',
 			dockCollapsed: false,
 			/** The faces picked out, as rules ({terms}: see regions.js), so every car shown picks the same part; or null. */

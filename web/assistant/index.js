@@ -12,11 +12,27 @@ import { describeState, systemPrompt } from './prompt.js';
 const PYTHON = 'run_python';
 /** Characters of a tool's result the model is sent; more is cut from the middle. */
 const RESULT_LIMIT = 16000;
-const SUGGESTIONS = [
-	'Open run 1 and show me the lowest pressure on the car',
-	'Plot Cp along the centreline of the roof',
-	'Study ride height at −20, 0 and +20 mm and tabulate the pressure drag',
-];
+/** What the panel says it does, before the first message. */
+const PURPOSE = 'Works this tool for you: reads the pressure, cuts sections, places probes, compares cars and makes variants.';
+
+/**
+ * The requests offered before the first message, about the car on screen (`car`, a case, or none), each one run and
+ * its answer checked on runs 1 and 500. Comparing with the CFD is offered only for a car that carries it (the bundled
+ * examples always do, so theirs is offered while they load too).
+ */
+function offers(car) {
+	if (!car || car.status === 'failed') {
+		return [
+			'Open DrivAerML run 1 and show me where the pressure is lowest',
+			'Open DrivAerML run 1, raise it 20 mm and show me where the pressure changes most',
+		];
+	}
+	return [
+		'Where is the pressure lowest on this car?',
+		car.kind === 'example' || car.result?.reference ? 'How close is the prediction to the CFD for this car?' : null,
+		'Raise this car 20 mm and show me where the pressure changes most',
+	].filter(Boolean);
+}
 
 const PYTHON_TOOL = {
 	type: 'function',
@@ -131,15 +147,37 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 				h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
 				h('button', { type: 'button', class: 'button', onclick: check }, 'Try again')));
 		} else if (next === 'idle' && messages.length === 0) {
-			put(thread, h('div', { class: 'assistant-start' }, SUGGESTIONS.map((text) => h('button', { type: 'button', class: 'suggestion', onclick: () => send(text) }, text))));
+			showStart();
 		}
 	}
+
+	/**
+	 * Before the first message: what the assistant does here and requests about the car on screen. A tap sends the
+	 * request, since each is complete as written; while the car is still being analysed they wait, disabled.
+	 */
+	let shownStart = '';
+	function showStart() {
+		const car = session.active;
+		const waiting = car && !['ready', 'failed'].includes(car.status);
+		const requests = offers(car);
+		const key = JSON.stringify([requests, waiting]);
+		if (key === shownStart && thread.querySelector('.assistant-start')) return;
+		shownStart = key;
+		put(thread, h('div', { class: 'assistant-start' },
+			h('p', { class: 'assistant-purpose' }, PURPOSE),
+			h('div', { class: 'assistant-offers' }, requests.map((text) => h('button', { type: 'button', class: 'offer', disabled: waiting, onclick: () => send(text) },
+				h('span', {}, text), forwardIcon())))));
+	}
+	session.addEventListener('change', () => {
+		if (status === 'idle' && messages.length === 0) showStart();
+	});
 
 	async function check() {
 		setStatus('checking');
 		const found = await availability();
 		setStatus(found === 'available' ? 'idle' : found);
-		if (found === 'available') input.focus();
+		// Not on touch screens, where focusing the box opens the keyboard over the panel before anything is asked.
+		if (found === 'available' && matchMedia('(pointer: fine)').matches) input.focus();
 	}
 
 	async function send(text) {
@@ -156,7 +194,8 @@ export async function mountAssistant(host, { session, engine, viewer, operations
 		// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
 		const { cases } = await runOperation('list_cases', {});
 		const before = messages.length;
-		messages.push({ role: 'user', content: `${describeState({ cases, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
+		const extents = session.cases.filter((c) => c.result).map((c) => ({ case_id: c.id, bounds_m: c.result.geometry.bounds.map((v) => Math.round(v * 1000) / 1000) }));
+		messages.push({ role: 'user', content: `${describeState({ cases, extents, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
 		actions.clear();
 		following = true;
 		turn = createTurn(text);
@@ -603,6 +642,10 @@ function clip(text, limit = RESULT_LIMIT) {
 
 function arrowIcon() {
 	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M8 13V3M3.5 7.5 8 3l4.5 4.5' }));
+}
+
+function forwardIcon() {
+	return s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d: 'M3 8h10M8.5 3.5 13 8l-4.5 4.5' }));
 }
 
 function downIcon() {

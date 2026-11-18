@@ -7,7 +7,7 @@
 import { caseSummary } from './cases.js';
 import { download, h, s } from './dom.js';
 import { EXAMPLES } from './examples.js';
-import { bytes } from './format.js';
+import { bytes, millions, seconds } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
@@ -231,6 +231,8 @@ export function addFiles(files, { workspace, run }) {
 }
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** What an analysis held and took: the file's cells, the time from reading to the last prediction, and the device. */
+const runFacts = (r) => [`${millions(r.source.cells)} cells`, seconds(r.timings.reduce((sum, t) => sum + t.seconds, 0)), r.device];
 
 /**
  * app: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
@@ -395,7 +397,8 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		const kind = kindOf(file.path);
 		const geometry = isGeometry(file.path) ? geometryState(file) : null;
 		const shown = geometry?.c && geometry.c === session.active;
-		const meta = [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)].join(' · ');
+		// Once analysed, what the file held and how long it took on this device replaces who added it and when.
+		const meta = (geometry?.ready ? runFacts(geometry.c.result) : [kind.label, bytes(file.size), file.by === 'assistant' ? 'Assistant' : 'You', clock(file.modified)]).join(' · ');
 		const name = editing?.path === file.path ? editor(file) : h('span', { class: 'file-name' }, baseOf(file.path));
 		const state = attaching?.path === file.path
 			? h('span', { class: 'file-state' }, attachingLabel())

@@ -1,9 +1,9 @@
-// Annotations: what the assistant or the engineer lays on a car to show something. A field of their own colours the
-// car as Pressure does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines,
-// arrows, region outlines, boxes and planes mark places in 3D. Everything is drawn in named layers that belong to the
-// case, listed in the dock's Layers tab, where each can be hidden, renamed, recoloured or removed, and kept while
-// other cases are shown. Every action is an operation, so a call from the assistant, a line of Python and a control
-// do the same thing; Python sends its arrays as typed arrays, never as JSON.
+// Annotations: what the assistant lays on a car to show something. A field of their own colours the car as Pressure
+// does, with its legend, range and probe readout; paint colours chosen faces; labels, points, lines, arrows, region
+// outlines, boxes and planes mark places in 3D. Everything is drawn in named layers that belong to the case, listed
+// in the Layers menu among the view tools, where each can be hidden or removed, and kept while other cases are shown.
+// Every action is an operation, so a call from the assistant, a line of Python and a control do the same thing;
+// Python sends its arrays as typed arrays, never as JSON.
 //
 // Faces are the working mesh's triangles (`engine.workingCells`); the viewer colours per vertex, so a value given per
 // face reaches it as the area-weighted mean of the faces around each vertex, as the model's own fields do.
@@ -365,8 +365,8 @@ function statistics(values, areas) {
 /**
  * app: { session, engine, viewer, view, overlay, update, run }. Defines the annotation operations and returns what
  * the rest of the app reads: `apply(c)` lays case c's annotations on the viewer, `fields(c)` its fields' keys,
- * `paintLabels(ctx, scale)` the labels for the picture, and `panel`, the dock's Layers tab. A field's values reach
- * the viewer, the probes and the plots through its entry in fields.js.
+ * `paintLabels(ctx, scale)` the labels for the picture, and `layers`, the Layers menu. A field's values reach the
+ * viewer, the probes and the plots through its entry in fields.js.
  */
 export function createAnnotations({ session, engine, viewer, view, overlay, update, run }) {
 	const drawing = new Annotations(viewer, overlay);
@@ -389,12 +389,12 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	const fieldLayer = (c, key) => storeOf(c).layers.find((layer) => layer.field?.key === key) ?? null;
 	const casesWith = (key) => session.cases.filter((c) => stores.has(c) && fieldLayer(c, key));
 
-	/** Something on case c changed: the viewer, the field list and the dock catch up. */
+	/** Something on case c changed: the viewer, the dock and the toolbar, with its fields and Layers menu, catch up. */
 	function changed(c, ...parts) {
 		const store = storeOf(c);
 		store.version++;
 		store.paint = null;
-		if (c === session.active) update('viewer', 'dock', ...parts);
+		if (c === session.active) update('viewer', 'dock', 'toolbar', ...parts);
 	}
 
 	/** The drawing layer called `name` on case c, made now if there is none (`width` px wide), restyled by `style`. */
@@ -478,7 +478,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		layer.field = { key, unit: String(unit), vertices, source };
 		offerField(key, label, layer.field.unit, source, { ramp: chosen, lo, hi, bands: 0 }, diverging);
 		view.field = key;
-		changed(c, 'toolbar', 'legend', 'markers');
+		changed(c, 'legend', 'markers');
 		return { layer: label, field: key, faces: faceCount, values: statistics(faces, cells.areas), scale: { min: lo, max: hi, ramp: chosen } };
 	}
 
@@ -856,7 +856,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 					layer.visible = Boolean(visible);
 				}
 			}
-			changed(c, 'toolbar', 'legend', 'markers');
+			changed(c, 'legend', 'markers');
 			return layerSummary(layer);
 		},
 	});
@@ -882,115 +882,41 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			const store = storeOf(c);
 			store.layers = store.layers.filter((layer) => !gone.includes(layer));
 			for (const layer of gone) if (layer.kind === 'field') withdrawField(layer.field.key);
-			changed(c, 'toolbar', 'legend', 'markers');
+			changed(c, 'legend', 'markers');
 			return { case_id: c.id, removed: gone.map((layer) => layer.name) };
 		},
 	});
-
-	const panel = createLayersPanel({ session, viewer, view, overlay, run, storeOf, stores, layerSummary });
 
 	return {
 		apply,
 		fields: (c) => (c && stores.has(c) ? storeOf(c).layers.filter((layer) => layer.kind === 'field').map((layer) => layer.field.key) : []),
 		paintLabels: (ctx, scale) => drawing.paintLabels(ctx, scale),
-		panel,
+		layers: createLayersMenu({ session, view, run, storeOf, stores, layerSummary }),
 	};
 }
 
-// ---- the dock's Layers tab -----------------------------------------------------------------------------------------------
+// ---- the Layers menu among the view tools -------------------------------------------------------------------------------
 
 const EYE = 'M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8zM8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 1 0 0-3.6';
 const EYE_SHUT = `${EYE}M2.5 13.5 13.5 2.5`;
-const LABEL = 'M2 4h7.5l4.5 4-4.5 4H2zM5 8h.01';
 const glyph = (d) => s('svg', { class: 'icon', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, s('path', { d }));
 
 /**
- * The Layers tab: each layer of the case shown with its visibility, colour, name, what it holds and who made it, and
- * a Label tool with which the engineer clicks the car and types a label.
+ * The Layers menu, there while the car shown has layers: each with its colour, name and what it holds, shown or hidden
+ * by its eye and removed by its cross, and every one removed at once.
  */
-function createLayersPanel({ session, viewer, view, overlay, run, storeOf, stores, layerSummary }) {
-	const el = h('div', { class: 'layers' });
-	const labelTool = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', title: 'Click the car to label a place', onclick: () => setLabelling(!labelling) }, glyph(LABEL), 'Label');
-	const clear = h('button', { type: 'button', class: 'tool', title: 'Remove every layer on this car', onclick: () => clearAll() }, icon('close'), 'Clear');
-	const controls = h('div', { class: 'layers-controls' }, labelTool, clear);
-	const entry = h('input', { class: 'layer-entry', type: 'text', maxlength: LABEL_CHARS, placeholder: 'Label', 'aria-label': 'Label text', spellcheck: 'false', hidden: true });
-	overlay.append(entry);
-	let labelling = false;
-	/** Where the label being typed points. */
-	let pending = null;
-
+function createLayersMenu({ session, view, run, storeOf, stores, layerSummary }) {
+	const button = h('button', { type: 'button', class: 'tool', title: 'Layers on this car' }, icon('layers'), h('span', { class: 'tool-label' }, 'Layers'));
+	const list = h('div', { class: 'menu-list layers-list' });
+	const layersMenu = menu(button, list, { align: 'right' });
 	const active = () => (session.active?.result ? session.active : null);
 	const layersOf = (c) => (c && stores.has(c) ? storeOf(c).layers : []);
 
-	function setLabelling(on) {
-		labelling = on;
-		labelTool.setAttribute('aria-pressed', String(on));
-		viewer.setTool(on ? { down() {}, move() {}, up: (at) => place(at) } : null);
-		if (!on) closeEntry();
-	}
-
-	async function place({ clientX, clientY }) {
-		const hit = await viewer.pick(clientX, clientY);
-		if (!hit || !labelling) return;
-		const r = overlay.getBoundingClientRect();
-		pending = { point: hit.point, c: active() };
-		entry.value = '';
-		entry.hidden = false;
-		entry.style.transform = `translate(${Math.round(clientX - r.left + 10)}px, ${Math.round(clientY - r.top - 12)}px)`;
-		entry.focus();
-	}
-
-	function closeEntry() {
-		pending = null;
-		entry.hidden = true;
-	}
-
-	entry.addEventListener('keydown', (e) => {
-		if (e.key === 'Escape') return closeEntry();
-		if (e.key !== 'Enter') return;
-		const text = entry.value.trim();
-		const at = pending;
-		closeEntry();
-		if (text && at?.c === active()) run('draw_labels', { case_id: at.c.id, layer: 'Notes', points: [at.point.map((v) => round(v, 5))], texts: [text] });
-	});
-	entry.addEventListener('blur', closeEntry);
-
-	function clearAll() {
-		const c = active();
-		for (const layer of [...layersOf(c)]) run('remove_layer', { case_id: c.id, layer: layer.name });
-	}
-
-	function rename(c, layer, cell) {
-		const input = h('input', { class: 'layer-rename', value: layer.name, 'aria-label': `Rename ${layer.name}`, spellcheck: 'false' });
-		const done = (keep) => {
-			const next = input.value.trim();
-			if (keep && next && next !== layer.name) run('set_layer', { case_id: c.id, layer: layer.name, name: next }).catch(() => render());
-			else render();
-		};
-		input.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter') done(true);
-			if (e.key === 'Escape') done(false);
-		});
-		input.addEventListener('blur', () => done(true));
-		cell.replaceChildren(input);
-		input.select();
-	}
-
-	function swatch(c, layer) {
-		if (layer.kind === 'field') {
-			const map = view.maps?.[layer.field.key];
-			return h('span', { class: 'layer-swatch', style: map ? `background:${rampCss(map.ramp)}` : null });
-		}
-		const button = h('button', { type: 'button', class: 'layer-swatch', title: 'Colour', style: `background:${layer.colour}` });
-		const choices = h('div', { class: 'layer-colours' }, Object.entries(PALETTE).map(([name, hex]) => h('button', {
-			type: 'button', class: 'layer-colour', title: name, style: `background:${hex}`, 'aria-pressed': String(hex === layer.colour),
-			onclick: () => {
-				colours.close();
-				run('set_layer', { case_id: c.id, layer: layer.name, colour: name });
-			},
-		})));
-		const colours = menu(button, choices);
-		return colours.el;
+	/** A swatch of a layer's colour, or of its field's ramp. */
+	function swatch(layer) {
+		if (layer.kind !== 'field') return h('span', { class: 'layer-swatch', style: `background:${layer.colour}` });
+		const map = view.maps?.[layer.field.key];
+		return h('span', { class: 'layer-swatch ramp', style: map ? `background:${rampCss(map.ramp)}` : null });
 	}
 
 	/** What a layer holds, in a few words. */
@@ -1005,24 +931,23 @@ function createLayersPanel({ session, viewer, view, overlay, run, storeOf, store
 	function render() {
 		const c = active();
 		const layers = layersOf(c);
-		clear.disabled = layers.length === 0;
-		if (!c || layers.length === 0) {
-			el.replaceChildren(h('p', { class: 'plot-empty' }, 'No layers'));
-			return;
+		layersMenu.el.hidden = layers.length === 0;
+		if (layers.length === 0) {
+			if (button.getAttribute('aria-expanded') === 'true') layersMenu.close();
+			return list.replaceChildren();
 		}
-		el.replaceChildren(h('table', { class: 'layers-table' }, h('tbody', {}, layers.map((layer) => {
-			const shown = layer.kind === 'field' ? view.field === layer.field.key : layer.visible;
-			const name = h('td', { class: 'layer-name', title: 'Double-click to rename' }, layer.name);
-			name.addEventListener('dblclick', () => rename(c, layer, name));
-			return h('tr', { 'data-layer': layer.name },
-				h('td', {}, h('button', { type: 'button', class: 'icon-button layer-eye', 'aria-pressed': String(shown), title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`, onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }) }, glyph(shown ? EYE : EYE_SHUT))),
-				h('td', {}, swatch(c, layer)),
-				name,
-				h('td', { class: 'layer-holds' }, holds(layer)),
-				h('td', { class: 'layer-by' }, layer.by === 'assistant' ? h('span', { title: 'Made by the assistant' }, icon('assistant')) : null),
-				h('td', {}, h('button', { type: 'button', class: 'icon-button', title: `Remove ${layer.name}`, onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }) }, icon('close'))));
-		}))));
+		list.replaceChildren(
+			...layers.map((layer) => {
+				const shown = layer.kind === 'field' ? view.field === layer.field.key : layer.visible;
+				return h('div', { class: 'layer-row', 'data-layer': layer.name },
+					h('button', { type: 'button', class: 'icon-button layer-eye', 'aria-pressed': String(shown), title: shown ? `Hide ${layer.name}` : `Show ${layer.name}`, onclick: () => run('set_layer', { case_id: c.id, layer: layer.name, visible: !shown }) }, glyph(shown ? EYE : EYE_SHUT)),
+					swatch(layer),
+					h('span', { class: 'layer-text' }, h('span', { class: 'layer-name' }, layer.name), h('span', { class: 'layer-holds' }, holds(layer))),
+					h('button', { type: 'button', class: 'icon-button', title: `Remove ${layer.name}`, onclick: () => run('remove_layer', { case_id: c.id, layer: layer.name }) }, icon('close')));
+			}),
+			h('hr', { class: 'menu-rule' }),
+			h('button', { type: 'button', role: 'menuitem', class: 'menu-item danger', onclick: () => { for (const layer of [...layers]) run('remove_layer', { case_id: c.id, layer: layer.name }); } }, 'Remove all'));
 	}
 
-	return { el, controls, render, count: () => layersOf(active()).length, stop: () => labelling && setLabelling(false) };
+	return { el: layersMenu.el, render };
 }

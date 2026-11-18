@@ -1,21 +1,23 @@
-// The dock under the 3D view: the section plot, the probe table, and panels such as the regions tool. The section
-// plot can be saved as CSV; the probe table has its own copy and save.
+// The dock under the 3D view: the section plot, the probe table, and panels such as the regions tool. What each
+// shows is exported from the Export menu.
 
 import { h } from './dom.js';
 import { icon } from './icons.js';
 
+/** The least height, in px, a section plot is drawn in beside a panel's numbers: below it the curves are too flat to read. */
+const SLOT_MIN_PX = 130;
+
 /**
- * view: the shared view (its dock tab and section). actions: tab(name), collapse(), save(). The section tool
- * supplies the section plot and its controls, the probes their table and its actions. Each of `panels` is a tab of
- * its own, {name, label, el, controls, render(), count?(), sectionSlot?}, its count shown in the tab when above zero.
- * A panel's `sectionSlot` is the place in its layout where the section plot sits, beside its numbers, while the
- * section is on.
+ * view: the shared view (its dock tab and section). actions: tab(name), collapse(). The section tool supplies the
+ * section plot and its controls, the probes their table and its actions. Each of `panels` is a tab of its own,
+ * {name, label, el, controls, render(), count?(), sectionSlot?}, its count shown in the tab when above zero. A
+ * panel's `sectionSlot` is the place in its layout where the section plot sits, beside its numbers, while the section
+ * is on.
  */
 export function createDock({ section, probes, panels, active, view, actions }) {
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
-	const save = h('button', { type: 'button', class: 'icon-button dock-save', title: 'Save plot as CSV', onclick: () => actions.save() }, icon('download'));
 	const collapse = h('button', { type: 'button', class: 'icon-button dock-collapse', title: 'Collapse plots', onclick: () => actions.collapse() }, icon('chevron'));
 	const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 	svg.setAttribute('class', 'plot');
@@ -24,7 +26,7 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 	// The key and the cursor readout sit together at the plot's top left, next to the axis they describe.
 	const sectionPlot = h('div', { class: 'section-plot' }, svg, h('div', { class: 'plot-head' }, key, readout));
 	const body = h('div', { class: 'dock-body' }, sectionPlot, table);
-	const el = h('div', { class: 'dock' }, h('div', { class: 'dock-head' }, tabs, controls, save, collapse), body);
+	const el = h('div', { class: 'dock' }, h('div', { class: 'dock-head' }, tabs, controls, collapse), body);
 	new ResizeObserver(() => drawPlotNow()).observe(body);
 
 	const panelShown = () => panels.find((p) => p.name === view.dock);
@@ -48,7 +50,9 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 			panel.render();
 		}
 		const host = sectionHost();
-		if (!host) {
+		// Beside a panel whose own rows leave the plot too little height (a phone held sideways), the numbers keep the
+		// dock's width rather than sit beside a plot too flat to read.
+		if (!host || (host !== body && host.parentElement.clientHeight < SLOT_MIN_PX)) {
 			sectionPlot.remove();
 			section.forget();
 			return;
@@ -65,8 +69,6 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 		const names = [['section', 'Section'], ['probes', counted('Probes', result ? probes.count() : 0)], ...panels.map((p) => [p.name, counted(p.label, result ? p.count?.() : 0)])];
 		tabs.replaceChildren(...names.map(([name, label]) =>
 			h('button', { type: 'button', role: 'tab', class: 'dock-tab', 'data-tab': name, disabled: !result, 'aria-selected': String(result && name === view.dock), onclick: () => actions.tab(name) }, label)));
-		save.hidden = view.dock !== 'section';
-		save.disabled = !result;
 		collapse.disabled = !result;
 		el.classList.toggle('collapsed', view.dockCollapsed);
 		collapse.title = view.dockCollapsed ? 'Expand plots' : 'Collapse plots';

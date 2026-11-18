@@ -12,8 +12,13 @@ const PLOT = { width: 900, height: 300 };
 
 const escape = (text) => String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 const number = (v, digits = 3) => (v === null || v === undefined ? '' : signed(v, digits));
+/** Markup set into a table as it is, for a coefficient's name; every other cell is text. */
+const markup = (html) => ({ html });
+/** A force coefficient's name as the screen writes it, C with its axis subscripted. */
+const coefficient = (axis) => `C<sub>${axis}</sub>`;
+const cell = (content) => content.html ?? escape(content);
 /** A table; with a null head, rows of a label and its value. */
-const table = (head, rows) => `<table>${head ? `<thead><tr>${head.map((text) => `<th>${escape(text)}</th>`).join('')}</tr></thead>` : ''}<tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escape(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+const table = (head, rows) => `<table>${head ? `<thead><tr>${head.map((content) => `<th>${cell(content)}</th>`).join('')}</tr></thead>` : ''}<tbody>${rows.map((row) => `<tr>${row.map((content) => `<td>${cell(content)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 const note = (text) => `<p class="basis">${escape(text)}</p>`;
 
 const STYLE = `
@@ -67,13 +72,13 @@ export function defineReport({ session, engine, regions, section, comparison, va
 		const s = caseSummary(c, null);
 		const point = (p) => `(${p.map((v) => signed(v, 2)).join(', ')}) m`;
 		const rows = [
-			['Cx', number(s.cx)], ['Cy', number(s.cy)], ['Cz', number(s.cz)], ['Mean Cp', number(s.mean_cp)],
+			[markup(coefficient('x')), number(s.cx)], [markup(coefficient('y')), number(s.cy)], [markup(coefficient('z')), number(s.cz)], ['Mean Cp', number(s.mean_cp)],
 			['Area', `${s.area_m2.toFixed(2)} m²`], ['Frontal area', `${s.reference_area_m2.toFixed(2)} m²`],
 			['Length × width × height', `${[s.length_m, s.width_m, s.height_m].map((v) => v.toFixed(2)).join(' × ')} m`],
-			['Cx by network', `${number(Math.min(...s.cx_by_network))} to ${number(Math.max(...s.cx_by_network))}`],
+			[markup(`${coefficient('x')} by network`), `${number(Math.min(...s.cx_by_network))} to ${number(Math.max(...s.cx_by_network))}`],
 			['Cp max', `${number(s.cp_max.value, 2)} at ${point(s.cp_max.center_m)}`],
 			['Cp min', `${number(s.cp_min.value, 2)} at ${point(s.cp_min.center_m)}`],
-			...(s.reference ? [['Cx of the CFD', number(s.reference.cx)], ['R² against the CFD', number(s.reference.r2)]] : []),
+			...(s.reference ? [[markup(`${coefficient('x')} of the CFD`), number(s.reference.cx)], ['R² against the CFD', number(s.reference.r2)]] : []),
 		];
 		const outside = s.outside_training.map((d) => `${d.dimension} ${d.value_m.toFixed(3)} m (training ${d.training_min_m.toFixed(3)} to ${d.training_max_m.toFixed(3)} m)`);
 		return `<h2>Whole car</h2>${table(null, rows)}${note(`Summed over ${s.totals_over}.`)}${outside.length ? note(`Outside the training range: ${outside.join('; ')}.`) : ''}`;
@@ -87,13 +92,13 @@ export function defineReport({ session, engine, regions, section, comparison, va
 		if (!picked.length) return '';
 		const read = picked.map((r) => ({ name: r.name, ...regions.readoutOf(c, r.terms) }));
 		const rows = read.map(({ name, readout: m }) => [name, m.area_m2.toFixed(3), number(m.cx), number(m.cz), number(m.mean_cp), percent(m.share_of_car.cx)]);
-		return `<h2>Regions</h2>${table(['Region', 'Area, m²', 'Cx', 'Cz', 'Mean Cp', 'Share of Cx'], rows)}${note(`Summed over ${read[0].summed_over}.`)}`;
+		return `<h2>Regions</h2>${table(['Region', 'Area, m²', markup(coefficient('x')), markup(coefficient('z')), 'Mean Cp', markup(`Share of ${coefficient('x')}`)], rows)}${note(`Summed over ${read[0].summed_over}.`)}`;
 	}
 
 	function sectionPart() {
 		if (!view.section.on) return '';
 		const { svg, key, plane } = section.picture(PLOT.width, PLOT.height);
-		const items = key.map(({ label, colour, dashed }) => `<span><i style="border-top: 2px ${dashed ? 'dashed' : 'solid'} ${escape(colour)}"></i>${escape(label)}</span>`);
+		const items = key.map(({ label, colour, width, opacity, dashed }) => `<span><i style="border-top: ${width}px ${dashed ? 'dashed' : 'solid'} ${escape(colour)}; opacity: ${opacity}"></i>${escape(label)}</span>`);
 		return `<h2>Section ${escape(plane)}</h2>${new XMLSerializer().serializeToString(svg)}<div class="key">${items.join('')}</div>`;
 	}
 
@@ -111,8 +116,8 @@ export function defineReport({ session, engine, regions, section, comparison, va
 		if (!out) return '';
 		const other = out.compared_with === 'cfd' ? 'CFD' : out.compared_with.name;
 		const mine = out.compared_with === 'cfd' ? 'Predicted' : c.name;
-		const columns = [['cx', 'Cx'], ['cz', 'Cz'], ['mean_cp', 'Mean Cp']];
-		const head = ['Region', ...columns.flatMap(([, label]) => [`${label}, ${mine}`, `${label}, ${other}`, `Δ${label}`]), 'RMS ΔCp'];
+		const columns = [['cx', coefficient('x')], ['cz', coefficient('z')], ['mean_cp', 'Mean Cp']];
+		const head = ['Region', ...columns.flatMap(([, name]) => [markup(`${name}, ${escape(mine)}`), markup(`${name}, ${escape(other)}`), markup(`Δ${name}`)]), 'RMS ΔCp'];
 		const rows = out.rows.map((row) => [row.name, ...columns.flatMap(([key]) => [number(row.this_car[key]), number(row.other[key]), number(row.difference[key])]), number(row.rms_dcp)]);
 		return `<h2>Compared with ${escape(other)}</h2>${table(head, rows)}${out.like_for_like ? note(out.like_for_like) : ''}${note(`RMS ΔCp is taken over ${out.rms_dcp_over}.`)}`;
 	}
@@ -125,7 +130,7 @@ export function defineReport({ session, engine, regions, section, comparison, va
 			[`${study.car.name}, unchanged`, number(unchanged.cx), '', number(unchanged.cz), '', number(unchanged.mean_cp), '', unchanged.frontal_area_m2.toFixed(3)],
 			...study.variants.map((v) => [v.name, number(v.cx), number(v.difference.cx), number(v.cz), number(v.difference.cz), number(v.mean_cp), number(v.difference.mean_cp), v.frontal_area_m2.toFixed(3)]),
 		];
-		return `<h2>Study</h2>${table(['Variant', 'Cx', 'ΔCx', 'Cz', 'ΔCz', 'Mean Cp', 'ΔMean Cp', 'Frontal area, m²'], rows)}${note(study.predicted_on)}`;
+		return `<h2>Study</h2>${table(['Variant', markup(coefficient('x')), markup(`Δ${coefficient('x')}`), markup(coefficient('z')), markup(`Δ${coefficient('z')}`), 'Mean Cp', 'ΔMean Cp', 'Frontal area, m²'], rows)}${note(study.predicted_on)}`;
 	}
 
 	async function reportOf(c) {

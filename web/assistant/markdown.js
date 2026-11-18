@@ -29,7 +29,7 @@ export function renderMarkdown(text, { streaming = false, previous = [] } = {}) 
 			build = () => h('p', { class: 'md-heading' }, inline(line.replace(/^#+\s+/, '')));
 		} else if (isTableRow(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
 			const rows = [];
-			for (; i < lines.length && isTableRow(lines[i]); i++) rows.push(cells(lines[i]));
+			for (; i < lines.length && isTableRow(lines[i]); i++) rows.push(tableCells(lines[i]));
 			const [head, , ...body] = rows;
 			build = () => h('div', { class: 'md-table' }, h('table', {},
 				h('thead', {}, h('tr', {}, head.map((cell) => h('th', {}, inline(cell))))),
@@ -87,7 +87,8 @@ function startsBlock(line, next) {
 
 const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
 const isTableLike = (line) => /^\s*\|/.test(line);
-const cells = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+/** A table row's cells, split at its pipes; an escaped pipe (\|, as in \|ΔCp\|) is a literal | inside its cell. */
+export const tableCells = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll('\\|', '|'));
 const numeric = (cell) => /^[−+-]?[\d.,]+\s*(%|m²|m|s|counts?)?$/.test(cell);
 
 /** Inline spans: `code`, **bold**, *italic*; everything else as text. */

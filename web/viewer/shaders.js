@@ -1,16 +1,5 @@
 // GLSL for the car, its mesh edges, picking and the ground. Fields are per-vertex attributes; every colour
-// mapping, the section lines, clipping and the arrival of a field are uniforms, so none of them touches a buffer.
-
-/** Sections kept in the plot beside the live one, each drawn on the car in its plot colour. */
-export const MAX_KEPT = 6;
-
-/** Shared by the car and the picking pass: clip against the section plane. */
-const CLIP = /* glsl */ `
-uniform vec4 uPlane;     // section plane: unit normal, offset
-uniform float uClip;     // 0 off, 1 keep the side below the offset, -1 keep the side above
-bool clipped(vec3 world) {
-	return uClip != 0.0 && uClip * (dot(world, uPlane.xyz) - uPlane.w) > 0.0;
-}`;
+// mapping, the section line and the arrival of a field are uniforms, so none of them touches a buffer.
 
 export const CAR_VERTEX = /* glsl */ `
 attribute float cp;
@@ -70,11 +59,8 @@ uniform float uGloss;
 uniform float uZmin;
 uniform float uOrtho;
 uniform vec3 uViewDir;
-uniform float uSection;      // 1 draws the section line, and the kept sections' lines
-#define MAX_KEPT ${MAX_KEPT}
-uniform vec4 uKept[MAX_KEPT];        // kept sections: unit normal, offset
-uniform vec3 uKeptColour[MAX_KEPT];
-uniform int uKeptCount;
+uniform float uSection;      // 1 draws the section line
+uniform vec4 uPlane;         // section plane: unit normal, offset
 uniform float uSelection;    // 1 shows the selection: faces outside it fade toward clay, its edge drawn in the accent
 uniform float uPaint;        // 1 shows paint on the car
 uniform vec4 uArrival;       // x of the front, front width, streak depth, 1 while the field is arriving
@@ -82,7 +68,6 @@ uniform float uFade;         // 0..1 fade from clay, used instead of the front u
 uniform vec4 uWait;          // while the networks predict: x of the predicted share's front, x of the nose, car length, 1
 uniform float uWaitTime;     // seconds, carrying the pulses downstream; still under reduced motion
 uniform vec3 uAccent;
-${CLIP}
 varying float vCp;
 varying float vSigma;
 varying float vCfd;
@@ -150,21 +135,14 @@ vec3 shaded(vec3 base) {
 	colour = mix(colour, mix(colour * 0.8, vec3(1.0), sky), uGloss * fresnel * 0.9);
 	vec3 H = normalize(uKey + V);
 	colour += uGloss * 0.35 * pow(max(dot(N, H), 0.0), 80.0);
-	// The inside of the shell, seen through a clip, reads darker than the outside.
+	// The inside of the shell, seen through an opening, reads darker than the outside.
 	if (!gl_FrontFacing) colour *= 0.62;
-	if (uSection > 0.5) {
-		colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
-		for (int i = 0; i < MAX_KEPT; i++) {
-			if (i >= uKeptCount) break;
-			colour = mix(colour, uKeptColour[i], 0.9 * lineAt(dot(vWorld, uKept[i].xyz) - uKept[i].w, 2.0));
-		}
-	}
+	if (uSection > 0.5) colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
 	return colour;
 }`;
 
 export const CAR_FRAGMENT = /* glsl */ `${CAR_COMMON}
 void main() {
-	if (clipped(vWorld)) discard;
 	float noise = uArrival.w > 0.0 || uWait.w > 0.0 ? streakNoise() : 0.0;
 	vec3 clay = uWait.w > 0.0 ? waitingClay(vWorld.x + 0.1 * uWait.z * noise) : uClay;
 	vec3 base = uField == 5 ? clay : fieldColour();
@@ -192,7 +170,6 @@ void main() {
  */
 export const WAIT_INFO_FRAGMENT = /* glsl */ `${CAR_COMMON}
 void main() {
-	if (clipped(vWorld)) discard;
 	float gain = shaded(vec3(1.0)).g - shaded(vec3(0.0)).g;
 	gl_FragColor = vec4(vWorld.x + 0.1 * uWait.z * streakNoise(), gain, 1.0, 1.0);
 }`;
@@ -228,22 +205,16 @@ attribute float edge;        // mean length of the edges meeting at this vertex,
 uniform float uPixel;        // world size of one pixel at unit distance (perspective) or anywhere (orthographic)
 uniform float uOrtho;
 varying float vPixels;
-varying vec3 vWorld;
 void main() {
-	vec4 world = modelMatrix * vec4(position, 1.0);
-	vWorld = world.xyz;
-	vec4 eye = viewMatrix * world;
+	vec4 eye = viewMatrix * modelMatrix * vec4(position, 1.0);
 	vPixels = edge / (uOrtho > 0.5 ? uPixel : uPixel * -eye.z);
 	gl_Position = projectionMatrix * eye;
 }`;
 
 export const EDGE_FRAGMENT = /* glsl */ `
 uniform vec3 uInk;
-${CLIP}
 varying float vPixels;
-varying vec3 vWorld;
 void main() {
-	if (clipped(vWorld)) discard;
 	// Edges fade out where they would crowd closer than a few pixels and turn the surface solid.
 	float a = smoothstep(3.0, 9.0, vPixels) * 0.5;
 	if (a <= 0.0) discard;
@@ -260,10 +231,8 @@ void main() {
 }`;
 
 export const PICK_FRAGMENT = /* glsl */ `
-${CLIP}
 varying vec3 vWorld;
 void main() {
-	if (clipped(vWorld)) discard;
 	gl_FragColor = vec4(vWorld, 1.0);
 }`;
 
@@ -341,21 +310,16 @@ void main() {
 export const SHADOW_DEPTH_VERTEX = /* glsl */ `
 uniform float uZmin;
 varying float vHeight;
-varying vec3 vWorld;
 void main() {
 	vec4 world = modelMatrix * vec4(position, 1.0);
-	vWorld = world.xyz;
 	vHeight = world.z - uZmin;
 	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
 export const SHADOW_DEPTH_FRAGMENT = /* glsl */ `
 uniform float uHeight;
-${CLIP}
 varying float vHeight;
-varying vec3 vWorld;
 void main() {
-	if (clipped(vWorld)) discard;
 	float d = 1.0 - clamp(vHeight / uHeight, 0.0, 1.0);
 	gl_FragColor = vec4(d * d, 0.0, 0.0, 1.0);
 }`;

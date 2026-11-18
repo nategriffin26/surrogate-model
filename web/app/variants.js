@@ -12,7 +12,7 @@
 import { boundsOf } from '../engine/geometry.js';
 import { writeVtp } from '../engine/vtp.js';
 import { finite, oneOf, round } from './checks.js';
-import { h } from './dom.js';
+import { coefficient, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { signed } from './format.js';
 import { icon } from './icons.js';
@@ -489,8 +489,8 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });
 	const el = h('div', { class: 'variants' }, form, problem, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
-	const csv = h('button', { type: 'button', class: 'tool', onclick: () => run('download_export', { export: 'study' }).catch(() => {}) }, icon('download'), 'CSV');
-	const controls = h('div', { class: 'variants-controls' }, csv);
+	// The study is saved from the Export menu, so the tab's header holds nothing of its own.
+	const controls = h('div', { class: 'variants-controls' });
 
 	async function submit(e) {
 		e.preventDefault();
@@ -530,15 +530,14 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		make.textContent = making ? 'Predicting…' : 'Make variant';
 		const { root, variants } = c?.result ? studyOf(c) : { root: null, variants: [] };
 		table.hidden = basis.hidden = !variants.length || !root.baseline;
-		csv.disabled = table.hidden;
 		if (table.hidden) return table.replaceChildren();
 		const base = numbers(root.baseline);
 		const row = (x, label, values, title) => h('tr', { class: x === c ? 'current' : '', title, onclick: () => run('show_case', { case_id: x.id }).catch(() => {}) },
 			h('td', { class: 'variants-name' }, label),
-			...['cx', 'cz', 'mean_cp'].flatMap((key) => [h('td', {}, signed(values[key], 3)), h('td', { class: 'variants-delta' }, x === root ? '' : signed(values[key] - base[key], 3))]),
+			...['cx', 'cz'].flatMap((key) => [h('td', {}, signed(values[key], 3)), h('td', { class: 'variants-delta' }, x === root ? '' : signed(values[key] - base[key], 3))]),
 			h('td', {}, values.frontal_area_m2.toFixed(3)));
 		table.replaceChildren(
-			h('thead', {}, h('tr', {}, ...['Variant', 'Cx', 'ΔCx', 'Cz', 'ΔCz', 'Mean Cp', 'ΔMean Cp', 'Frontal area, m²'].map((text) => h('th', {}, text)))),
+			h('thead', {}, h('tr', {}, ...['Variant', coefficient('x'), coefficient('x', 'Δ'), coefficient('z'), coefficient('z', 'Δ'), 'Frontal area, m²'].map((name) => h('th', {}, name)))),
 			h('tbody', {},
 				row(root, 'Unchanged', base, `${root.name}, predicted unchanged on the simplified mesh`),
 				...variants.map((v) => row(v, shortName(v), numbers(v.result), v.name))));

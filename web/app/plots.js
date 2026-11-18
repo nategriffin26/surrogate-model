@@ -15,11 +15,11 @@ const path = (points) => points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(
 
 /**
  * Draw a plot into an empty SVG of the given size. `x` and `y` are {domain: [lo, hi], label, invert?}; series are
- * lines {cls, points: [[x, y]], colour?, dashed?}. Returns the scales and the plotting box so a cursor can be drawn
- * later.
+ * lines {points: [[x, y]], colour?, width?, opacity?, dashed?}, cut at the frame. Returns the scales, the plotting box
+ * and the frame's clip so a cursor can be drawn later.
  */
 export function drawPlot(svg, { width, height, x, y, series }) {
-	const m = { l: 52, r: 16, t: 22, b: 30 };
+	const m = { l: 58, r: 16, t: 26, b: 30 };
 	svg.replaceChildren();
 	svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
 	svg.setAttribute('width', width);
@@ -38,29 +38,33 @@ export function drawPlot(svg, { width, height, x, y, series }) {
 		axis.append(s('text', { x: sx(t), y: height - m.b + 16, 'text-anchor': 'middle' }, signed(t, xt.digits)));
 	}
 	axis.append(s('text', { x: width - m.r, y: height - 3, 'text-anchor': 'end', class: 'unit' }, ...labelParts(x.label)));
-	axis.append(s('text', { x: m.l - 8, y: 12, 'text-anchor': 'end', class: 'unit' }, ...labelParts(y.label)));
+	// The value axis's name runs up its side, centred on the plotting box, where it cannot meet the key above.
+	const middle = (m.t + height - m.b) / 2;
+	axis.append(s('text', { x: 12, y: middle, 'text-anchor': 'middle', transform: `rotate(-90 12 ${middle})`, class: 'unit' }, ...labelParts(y.label)));
 	svg.append(axis);
 	const clip = `clip-${Math.random().toString(36).slice(2)}`;
 	svg.append(s('defs', {}, s('clipPath', { id: clip }, s('rect', { x: m.l, y: m.t, width: width - m.l - m.r, height: height - m.t - m.b }))));
 	const body = s('g', { 'clip-path': `url(#${clip})` });
 	for (const item of series) {
 		if (item.points.length < 2) continue;
-		const line = s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: `line ${item.cls}`, fill: 'none' });
+		const line = s('path', { d: path(item.points.map(([a, b]) => [sx(a), sy(b)])), class: 'line', fill: 'none' });
 		if (item.colour) line.style.stroke = item.colour;
+		if (item.width) line.style.strokeWidth = item.width;
+		if (item.opacity !== undefined) line.style.strokeOpacity = item.opacity;
 		if (item.dashed) line.setAttribute('stroke-dasharray', '5 3');
 		body.append(line);
 	}
 	svg.append(body);
-	return { svg, x: sx, y: sy, m, width, height };
+	return { svg, x: sx, y: sy, m, width, height, clip };
 }
 
-/** A vertical cursor at data x with a dot on each value ({value, cls, colour?}); null removes it. */
+/** A vertical cursor at data x with a dot on each value ({value, colour?}), cut at the frame; null removes it. */
 export function drawCursor(frame, at, dots = []) {
 	frame.svg.querySelector('.cursor')?.remove();
 	if (at === null) return;
-	const g = s('g', { class: 'cursor' }, s('line', { x1: frame.x(at), x2: frame.x(at), y1: frame.m.t, y2: frame.height - frame.m.b }));
-	for (const { value, cls, colour } of dots) {
-		const dot = s('circle', { cx: frame.x(at), cy: frame.y(value), r: 3.5, class: cls });
+	const g = s('g', { class: 'cursor', 'clip-path': `url(#${frame.clip})` }, s('line', { x1: frame.x(at), x2: frame.x(at), y1: frame.m.t, y2: frame.height - frame.m.b }));
+	for (const { value, colour } of dots) {
+		const dot = s('circle', { cx: frame.x(at), cy: frame.y(value), r: 3.5 });
 		if (colour) dot.style.stroke = colour;
 		g.append(dot);
 	}

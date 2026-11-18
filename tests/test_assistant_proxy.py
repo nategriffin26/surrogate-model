@@ -258,6 +258,13 @@ def get_or_error(base: str, path: str) -> int | str:
 
 
 @pytest.mark.skipif(shutil.which("deno") is None, reason="the Worker's tests run under Deno")
+def test_the_panel_reads_reply_tables() -> None:
+    """Runs tests/assistant_markdown.test.js: an escaped pipe inside a table cell stays in its cell."""
+    markdown_tests = Path(__file__).parent / "assistant_markdown.test.js"
+    done = subprocess.run([shutil.which("deno"), "test", "--allow-read", str(markdown_tests)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 def test_the_public_worker() -> None:
     """Runs tests/assistant_worker.test.js: requests over the Worker's limits get 429, and it keeps this contract."""
     worker_tests = Path(__file__).parent / "assistant_worker.test.js"

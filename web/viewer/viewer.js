@@ -9,7 +9,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
 import { FaceIndex, VertexGrid } from './picking.js';
-import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, MAX_KEPT, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
+import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 const SHADER_FIELD = { cp: 0, cfd: 1, error: 2, sigma: 3, drag: 4, none: 5 };
@@ -151,10 +151,6 @@ export class Viewer extends EventTarget {
 			uSelection: { value: 0 },
 			uPaint: { value: 0 },
 			uPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
-			uKept: { value: Array.from({ length: MAX_KEPT }, () => new THREE.Vector4()) },
-			uKeptColour: { value: Array.from({ length: MAX_KEPT }, () => new THREE.Color()) },
-			uKeptCount: { value: 0 },
-			uClip: { value: 0 },
 			uArrival: { value: new THREE.Vector4() },
 			uFade: { value: 1 },
 			uWait: { value: new THREE.Vector4() },
@@ -181,8 +177,6 @@ export class Viewer extends EventTarget {
 		this.edgeMaterial = new THREE.ShaderMaterial({
 			uniforms: {
 				uInk: this.uniforms.uInk,
-				uPlane: this.uniforms.uPlane,
-				uClip: this.uniforms.uClip,
 				uOrtho: this.uniforms.uOrtho,
 				uPixel: { value: 1 },
 			},
@@ -207,7 +201,6 @@ export class Viewer extends EventTarget {
 		this.scene.add(this.car, this.edges, this.ground.object, this.lattice.object, this.plane);
 
 		this.pickMaterial = new THREE.ShaderMaterial({
-			uniforms: { uPlane: this.uniforms.uPlane, uClip: this.uniforms.uClip },
 			vertexShader: PICK_VERTEX,
 			fragmentShader: PICK_FRAGMENT,
 			side: THREE.DoubleSide,
@@ -400,43 +393,18 @@ export class Viewer extends EventTarget {
 		this.requestRender();
 	}
 
-	/** A section plane normal to an axis: {axis: 0|1|2, offset, clip: -1|0|1, plane: whether to draw the plane}, or null. */
+	/** A section plane normal to an axis: {axis: 0|1|2, offset, plane: whether to draw the plane}, or null. */
 	setSection(section) {
 		const u = this.uniforms;
-		const before = u.uPlane.value.toArray().concat(u.uClip.value);
 		this.section = section;
 		u.uSection.value = section ? 1 : 0;
-		u.uClip.value = section ? section.clip : 0;
 		if (section) {
 			const n = [0, 0, 0];
 			n[section.axis] = 1;
 			u.uPlane.value.set(...n, section.offset);
 		}
-		// The floor shadow follows the clipped car.
-		const after = u.uPlane.value.toArray().concat(u.uClip.value);
-		if (this.placed && (before[4] !== 0 || after[4] !== 0) && before.some((v, i) => v !== after[i])) {
-			this.ground.bakeShadow(this.renderer, this.placed.geometry, this.bounds);
-		}
 		this.placePlane();
 		this.requestRender();
-	}
-
-	/** Sections kept beside the live one, drawn on the car while it shows: [{axis, offset, colour}], at most MAX_KEPT. */
-	setKeptSections(kept) {
-		const u = this.uniforms;
-		if (kept.length > MAX_KEPT) throw new Error(`At most ${MAX_KEPT} kept sections can be drawn; got ${kept.length}.`);
-		kept.forEach(({ axis, offset, colour }, i) => {
-			u.uKept.value[i].set(...[0, 1, 2].map((k) => (k === axis ? 1 : 0)), offset);
-			u.uKeptColour.value[i].set(colour);
-		});
-		u.uKeptCount.value = kept.length;
-		this.requestRender();
-	}
-
-	/** Whether a world point lies in the part of the car the section clips away. */
-	clipped(point) {
-		const s = this.section;
-		return Boolean(s?.clip) && s.clip * (point[s.axis] - s.offset) > 0;
 	}
 
 	/**
@@ -1155,8 +1123,7 @@ export class Viewer extends EventTarget {
 		renderer.copyFramebufferToTexture(this.still.frame);
 		// The car's pixels change only with the view, the mesh and the section; a fading backdrop leaves them be.
 		const camera = this.camera;
-		const kept = u.uKept.value.slice(0, u.uKeptCount.value).flatMap((plane) => plane.toArray());
-		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uClip.value, u.uSection.value, ...kept].join();
+		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uSection.value].join();
 		if (this.still.key !== key) {
 			// Cleared to transparent black, so a pixel off the car reads 0 where the car's read 1.
 			renderer.setRenderTarget(this.still.info);

@@ -93,7 +93,7 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				const reference = c.result?.reference ?? null;
 				// A case's arrays change with its result and with the reference attached to it.
 				if (c.result && versions.get(c.result)?.reference !== reference) versions.set(c.result, { reference, number: nextVersion++ });
-				return { id: c.id, name: c.name, kind: c.kind, status: c.status, path: c.path ?? null, reference, version: c.result ? versions.get(c.result).number : 0 };
+				return { id: c.id, name: c.name, kind: c.kind, status: c.status, path: c.path ?? null, reference, variant_of: c.variant?.root.id ?? null, version: c.result ? versions.get(c.result).number : 0 };
 			}),
 		};
 	}
@@ -207,6 +207,12 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				case 'working':
 					// Shared with the viewer, so copied on the way rather than moved.
 					return { value: engine.workingCells(readyCase(payload.case_id).result) };
+				case 'unchanged': {
+					// The car a variant was made from, predicted unchanged on the variant's own cells (the variant's
+					// baseline), so subtracting it cell by cell leaves the change alone.
+					const baseline = readyCase(payload.case_id).variant?.root.baseline;
+					return { value: baseline ? engine.workingCells(baseline) : null };
+				}
 				case 'file': {
 					const cells = await engine.fileCells(readyCase(payload.case_id).result);
 					return { value: cells, transfer: cells ? buffersOf(cells) : [] };

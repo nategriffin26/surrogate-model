@@ -27,12 +27,11 @@ export class Ground {
 		);
 		this.object.renderOrder = 1;
 		this.object.visible = false;
-		this.clip = { uPlane: shared.uPlane, uClip: shared.uClip };
 
 		// The shadow bake's scenes and materials live as long as the floor: making them per bake would compile their
-		// shader programs again on every case switch and every clip change.
+		// shader programs again on every case switch.
 		this.depth = new THREE.ShaderMaterial({
-			uniforms: { uZmin: { value: 0 }, uHeight: { value: 0.7 }, ...this.clip },
+			uniforms: { uZmin: { value: 0 }, uHeight: { value: 0.7 } },
 			vertexShader: SHADOW_DEPTH_VERTEX,
 			fragmentShader: SHADOW_DEPTH_FRAGMENT,
 			side: THREE.DoubleSide,
@@ -52,7 +51,7 @@ export class Ground {
 		this.targets = [];
 	}
 
-	/** Lay the floor under a car and bake its contact shadow from the car's geometry, as clipped by the section. */
+	/** Lay the floor under a car and bake its contact shadow from the car's geometry. */
 	place(renderer, geometry, bounds) {
 		const [xmin, xmax, ymin, ymax, zmin] = bounds;
 		this.object.position.z = zmin;

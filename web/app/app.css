@@ -9,17 +9,21 @@ body {
 	grid-template-rows: 48px minmax(0, 1fr);
 	height: 100vh;
 	height: 100dvh;
+	/* The page is laid under the whole screen (viewport-fit=cover); the tool keeps clear of a notch and home bar. */
+	padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 body.resizing { user-select: none; }
 body.resizing * { cursor: inherit !important; }
 
 /* ---- top bar ---- */
-.topbar { display: flex; align-items: stretch; gap: 14px; min-width: 0; padding: 0 12px 0 18px; border-bottom: 1px solid var(--hair); background: #fff; position: relative; z-index: 20; }
-.brand { display: flex; align-items: center; gap: 9px; flex: none; padding-right: 6px; }
+/* Files leads, above the panel it opens from the left edge; then the tool's name, the open cars, and on the right the
+   model page, Export and the assistant. The cars' tabs shrink, their names ellipsized, before anything else gives way. */
+.topbar { display: flex; align-items: stretch; gap: 14px; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--hair); background: #fff; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; flex: none; padding-right: 4px; }
 .mark { width: 22px; height: 17px; color: var(--link); }
 .app-name { font-family: var(--head); font-weight: 600; font-size: 16px; color: var(--heading); letter-spacing: -0.005em; white-space: nowrap; }
-.cases { display: flex; align-items: stretch; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; border-left: 1px solid var(--hair); padding-left: 10px; }
-.case-tab { display: flex; align-items: center; flex: none; max-width: 220px; border-bottom: 2px solid transparent; color: var(--muted); transition: color 0.15s, border-color 0.15s; }
+.cases { display: flex; align-items: stretch; gap: 2px; flex: 1 1 auto; min-width: 0; border-left: 1px solid var(--hair); padding-left: 10px; }
+.case-tab { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 220px; border-bottom: 2px solid transparent; color: var(--muted); transition: color 0.15s, border-color 0.15s; }
 .case-tab:hover { color: var(--ink); }
 .case-tab[aria-selected="true"] { color: var(--heading); border-bottom-color: var(--heading); }
 .case-open { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; padding: 0 4px 0 10px; font-weight: 500; font-size: 13px; }
@@ -61,7 +65,7 @@ body:is([data-screen="start"], [data-screen="notice"]) :is(.toolbar-host, .dock-
 body[data-mode="model"] .work { grid-template-columns: 0px minmax(0, 1fr); }
 body[data-mode="model"] :is(.stage, .files, .assistant-host, .files-button, .cases, [data-export], .assistant-button) { display: none !important; }
 :is(.assistant-button, .files-button)[aria-pressed="true"] { border-color: var(--link); color: var(--link); background: var(--tint); }
-.files-button { align-self: center; margin-left: -4px; }
+.files-button { align-self: center; flex: none; }
 
 .dock-resizer { position: relative; z-index: 6; }
 .dock-resizer::before { content: ""; position: absolute; inset: -4px 0; cursor: row-resize; }
@@ -191,7 +195,7 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 	position: absolute; left: 6px; bottom: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
 	background: var(--heading); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center;
 }
-.cut-marker { position: absolute; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--link); }
+.cut-marker { position: absolute; left: -6px; top: -6px; width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid var(--heading); box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
 .cut-marker.lower { border-style: dotted; }
 
 /* ---- first screen ---- */
@@ -299,31 +303,31 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .dock-tab { height: 100%; color: var(--muted); font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
 .dock-tab:not(:disabled):hover { color: var(--ink); }
 .dock-tab[aria-selected="true"] { color: var(--heading); border-bottom-color: var(--heading); }
-.dock-controls { display: flex; align-items: center; min-width: 0; }
-.cut-controls { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 12px; border-left: 1px solid var(--hair); }
+.dock-controls { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
+.cut-controls { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; padding-left: 12px; border-left: 1px solid var(--hair); }
 .control-label { color: var(--muted); font-size: 12.5px; }
-.cut-controls .segmented + .control-label { margin-left: 6px; }
 .position { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
 .number { width: 64px; height: 26px; padding: 0 6px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--heading); }
 .number:focus { border-color: var(--link); outline: none; }
 .unit { color: var(--faint); font-size: 12px; }
-.slider { width: 120px; accent-color: var(--link); }
-.dock-save, .dock-save[hidden] + .dock-collapse { margin-left: auto; }
-.plot-head { position: absolute; top: 4px; left: 60px; right: 16px; display: flex; align-items: center; gap: 22px; font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.slider { flex: 0 1 200px; min-width: 80px; margin-left: 6px; accent-color: var(--link); }
+.dock-collapse { flex: none; margin-left: auto; }
+.plot-head { position: absolute; top: 4px; left: 58px; right: 16px; display: flex; align-items: center; gap: 22px; font-size: 12px; color: var(--muted); white-space: nowrap; pointer-events: none; }
 .plot-key { display: flex; align-items: center; gap: 12px; }
 .plot-key:empty { display: none; }
 .key-item { display: inline-flex; align-items: center; gap: 5px; }
 .key-item i { display: inline-block; width: 16px; border-top: 2px solid var(--link); }
-.key-item.unplotted { color: var(--faint); }
-/* A kept section's remove button shows on hover, the one control in the key that takes the pointer. */
-.key-remove { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--faint); opacity: 0; pointer-events: auto; transition: opacity 0.12s; }
-.key-item:hover .key-remove, .key-remove:focus-visible { opacity: 1; }
-.key-remove:hover { background: var(--tint); color: var(--heading); }
-.key-remove .icon { width: 10px; height: 10px; }
-.key-item:has(.key-remove) { pointer-events: auto; }
 .dock-body { position: relative; min-height: 0; overflow: hidden; }
-.section-plot { position: absolute; inset: 0; }
-.plot { position: absolute; inset: 0; display: block; }
+.section-plot { position: absolute; inset: 0; container-type: inline-size; }
+/* Beside a table the plot is too narrow for its key and the cursor's reading on one line; the reading, which names each
+   curve itself, takes the key's place while it shows, without the position the cursor line marks on the axis. */
+@container (max-width: 720px) {
+	.plot-head:has(.plot-readout:not(:empty)) .plot-key { display: none; }
+	.plot-readout { margin-left: 0; gap: 10px; }
+	.plot-readout > span { display: none; }
+}
+/* A finger moving over the plot moves its cursor rather than scrolling the page. */
+.plot { position: absolute; inset: 0; display: block; touch-action: none; }
 .dock-table { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; }
 /* A panel's numbers and a plot share the dock's width: the section beside a table, the histogram beside the selection. */
 .dock-row { display: flex; gap: 28px; height: 100%; min-height: 0; }
@@ -333,7 +337,7 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .section-slot { position: relative; flex: 1; min-width: 300px; }
 .section-slot:empty { display: none; }
 .plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 13px; }
-.plot-readout { display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
+.plot-readout { display: flex; gap: 14px; margin-left: auto; font-variant-numeric: tabular-nums; }
 .plot-readout b { color: var(--heading); font-weight: 600; }
 
 svg .axis text { font: 11px var(--body); fill: var(--faint); font-variant-numeric: tabular-nums; }
@@ -353,21 +357,20 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .result-card.settled { animation: none; }
 .side-by-side .result-card { display: none; }
 .result-label { font-weight: 600; font-size: 12.5px; color: var(--heading); }
-.headline { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
-.symbol { color: var(--muted); font-size: 14px; font-style: italic; }
-.symbol sub { font-size: 10px; font-style: normal; }
 .result-forces { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0 0; font-size: 12.5px; }
+.result-forces.against { grid-template-columns: max-content minmax(0, 1fr) minmax(44px, max-content); margin-top: 0; }
 .result-forces dt { color: var(--muted); }
-.result-forces dt sub { font-size: 9.5px; }
+/* Subscripts kept off the line height, so a coefficient's name leaves its row, and the sticky table head, as tall as text. */
+:is(.result-forces dt, .compare-table th, .variants-table th) sub { font-size: 0.76em; line-height: 0; }
 .result-forces dd { margin: 0; color: var(--heading); font-weight: 600; text-align: right; }
-.result-forces.shares { grid-template-columns: max-content minmax(0, 1fr) 44px; }
-.result-forces .result-share { color: var(--muted); font-weight: 400; }
+.result-forces .result-label { color: var(--heading); margin-bottom: 4px; }
+.result-forces .result-head { align-self: end; margin-bottom: 4px; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.result-forces :is(.result-aside, .quiet) { color: var(--muted); font-weight: 500; }
 .result-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--hair); font-size: 12.5px; }
 .result-facts dt { color: var(--muted); }
 .result-facts dd { margin: 0; color: var(--heading); font-weight: 500; text-align: right; }
 .result-outside { display: grid; gap: 2px; margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: rgba(163, 91, 26, 0.08); color: var(--orange); font-size: 12px; }
 .result-outside > div:first-child { font-weight: 600; }
-.result-run { margin-top: 9px; color: var(--faint); font-size: 11.5px; }
 /* The pressure extremes on a side view of the car; their colours are the ends of the cool-to-warm ramp. */
 .extremes { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
 .profile { display: block; overflow: visible; }
@@ -570,4 +573,40 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	.silhouette { width: 110px; }
 	.strip { width: calc(100% - 24px); }
 	.strip .progress { flex-wrap: wrap; }
+}
+
+/* ---- touch ---- */
+/* A finger needs about 40 px where a pointer needs 28: on a touch screen the controls grow to that, keeping their
+   look, and what only a mouse uses (the keys' help) goes. */
+@media (pointer: coarse) {
+	.button, .model-toggle { height: 40px; }
+	/* Without hover a close button shows only on the car on screen, so the others' names get its room. */
+	.case-close { flex: none; width: 40px; height: 40px; margin-right: 0; }
+	.case-close .icon { width: 14px; height: 14px; }
+	.case-tab:not([aria-selected="true"]) .case-close { display: none; }
+	.case-tab:not([aria-selected="true"]) .case-open { padding-right: 12px; }
+	.field { min-width: 40px; justify-content: center; }
+	.tool { height: 40px; min-width: 40px; justify-content: center; }
+	.tool-quiet { display: none; }
+	/* The extremes' hit areas reach into the space around them, so the card grows no taller. */
+	.extreme { align-items: center; padding-block: 11px; margin-block: -8px; }
+	.legend { padding-bottom: 2px; }
+	.legend-head { margin-bottom: 0; }
+	.legend-tool { height: 40px; min-width: 40px; }
+	.legend-scale { height: 40px; }
+	.legend-end { height: 40px; margin-top: 0; }
+	.legend-ticks span { top: 12px; }
+	.dock { grid-template-rows: 44px minmax(0, 1fr); }
+	body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 45px; }
+	.dock-tab { min-width: 40px; }
+	.segmented { padding: 1px; }
+	.segment { height: 40px; min-width: 40px; }
+	.number { height: 40px; }
+	.slider { height: 40px; }
+	.icon-button { width: 40px; height: 40px; }
+	.dock :is(.tool, .button) { height: 40px; }
+	:is(.probe-table, .regions-row) .icon-button { width: 40px; height: 40px; }
+	.regions-row { height: 44px; }
+	.regions-row .link-button { align-self: stretch; min-width: 44px; }
+	.menu-item { min-height: 40px; }
 }

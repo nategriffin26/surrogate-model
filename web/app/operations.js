@@ -13,7 +13,7 @@
  *   it acts on (removing a layer asks only for a layer the engineer made).
  * @property {(args: object, context: OperationContext) => object | Promise<object>} run
  *   Does it and returns a small JSON-serialisable result: the numbers asked for, with units in the key names
- *   (`area_m2`, `mean_cp`), and the ids of anything it created (`section_id`, `case_id`). Never whole arrays:
+ *   (`area_m2`, `mean_cp`), and the ids of anything it created (`set_id`, `case_id`). Never whole arrays:
  *   field data is reached by case id (the plots, the exports, the assistant's Python kernel). Throws an Error
  *   whose message says what was wrong with the request and what would work.
  *

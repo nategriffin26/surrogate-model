@@ -1,4 +1,4 @@
-/* Annotations: labels on the car, drawn like probe markers, and the dock's Layers tab. */
+/* Annotations: labels on the car, drawn like probe markers, and the Layers menu among the view tools. */
 
 /* ---- labels on the car ---- */
 .annotation-labels { position: absolute; inset: 0; pointer-events: none; }
@@ -17,32 +17,15 @@
 	font: 500 11.5px/15px var(--body); font-variant-numeric: tabular-nums;
 }
 :is(.annotation-dot, .annotation-label).behind { opacity: 0.35; }
-.layer-entry {
-	position: absolute; left: 0; top: 0; width: 200px; height: 24px; padding: 0 7px; pointer-events: auto;
-	border: 1px solid var(--link); border-radius: 5px; background: #fff; font-size: 12px; color: var(--heading);
-	box-shadow: 0 6px 18px rgba(13, 34, 51, 0.1); outline: none;
-}
 
-/* ---- the Layers tab ---- */
-.layers-controls { display: flex; align-items: center; gap: 2px; }
-.layers-controls .tool { height: 28px; }
-.layers-controls .icon { width: 14px; height: 14px; }
-.layers-table { width: 100%; max-width: 760px; border-collapse: collapse; font-size: 12.5px; }
-.layers-table td { height: 30px; padding: 0 6px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
-.layers-table td:first-child { width: 28px; padding-left: 0; }
-.layers-table td:nth-child(2) { width: 28px; }
-.layers-table td:last-child { width: 28px; padding-right: 0; }
-.layers-table .icon-button { width: 22px; height: 22px; }
-.layers-table .icon-button .icon { width: 13px; height: 13px; }
+/* ---- the Layers menu ---- */
+.layers-list { width: 300px; }
+.layer-row { display: flex; align-items: center; gap: 8px; min-height: 40px; }
 .layer-eye[aria-pressed="false"] { color: var(--faint); }
-.layer-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--heading); font-weight: 500; cursor: text; }
-.layer-holds { color: var(--muted); font-variant-numeric: tabular-nums; }
-.layer-by { width: 24px; color: var(--faint); }
-.layer-by .icon { width: 13px; height: 13px; vertical-align: -2px; }
-.layer-rename { width: 100%; height: 24px; padding: 0 6px; border: 1px solid var(--link); border-radius: 4px; font-size: 12.5px; color: var(--heading); outline: none; }
-.layer-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(13, 34, 51, 0.12); vertical-align: middle; }
-span.layer-swatch { width: 22px; height: 10px; border-radius: 2px; }
-.layer-colours { display: grid; grid-template-columns: repeat(5, 22px); gap: 6px; }
-.popover:has(.layer-colours) { min-width: 0; }
-.layer-colour { width: 22px; height: 22px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(13, 34, 51, 0.12); }
-.layer-colour[aria-pressed="true"] { box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--link); }
+.layer-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(13, 34, 51, 0.12); }
+.layer-swatch.ramp { width: 20px; height: 8px; border-radius: 2px; }
+.layer-text { display: grid; flex: 1; min-width: 0; }
+.layer-name, .layer-holds { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-name { color: var(--heading); font-size: 13px; font-weight: 500; }
+.layer-holds { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.layer-row .icon-button { flex: none; }

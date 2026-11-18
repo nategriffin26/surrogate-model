@@ -13,7 +13,8 @@ function tool(name, label, title, onclick) {
 	return h('button', { type: 'button', class: 'tool', title, 'data-tool': name, onclick }, icon(name), h('span', { class: 'tool-label' }, label));
 }
 
-export function createToolbar(actions) {
+/** actions: what the controls do; layers: the Layers menu, beside the section toggle as another thing drawn on the car. */
+export function createToolbar(actions, layers) {
 	const fields = h('div', { class: 'fields', role: 'radiogroup', 'aria-label': 'Field' });
 	const projection = ['perspective', 'orthographic'].map((p) => h('button', {
 		type: 'button', role: 'menuitemradio', class: 'menu-item', 'data-projection': p,
@@ -40,7 +41,7 @@ export function createToolbar(actions) {
 		h('div', { class: 'toolbar-end' },
 			h('div', { class: 'tool-group' }, views.el, tools.fit),
 			h('div', { class: 'tool-group' }, tools.edges, tools.ground),
-			h('div', { class: 'tool-group' }, tools.section),
+			h('div', { class: 'tool-group' }, tools.section, layers),
 			controls.el));
 
 	/** state: {fields: [names], field, maps, enabled, projection, display: {edges, ground}, section} */

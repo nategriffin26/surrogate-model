@@ -7,7 +7,7 @@
 .assistant-title { margin: 0 auto 0 0; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
 
 .assistant-view { position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-height: 0; }
-.assistant-log { overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px 24px; }
+.assistant-log { display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px 24px; }
 .exchange { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; animation: rise 0.2s var(--ease); }
 .exchange + .exchange { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--hair); }
 .question { margin: 0; color: var(--heading); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -114,10 +114,24 @@
 .approval-actions { display: flex; gap: 8px; }
 .approval-decided { margin: 0; color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; }
 
-/* Before the first message, and when the assistant is not here. */
-.assistant-start { display: grid; gap: 2px; margin-top: 4px; }
-.suggestion { padding: 7px 10px; margin: 0 -10px; border-radius: 6px; color: var(--muted); text-align: left; transition: background 0.12s, color 0.12s; }
-.suggestion:hover { background: var(--tint); color: var(--link); }
+/* Before the first message, and when the assistant is not here: one block in the middle of the panel. */
+.assistant-thread:has(> :is(.assistant-start, .assistant-note)) { margin-block: auto; padding-bottom: 6%; }
+.assistant-start { display: grid; gap: 14px; }
+.assistant-purpose { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.assistant-offers { display: grid; border-top: 1px solid var(--hair); }
+.offer {
+	display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 8px; margin: 0 -8px;
+	border-bottom: 1px solid var(--hair); color: var(--heading); font-size: 14px; line-height: 1.4; text-align: left;
+	transition: color 0.15s, background 0.15s;
+}
+.offer span { flex: 1; }
+.offer .icon { color: var(--faint); transition: color 0.15s, translate 0.15s var(--ease); }
+.offer:not(:disabled):active { background: var(--tint); }
+@media (hover: hover) {
+	.offer:not(:disabled):hover { color: var(--link); }
+	.offer:not(:disabled):hover .icon { color: var(--link); translate: 2px 0; }
+}
+.offer:disabled { color: var(--faint); cursor: default; }
 .assistant-note { display: grid; gap: 10px; justify-items: start; color: var(--muted); font-size: 13px; }
 .assistant-note p { margin: 0; }
 .assistant-note-title { color: var(--heading); font-weight: 600; font-size: 14px; }

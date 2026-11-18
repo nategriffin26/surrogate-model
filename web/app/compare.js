@@ -11,7 +11,7 @@
 import { sampleFields } from '../engine/nearest.js';
 import { caseSummary } from './cases.js';
 import { round } from './checks.js';
-import { h } from './dom.js';
+import { coefficient, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { addField, removeField, scaleEnd } from './fields.js';
 import { signed } from './format.js';
@@ -77,14 +77,15 @@ export function comparedOn(view, cases, c) {
 	return { ...pair, ...known };
 }
 
+/** Each quantity of the table; its name is built per table, since an element stands in one place only. */
 const QUANTITIES = [
-	{ key: 'cx', label: 'Cx', of: (m) => m.coefficients[0] },
-	{ key: 'cy', label: 'Cy', of: (m) => m.coefficients[1] },
-	{ key: 'cz', label: 'Cz', of: (m) => m.coefficients[2] },
-	{ key: 'mean_cp', label: 'Mean Cp', of: (m) => m.meanCp },
+	{ key: 'cx', name: () => coefficient('x'), of: (m) => m.coefficients[0] },
+	{ key: 'cy', name: () => coefficient('y'), of: (m) => m.coefficients[1] },
+	{ key: 'cz', name: () => coefficient('z'), of: (m) => m.coefficients[2] },
+	{ key: 'mean_cp', name: () => 'Mean Cp', of: (m) => m.meanCp },
 ];
-/** The quantities the table shows; the operation and the CSV give Cy too. */
-const SHOWN = ['cx', 'cz', 'mean_cp'];
+/** The quantities the table shows, which with the section plot beside it fit a phone's width; the operation and the CSV give Cy and mean Cp too. */
+const SHOWN = ['cx', 'cz'];
 
 /** A quantity of a table row on this car, on the other, and their difference; null where a side has no faces. */
 function valuesOf(q, row) {
@@ -280,12 +281,12 @@ export function createComparison({ session, regions, update, run }) {
 		fileName: (c) => `${baseName(c)}-comparison.csv`,
 	});
 
-	function comparisonCsv(c, separator = ',') {
+	function comparisonCsv(c) {
 		const pair = compared(c);
 		const head = ['region', 'area_m2', ...QUANTITIES.flatMap((q) => [`${q.key}_this`, `${q.key}_other`, `${q.key}_difference`]), 'rms_dcp'];
-		const quote = (text) => (separator === ',' ? `"${text.replaceAll('"', '""')}"` : text);
-		const lines = [`# ${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}`, head.join(separator)];
-		lines.push(...rows(c).map((row) => [quote(row.name), row.mine.area.toFixed(5), ...QUANTITIES.flatMap((q) => valuesOf(q, row).map((v) => (v === null ? '' : v.toFixed(5)))), row.rms.toFixed(5)].join(separator)));
+		const quote = (text) => `"${text.replaceAll('"', '""')}"`;
+		const lines = [`# ${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}`, head.join(',')];
+		lines.push(...rows(c).map((row) => [quote(row.name), row.mine.area.toFixed(5), ...QUANTITIES.flatMap((q) => valuesOf(q, row).map((v) => (v === null ? '' : v.toFixed(5)))), row.rms.toFixed(5)].join(',')));
 		return lines.join('\n') + '\n';
 	}
 
@@ -296,9 +297,7 @@ export function createComparison({ session, regions, update, run }) {
 	const withButton = h('button', { type: 'button', class: 'tool compare-with' });
 	const chooser = menu(withButton, choices);
 	const sideBySide = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', onclick: () => quietly(run('set_comparison', { side_by_side: !view.compare?.sideBySide })) }, icon('compare'), 'Side by side');
-	const copy = h('button', { type: 'button', class: 'tool', onclick: () => navigator.clipboard.writeText(comparisonCsv(session.active, '\t')) }, icon('copy'), 'Copy');
-	const save = h('button', { type: 'button', class: 'tool', onclick: () => quietly(run('download_export', { export: 'comparison' })) }, icon('download'), 'CSV');
-	const controls = h('div', { class: 'compare-controls' }, chooser.el, sideBySide, copy, save);
+	const controls = h('div', { class: 'compare-controls' }, chooser.el, sideBySide);
 	const table = h('table', { class: 'compare-table' });
 	const note = h('p', { class: 'compare-note' });
 	const empty = h('div', { class: 'compare-empty' });
@@ -332,7 +331,7 @@ export function createComparison({ session, regions, update, run }) {
 				quietly(run('set_comparison', { with: null }));
 			} }, 'Stop comparing')] : []),
 		);
-		sideBySide.disabled = copy.disabled = save.disabled = !pair;
+		sideBySide.disabled = !pair;
 		sideBySide.setAttribute('aria-pressed', String(Boolean(pair && view.compare.sideBySide)));
 		empty.hidden = Boolean(pair);
 		table.hidden = !pair;
@@ -348,7 +347,7 @@ export function createComparison({ session, regions, update, run }) {
 		const body = rows(c).map((row) => h('tr', {}, h('td', { class: 'compare-name' }, row.name), ...cells(shown.flatMap((q) => valuesOf(q, row))), h('td', {}, row.rms.toFixed(3))));
 		table.replaceChildren(
 			h('thead', {},
-				h('tr', { class: 'compare-groups' }, h('th', {}), ...shown.map((q) => h('th', { colspan: 3 }, q.label)), h('th', { title: 'Area-weighted root mean square of ΔCp over this car\'s faces' }, 'RMS ΔCp')),
+				h('tr', { class: 'compare-groups' }, h('th', {}), ...shown.map((q) => h('th', { colspan: 3 }, q.name())), h('th', { title: 'Area-weighted root mean square of ΔCp over this car\'s faces' }, 'RMS ΔCp')),
 				h('tr', {}, h('th', {}, 'Region'), ...shown.flatMap(() => [h('th', {}, pair.mine), h('th', {}, pair.label), h('th', {}, 'Δ')]), h('th', {}))),
 			h('tbody', {}, ...body),
 		);
