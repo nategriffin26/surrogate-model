@@ -198,7 +198,7 @@ if (mode === 'engine' || mode === 'features') {
     write('explained_models.f32', cpModels);
     write('activations.f32', Float32Array.from(activations.flat().flatMap((layer) => Array.from(layer))));
 
-    const triangle = { sourceTriangles: 1, positions: cells.centers.slice(0, 9), normals: cells.normals.slice(0, 9), indices: Uint32Array.of(0, 1, 2) };
+    const triangle = { positions: cells.centers.slice(0, 9), normals: cells.normals.slice(0, 9), indices: Uint32Array.of(0, 1, 2) };
     const { json, block } = await packResult({ mesh: triangle, lookups: { definition: ensemble.features, ...context } });
     const example = await unpackResult(JSON.parse(json), block.buffer);
     const fromExample = new Float32Array(count * layout.count);

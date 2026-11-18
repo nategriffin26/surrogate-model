@@ -186,7 +186,6 @@ export function kindsWithin(columns, ranges) {
  * @property {Float32Array} xFirst      (ny) leading x of each |y| strip
  * @property {Float32Array} xLast       (ny) trailing x
  * @property {Float32Array} zPeak       (ny) highest z
- * @property {Float32Array} sectionArea (nx) cross-section area S(x) in m²
  * @property {VoxelGrid[]} voxels
  */
 
@@ -265,22 +264,15 @@ export function buildContext(cells, layout) {
     zPeak[j] = peak;
   }
 
-  const sectionArea = new Float32Array(nx);
-  for (let i = 0; i < nx; i++) {
-    let sum = 0;
-    for (let j = 0; j < ny; j++) sum += f32(zTop[i * ny + j] - zBottom[i * ny + j]);
-    sectionArea[i] = f32(f32(f32(sum) * h) * 2);
-  }
-
   for (const grid of voxels) {
     mirror(grid);
     for (const field of ['area', 'normalX', 'normalY', 'normalZ']) grid[field] = new Float32Array(grid[field]);
   }
-  return { layout, bounds, yCenter, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, sectionArea, voxels };
+  return { layout, bounds, yCenter, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, voxels };
 }
 
 /** x of raster station i, as the reference's float32 `x0 + h * arange(nx)`. */
-export function stationX({ x0, h }, i) {
+function stationX({ x0, h }, i) {
   return f32(x0 + f32(h * i));
 }
 

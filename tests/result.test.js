@@ -28,12 +28,12 @@ function wavySheet(withCfd) {
       indices.push(a, a + 1, a + columns + 1, a, a + columns + 1, a + columns);
     }
   }
-  const mesh = { sourceTriangles: 1234567, positions, normals, indices: Uint32Array.from(indices), cp, sigma };
+  const mesh = { positions, normals, indices: Uint32Array.from(indices), cp, sigma };
   if (withCfd) mesh.cfd = cfd;
-  return { source: { name: 'sheet.vtp', hasCfd: withCfd }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
+  return { source: { name: 'sheet.vtp', cells: rows * columns }, forces: { cdP: 0.27 }, mesh, lookups: lookups() };
 }
 
-const RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak', 'sectionArea'];
+const RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak'];
 const VOXEL_SUMS = ['area', 'normalX', 'normalY', 'normalZ'];
 
 /** `SurfaceLookups` with small rasters and one voxel grid of irregular values. */
@@ -75,7 +75,7 @@ Deno.test('a packed result comes back within the stated precision', async () => 
   const { back, match, bytes } = await roundTrip(result);
   const raw = ['positions', 'normals', 'indices', 'cp', 'sigma', 'cfd'].reduce((sum, k) => sum + result.mesh[k].byteLength, 0);
   assert(bytes < raw / 4, `packed to ${bytes} bytes from ${raw}`);
-  assert(back.forces.cdP === 0.27 && back.source.name === 'sheet.vtp' && back.mesh.sourceTriangles === 1234567, 'summary changed');
+  assert(back.forces.cdP === 0.27 && back.source.name === 'sheet.vtp', 'summary changed');
   const bounds = [0, 1, 2].flatMap((axis) => {
     const lane = result.mesh.positions.filter((_, i) => i % 3 === axis);
     return [Math.min(...lane), Math.max(...lane)];

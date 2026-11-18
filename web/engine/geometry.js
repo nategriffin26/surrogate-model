@@ -11,8 +11,6 @@
  * @property {Float32Array} normals   (C, 3) unit, pointing out of the car
  * @property {Float64Array} areas     (C)
  * @property {number[]} bounds        [xmin, xmax, ymin, ymax, zmin, zmax] of the centres
- * @property {number} surfaceArea
- * @property {number} enclosedVolume
  * @property {boolean} flip           the file's polygons are wound inward
  */
 
@@ -26,7 +24,6 @@ export function measureCells(surface) {
   const centers = new Float32Array(3 * cellCount);
   const normals = new Float32Array(3 * cellCount);
   const areas = new Float64Array(cellCount);
-  let surfaceArea = 0;
   let signedVolume = 0;
 
   for (let c = 0; c < cellCount; c++) {
@@ -103,14 +100,14 @@ export function measureCells(surface) {
     normals[i + 1] = ny;
     normals[i + 2] = nz;
     areas[c] = area;
-    surfaceArea += area;
-    // Divergence theorem with the stored (float32) values, as the reference sums them.
+    // The enclosed volume by the divergence theorem, with the stored (float32) values as the
+    // reference sums them: its sign says which way the polygons are wound.
     signedVolume += (centers[i] * normals[i] + centers[i + 1] * normals[i + 1] + centers[i + 2] * normals[i + 2]) * area;
   }
 
   const flip = signedVolume < 0;
   if (flip) for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
-  return { centers, normals, areas, bounds: boundsOf(centers), surfaceArea, enclosedVolume: Math.abs(signedVolume) / 3, flip };
+  return { centers, normals, areas, bounds: boundsOf(centers), flip };
 }
 
 /** [xmin, xmax, ymin, ymax, zmin, zmax] of points stored x, y, z, x, y, z, ... */

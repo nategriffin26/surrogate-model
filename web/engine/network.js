@@ -9,10 +9,8 @@
  *   `weight` is outputs x inputs, row-major.
  * @typedef {{ xMean: Float32Array, xStd: Float32Array, yMean: number, yStd: number, layers: Layer[] }} Fold
  * @typedef {{ features: import('./features.js').FeatureDefinition, zClip: number, activation: string, spreadScale: number,
- *             folds: Fold[], envelope: Envelope, card: object, weightsSha256: string }} Ensemble
+ *             folds: Fold[], card: object, weightsSha256: string }} Ensemble
  *   As `export_web.py` writes `ensemble.json`.
- * @typedef {{ trainRuns: number[], dimensions: Record<'length' | 'width' | 'height', { min: number, max: number }>,
- *             sectionArea: { x0: number, step: number, min: number[], max: number[] }, spreadMean: number }} Envelope
  */
 
 /** @returns {Promise<Ensemble>} */
@@ -44,8 +42,8 @@ export async function loadEnsemble(baseUrl) {
       })),
     };
   });
-  const { features, zClip, activation, spreadScale, envelope, card, weightsSha256 } = spec;
-  return { features, zClip, activation, spreadScale, folds, envelope, card, weightsSha256 };
+  const { features, zClip, activation, spreadScale, card, weightsSha256 } = spec;
+  return { features, zClip, activation, spreadScale, folds, card, weightsSha256 };
 }
 
 function expectOk(response) {

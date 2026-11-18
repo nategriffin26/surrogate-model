@@ -10,10 +10,8 @@
  * Frame: metres, x downstream, z up, the car symmetric about y = 0.
  *
  * @typedef {Object} Result
- * @property {{ name: string, bytes: number, cells: number, points: number, hasCfd: boolean }} source
- *   The file as read: its name, size, polygon and point counts, and whether it carried CFD pressure.
- * @property {{ bounds: number[], length: number, width: number, height: number,
- *              surfaceArea: number, frontalArea: number }} geometry
+ * @property {{ name: string, cells: number }} source  The file as read: its name and polygon count.
+ * @property {{ bounds: number[], length: number, width: number, height: number, frontalArea: number }} geometry
  *   `bounds` is [xmin, xmax, ymin, ymax, zmin, zmax]. `frontalArea` is the reference area for coefficients.
  * @property {{ cdP: number, cdPStd: number, cdPModels: number[], cdPCfd: number | null,
  *              byFacing: { forward: number, rearward: number } }} forces
@@ -21,14 +19,12 @@
  *   network's value, and the CFD value integrated over the file's polygons when it has CFD.
  *   `byFacing` splits the networks' mean between polygons facing forward (outward n_x < 0) and the
  *   rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
- * @property {{ r2: number, mae: number, rmse: number, bias: number } | null} accuracy
+ * @property {{ r2: number } | null} accuracy
  *   Area-weighted agreement with CFD over the surface. Null when the file has no CFD.
+ *   `forces` and `accuracy` are sums over the file's polygons. In the Result `analyze` resolves with
+ *   they run over an evenly spaced area sample of them (drag within about 0.0005 of the full sum);
+ *   `exact` brings them summed over every polygon.
  * @property {Coverage} coverage
- * @property {{ x: number, cdP: number, cdPCfd?: number }[]} dragBuildup
- *   Pressure drag accumulated from the nose to station x.
- *   `forces`, `accuracy`, `dragBuildup` and `coverage.spread` are sums over the file's polygons. In the
- *   Result `analyze` resolves with they run over an evenly spaced area sample of them (drag within
- *   about 0.0005 of the full sum); `exact` brings them summed over every polygon.
  * @property {{ stage: Stage, seconds: number }[]} timings
  * @property {string} device  What ran the networks, as `Engine.device` names it.
  * @property {string} model   SHA-256 of the network weights it was computed with (`web/model/weights.bin`).
@@ -42,17 +38,10 @@
  *
  * @typedef {Object} Coverage  The car measured against the training cars. Facts only.
  * @property {{ name: 'length' | 'width' | 'height', value: number, trainMin: number, trainMax: number }[]} dimensions
- * @property {{ x: number, area: number, trainMin: number, trainMax: number }[]} sectionArea
- *   Cross-section area S(x) in m², with the training cars' envelope at the same station.
- * @property {number} sectionOutsideFraction  Share of stations where S(x) leaves the envelope.
- * @property {{ mean: number, p95: number, trainMean: number }} spread
- *   Spread σ(Cp) on this car (`DisplayMesh.sigma`), and its mean over the training cars in cross-validation.
  *
  * @typedef {Object} DisplayMesh  A surface the browser draws. Fields are per vertex: the networks are
  *   asked at the file's polygons, as they were trained, and the CFD gives one value per polygon too; a
  *   vertex shows the area-weighted mean of the file polygons around the file point it sits on.
- * @property {number} sourceTriangles  Triangle count of the file's full mesh. Equal to this mesh's
- *   own triangle count when it is the full mesh.
  * @property {Float32Array} positions  (V, 3)
  * @property {Float32Array} normals    (V, 3) unit, pointing out of the car
  * @property {Uint32Array} indices     (T, 3) wound counter-clockwise seen from outside
@@ -121,7 +110,7 @@
  *   nearest working-mesh vertex. `fraction` is the share of the file's polygons predicted. Fires after
  *   `analyze` has resolved, then repeatedly as more of the surface is predicted, ending at 1; on a
  *   device too slow to predict the whole surface in a minute it fires once, below 1.
- * @property {(numbers: Pick<Result, 'forces' | 'accuracy' | 'dragBuildup' | 'coverage'>) => void} [exact]
+ * @property {(numbers: Pick<Result, 'forces' | 'accuracy'>) => void} [exact]
  *   Once every polygon of the file is predicted, just before the last `fullFields`: these parts of the
  *   Result summed over all of them, to replace the sampled ones. Does not fire on a device too slow
  *   to predict the whole surface in a minute.
@@ -157,9 +146,9 @@
  *   m/s, yaw angle in degrees, the wheels' state, and where it is published
  * @property {number[]} trainRuns  the DrivAerML runs the ensemble was trained on
  * @property {number} samplesPerCar  the area-weighted surface cells each training car gave the networks
- * @property {{ trainRuns: number[], validationRuns: number[], parameters: number, layers: number[] }[]} networks
- *   per network: the runs it was fitted on, the runs held out to validate it, its parameter count, and
- *   its widths from input to output, e.g. [191, 256, 256, 256, 1]
+ * @property {{ trainRuns: number[], validationRuns: number[], layers: number[] }[]} networks
+ *   per network: the runs it was fitted on, the runs held out to validate it, and its widths from
+ *   input to output, e.g. [191, 256, 256, 256, 1]
  * @property {string} activation  what the networks compute between layers, e.g. 'GELU'
  * @property {number} spreadScale  the factor, fitted on the training cars, that turns the networks'
  *   standard deviation into the spread σ(Cp) the engine reports
@@ -167,17 +156,15 @@
  *   |Cp − CFD| ≤ σ(Cp), with σ already scaled (measured in training on an area-weighted cell sample)
  * @property {Record<'length' | 'width' | 'height', { min: number, max: number }>} dimensions  the
  *   training cars' range of each, in metres
- * @property {{ meanR2: number, worstCarR2: number, mae: number, relativeL2: number, dragMae: number }} crossValidation
+ * @property {{ meanR2: number, dragMae: number }} crossValidation
  *   each training car predicted by the networks that did not see it
- * @property {{ run: number, r2: number, mae: number, dragMae: number }[]} outsideRuns
+ * @property {{ run: number, r2: number, dragMae: number }[]} outsideRuns
  *   runs outside the training set
- * @property {{ name: string, areaShare: number, r2: number, mae: number }[]} regions
- *   cross-validated accuracy by surface region
- * @property {{ label: string, learner: 'constant' | 'pointnet' | 'mlp' | 'trees' | 'ensemble', inputs: string[],
- *              crossValidationR2: number, worstCarR2: number, mae: number, dragMae: number,
- *              outsideR2: number, outsideDragMae: number }[]} comparison  the models compared in training:
- *   `learner` a stable id of what was fitted ('ensemble' is the shipped one), `inputs` the column kinds
- *   it was given, from the set of `ModelColumn.kind` in that order ([] for the constant baseline)
+ * @property {{ learner: 'constant' | 'pointnet' | 'mlp' | 'trees' | 'ensemble', inputs: string[],
+ *              crossValidationR2: number, dragMae: number }[]} comparison  the models compared in
+ *   training: `learner` a stable id of what was fitted ('ensemble' is the shipped one), `inputs` the
+ *   column kinds it was given, from the set of `ModelColumn.kind` in that order ([] for the constant
+ *   baseline)
  * @property {ModelColumn[]} columns  what each of the model's inputs is, in order
  *
  * @typedef {Object} ModelColumn
@@ -208,7 +195,7 @@ const FIELD_STEP = 1 / 1024;
 const NORMAL_BITS = 12;
 const FIELDS = ['cp', 'sigma', 'cfd'];
 /** The lookups' arrays, stored as they are: float32 rasters, float64 voxel sums. */
-const LOOKUP_RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak', 'sectionArea'];
+const LOOKUP_RASTERS = ['zTop', 'zBottom', 'occupied', 'yOut', 'xFirst', 'xLast', 'zPeak'];
 const VOXEL_SUMS = ['area', 'normalX', 'normalY', 'normalZ'];
 
 /**
@@ -274,7 +261,7 @@ export async function packResult(result) {
 
   const summary = {
     ...result,
-    mesh: { sourceTriangles: mesh.sourceTriangles, vertices: vertexCount, triangles: indices.length / 3, streams },
+    mesh: { vertices: vertexCount, triangles: indices.length / 3, streams },
     lookups: {
       definition: lookups.definition,
       bounds: lookups.bounds,
@@ -324,8 +311,8 @@ export async function unpackResult(summary, buffer) {
   await MeshoptDecoder.ready;
   const decompressed = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
   const block = new Uint8Array(await new Response(decompressed).arrayBuffer());
-  const { sourceTriangles, vertices, triangles, streams } = summary.mesh;
-  const mesh = { sourceTriangles };
+  const { vertices, triangles, streams } = summary.mesh;
+  const mesh = {};
   let offset = 0;
   for (const stream of streams) {
     const source = block.subarray(offset, offset + stream.bytes);

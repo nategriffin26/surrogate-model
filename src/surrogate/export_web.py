@@ -10,17 +10,14 @@ is fixed in the browser's code:
   `folds`: per network its output scaling, layer sizes, and where its arrays sit in `weights.bin`;
 - `spreadScale`: the factor fitted in training that turns the networks' standard deviation into the
   reported spread σ(Cp);
-- `envelope`: the training cars' dimensions, section areas and cross-validation spread, which
-  coverage is measured against;
 - `card`: the facts the model view shows, from `metrics.json` and the checkpoint: `dataset` (the
   training data, `DATASET` below); `trainRuns`; `samplesPerCar` (the area-weighted cells each
-  training car gave); `networks` (per network `trainRuns`,
-  `validationRuns`, `parameters`, `layers`, its widths from input to output); `crossValidation`
-  (`meanR2`, `worstCarR2`, `mae`, `relativeL2`, `dragMae`); `outsideRuns` (per run `run`, `r2`, `mae`,
-  `dragMae`); `spreadCoverage` (the share of the outside runs' surface whose error is within the
-  spread σ(Cp)); `regions` (`name`, `areaShare`, `r2`, `mae`); `comparison` (per model compared `label`,
-  `learner`, `columnRanges`, the [start, stop) column ranges it was given, `crossValidationR2`,
-  `worstCarR2`, `mae`, `dragMae`, `outsideR2`, `outsideDragMae`);
+  training car gave); `dimensions` (the training cars' range of length, width and height, which a
+  car's dimensions are also measured against); `networks` (per network `trainRuns`, `validationRuns`
+  and `layers`, its widths from input to output); `crossValidation` (`meanR2`, `dragMae`);
+  `outsideRuns` (per run `run`, `r2`, `dragMae`); `spreadCoverage` (the share of the outside runs'
+  surface whose error is within the spread σ(Cp)); `comparison` (per model compared `learner`,
+  `columnRanges`, the [start, stop) column ranges it was given, `crossValidationR2`, `dragMae`);
 - `weightsSha256`, the digest of `weights.bin`, which each analysis records so a stale example shows.
 `weights.bin` holds every float32 array back to back, little-endian: per network the input mean and
 standard deviation, then each layer's weight (outputs x inputs, row-major) and bias. The same
@@ -92,48 +89,31 @@ def model_card(payload: dict, metrics: dict) -> dict:
     """What the model view shows: the training data, the networks, and the accuracy measured in training."""
     cv = metrics["shipped_cv"]
     outside = metrics["shipped_holdout"]["per_car"]
+    bounds = payload["training_envelope"]["descriptor_bounds"]
     return {
         "dataset": DATASET,
         "trainRuns": [int(run) for run in metrics["allowed_train_runs"]],
         "samplesPerCar": int(metrics["samples_per_car"]),
+        "dimensions": {name: {"min": bounds[name]["min"], "max": bounds[name]["max"]} for name in DIMENSIONS},
         "spreadCoverage": metrics["uncertainty_coverage_holdout"]["within_1_std"],
         "networks": [
             {
                 "trainRuns": [int(run) for run in fold["train_runs"]],
                 "validationRuns": [int(run) for run in fold["val_runs"]],
-                "parameters": sum(int(tensor.numel()) for tensor in fold["state_dict"].values()),
                 "layers": layer_widths(fold["state_dict"], int(payload["depth"])),
             }
             for fold in payload["folds"]
         ],
-        "crossValidation": {
-            "meanR2": cv["mean_r2"],
-            "worstCarR2": cv["worst_car_r2"],
-            "mae": cv["mean_mae"],
-            "relativeL2": cv["mean_rel_l2"],
-            "dragMae": cv["cd_p_mae"],
-        },
-        "outsideRuns": [
-            {"run": int(run), "r2": car["r2"], "mae": car["mae"], "dragMae": car["cd_p_abs_err"]}
-            for run, car in outside.items()
-        ],
-        "regions": [
-            {"name": name, "areaShare": region["area_share"], "r2": region["r2"], "mae": region["mae"]}
-            for name, region in metrics["regional_breakdown_cv"].items()
-        ],
+        "crossValidation": {"meanR2": cv["mean_r2"], "dragMae": cv["cd_p_mae"]},
+        "outsideRuns": [{"run": int(run), "r2": car["r2"], "dragMae": car["cd_p_abs_err"]} for run, car in outside.items()],
         "comparison": [
             {
-                "label": ablation["label"],
                 "learner": ablation["learner"],
                 "columnRanges": [
                     [block.start, block.stop] for block in (getattr(features.FEATURE_COLUMNS, name) for name in ablation["blocks"])
                 ],
                 "crossValidationR2": ablation["cv"]["mean_r2"],
-                "worstCarR2": ablation["cv"]["worst_car_r2"],
-                "mae": ablation["cv"]["mean_mae"],
                 "dragMae": ablation["cv"]["cd_p_mae"],
-                "outsideR2": ablation["holdout"]["mean_r2"],
-                "outsideDragMae": ablation["holdout"]["cd_p_mae"],
             }
             for ablation in metrics["ablations"].values()
         ],
@@ -191,25 +171,12 @@ def export_web_model(checkpoint: Path, out_dir: Path) -> None:
         )
     weights = np.concatenate(blocks).tobytes()
 
-    envelope = payload["training_envelope"]
-    bounds = envelope["descriptor_bounds"]
     model = {
         "features": definition,
         "zClip": Z_CLIP,
         "activation": activation(payload),
         "spreadScale": float(payload["spread_scale"]),
         "folds": folds,
-        "envelope": {
-            "trainRuns": [int(run) for run in envelope["train_runs"]],
-            "dimensions": {name: {"min": bounds[name]["min"], "max": bounds[name]["max"]} for name in DIMENSIONS},
-            "sectionArea": {
-                "x0": features.DOMAIN_X[0],
-                "step": features.RASTER_STEP,
-                "min": [float(v) for v in envelope["section_area_min"]],
-                "max": [float(v) for v in envelope["section_area_max"]],
-            },
-            "spreadMean": float(envelope["cv_mean_cp_std"]),
-        },
         "card": model_card(payload, metrics),
         "weightsSha256": hashlib.sha256(weights).hexdigest(),
     }

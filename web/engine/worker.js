@@ -27,7 +27,7 @@ import { ensembleStatistics, loadEnsemble, networkActivations } from './network.
 import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint } from './meshes.js';
-import { cfdDrag, evenPicks, shapeCoverage, SurfaceTally } from './analysis.js';
+import { cfdDrag, coverage, evenPicks, SurfaceTally } from './analysis.js';
 import { describePolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
 
 /** Helpers: every core but the one the page needs. */
@@ -63,10 +63,10 @@ async function prepare() {
 }
 
 /** @returns {import('./result.js').ModelCard} */
-function modelCard({ card, activation, spreadScale, envelope, features }) {
+function modelCard({ card, activation, spreadScale, features }) {
   const columns = describeColumns(features);
   const comparison = card.comparison.map(({ columnRanges, ...entry }) => ({ ...entry, inputs: kindsWithin(columns, columnRanges) }));
-  return { ...card, comparison, activation, spreadScale, dimensions: envelope.dimensions, columns };
+  return { ...card, comparison, activation, spreadScale, columns };
 }
 
 function deviceName(gpu) {
@@ -229,33 +229,25 @@ async function analyze(current, file) {
       sigma: near.average(Float32Array.from(near.cells, (c) => predicted.sigma[c])),
     };
 
-    const estimate = new SurfaceTally(runners.networks, car.frontal, car.bounds);
+    const estimate = new SurfaceTally(runners.networks, car.frontal);
     // The picks and their distinct cells both ascend, so one walk finds each pick's prediction.
     const { models: pickModels, fields: pickFields } = pickBatchDone;
     for (let i = 0, j = 0; i < picks.picks.length; i++) {
       const c = picks.picks[i];
       while (pickedCells[j] < c) j++;
-      estimate.add(picks.weight, cells.centers[3 * c], cells.normals[3 * c], pickModels, j, pickedCells.length,
-        pickFields.cp[j], pickFields.sigma[j], surface.cfd?.[c]);
+      estimate.add(picks.weight, cells.normals[3 * c], pickModels, j, pickedCells.length, pickFields.cp[j], surface.cfd?.[c]);
     }
-    const shape = shapeCoverage(car.bounds, car.context, ensemble.envelope);
     const result = {
-      source: {
-        name: file.name,
-        bytes: file.size,
-        cells: cells.areas.length,
-        points: surface.points.length / 3,
-        hasCfd: Boolean(surface.cfd),
-      },
+      source: { name: file.name, cells: cells.areas.length },
       geometry: {
         bounds: car.bounds,
         length: car.bounds[1] - car.bounds[0],
         width: car.bounds[3] - car.bounds[2],
         height: car.bounds[5] - car.bounds[4],
-        surfaceArea: car.surfaceArea,
         frontalArea: car.frontal,
       },
-      ...surfaceNumbers(estimate, car, shape, ensemble.envelope),
+      ...surfaceNumbers(estimate, car),
+      coverage: coverage(car.bounds, ensemble.card.dimensions),
       timings: stages.timings,
       device,
       model: ensemble.weightsSha256,
@@ -269,7 +261,7 @@ async function analyze(current, file) {
     const cellsPerSecond = cellsToPredict / (pickBatchDone.seconds + ringBatch.seconds);
     // The background prediction is the rest of this analysis: the next one waits for it.
     const complete = await completeSurface(current, runners, post, {
-      surface, car, shape, envelope: ensemble.envelope, working: { ...mesh, sourcePoint: working.sourcePoint },
+      surface, car, working: { ...mesh, sourcePoint: working.sourcePoint },
       batches: [pickBatchDone, ringBatch], predicted, showFull: Boolean(full),
       affordable: cells.areas.length / cellsPerSecond <= FULL_PREDICTION_SECONDS,
     }).catch((error) => {
@@ -294,18 +286,13 @@ function measure(surface, layout, progress) {
   progress(0.8);
   const average = cellToPoint(surface, cells.areas);
   progress(0.95);
-  const cfd = surface.cfd ? cfdDrag(cells, surface.cfd, frontal) : null;
-  return { cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds, surfaceArea: cells.surfaceArea, cfd };
+  const cdPCfd = surface.cfd ? cfdDrag(cells, surface.cfd, frontal) : null;
+  return { cells, context, average, frontal, flip: cells.flip, bounds: cells.bounds, cdPCfd };
 }
 
 /** The Result's surface numbers from a tally over polygons. */
-function surfaceNumbers(tally, car, shape, envelope) {
-  return {
-    forces: tally.forces(car.cfd ? car.cfd.cdP : null),
-    accuracy: car.cfd ? tally.accuracy() : null,
-    coverage: { ...shape, spread: { ...tally.spread(), trainMean: envelope.spreadMean } },
-    dragBuildup: tally.dragBuildup(car.cfd?.bins),
-  };
+function surfaceNumbers(tally, car) {
+  return { forces: tally.forces(car.cdPCfd), accuracy: car.cdPCfd === null ? null : tally.accuracy() };
 }
 
 /** An ascending list without its repeats. */
@@ -343,8 +330,8 @@ async function predictBatch(current, runners, cells, order, counted) {
 }
 
 /** The contract's mesh fields only (the working mesh also carries `sourcePoint`), with its bounds. */
-function displayMesh({ sourceTriangles, positions, normals, indices, cfd }) {
-  return { sourceTriangles, positions, normals, indices, bounds: boundsOf(positions), ...(cfd && { cfd }) };
+function displayMesh({ positions, normals, indices, cfd }) {
+  return { positions, normals, indices, bounds: boundsOf(positions), ...(cfd && { cfd }) };
 }
 
 /**
@@ -437,7 +424,7 @@ async function predictPoints(current, { gpu, pool, networks }, { centers, normal
  * @returns {Promise<boolean>} whether every polygon was predicted
  */
 async function completeSurface(current, runners, post, job) {
-  const { surface, car, shape, envelope, working, batches, predicted, showFull, affordable } = job;
+  const { surface, car, working, batches, predicted, showFull, affordable } = job;
   const { cells } = car;
   const { points, connectivity, offsets } = surface;
   const cellCount = cells.areas.length;
@@ -479,11 +466,10 @@ async function completeSurface(current, runners, post, job) {
   }
   if (!affordable) return false;
 
-  const exact = new SurfaceTally(runners.networks, car.frontal, car.bounds);
+  const exact = new SurfaceTally(runners.networks, car.frontal);
   for (const batch of batches) {
     batch.cells.forEach((c, j) => {
-      exact.add(cells.areas[c], cells.centers[3 * c], cells.normals[3 * c], batch.models, j, batch.cells.length,
-        batch.fields.cp[j], batch.fields.sigma[j], surface.cfd?.[c]);
+      exact.add(cells.areas[c], cells.normals[3 * c], batch.models, j, batch.cells.length, batch.fields.cp[j], surface.cfd?.[c]);
     });
   }
   await requestsTurn();
@@ -505,14 +491,13 @@ async function completeSurface(current, runners, post, job) {
       predicted.cp[c] = fields.cp[i];
       predicted.sigma[c] = fields.sigma[i];
       predicted.done[c] = 1;
-      exact.add(cells.areas[c], cells.centers[3 * c], cells.normals[3 * c], chunk, i, size,
-        fields.cp[i], fields.sigma[i], surface.cfd?.[c]);
+      exact.add(cells.areas[c], cells.normals[3 * c], chunk, i, size, fields.cp[i], surface.cfd?.[c]);
       if (field) accumulate(c, fields.cp[i], fields.sigma[i]);
     }
     predictedCount += size;
     if (showFull && predictedCount < cellCount && performance.now() - lastSent > FULL_FIELDS_INTERVAL_MS) send();
   }, true);
-  post({ type: 'exact', numbers: surfaceNumbers(exact, car, shape, envelope) });
+  post({ type: 'exact', numbers: surfaceNumbers(exact, car) });
   if (showFull) send();
   return true;
 }

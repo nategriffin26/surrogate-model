@@ -67,7 +67,7 @@ export async function buildMeshes(surface, { flip, average, signal }, on) {
     let preview = null;
     if (indices) {
       signal?.throwIfAborted();
-      preview = { sourceTriangles, positions: points, normals, indices, ...(cfd && { cfd }) };
+      preview = { positions: points, normals, indices, ...(cfd && { cfd }) };
       on.preview?.(preview);
       on.full?.(preview);
     }
@@ -91,7 +91,7 @@ export async function buildMeshes(surface, { flip, average, signal }, on) {
       (triangles) => on.progress?.(0.9 + 0.1 * (simplified += triangles) / firstTriangles),
     );
 
-    const working = workingMesh(secondRound, points, normals, cfd, sourceTriangles, localOf);
+    const working = workingMesh(secondRound, points, normals, cfd, localOf);
     if (!preview) on.preview?.(working);
     on.working?.(working);
   } finally {
@@ -449,7 +449,7 @@ function jobInput({ points, normals: pointNormals, connectivity, offsets, flip }
  * The simplified triangles as a mesh of their own: vertices in order of first use, each carrying
  * the position, normal and CFD pressure of the file point it sits on.
  */
-function workingMesh(triangles, points, normals, cfd, sourceTriangles, localOf) {
+function workingMesh(triangles, points, normals, cfd, localOf) {
   const sourcePoint = new Uint32Array(Math.min(localOf.length, triangles.length));
   let vertexCount = 0;
   for (let i = 0; i < triangles.length; i++) {
@@ -462,7 +462,6 @@ function workingMesh(triangles, points, normals, cfd, sourceTriangles, localOf) 
     triangles[i] = v;
   }
   const mesh = {
-    sourceTriangles,
     positions: new Float32Array(3 * vertexCount),
     normals: new Float32Array(3 * vertexCount),
     indices: triangles,
