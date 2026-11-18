@@ -255,7 +255,7 @@ export function defineSectionOperations({ session, update }) {
  * operation: the controls change the section through `set_section`.
  */
 export function createSectionTool({ host, viewport, viewer, active, cases, view, run }) {
-	let markers = [];
+	const markers = [];
 	let plot = null;
 	let cursorAt = null;
 
@@ -481,7 +481,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		return { svg, key: keyItems(), plane: planeLabel(view.section) };
 	}
 
-	return { drawSection, picture, controls, key, followCar, setCursor, forget: () => (plot = null) };
+	return { drawSection, picture, controls, key, followCar, forget: () => (plot = null) };
 }
 
 /** Value at a position on the first path of a branch that spans it. */

@@ -345,8 +345,6 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });
 	const el = h('div', { class: 'variants' }, form, note.el, h('div', { class: 'dock-row' }, h('div', { class: 'dock-numbers' }, table, basis), sectionSlot));
-	// The study is saved from the Export menu, so the tab's header holds nothing of its own.
-	const controls = h('div', { class: 'variants-controls' });
 
 	async function submit(e) {
 		e.preventDefault();
@@ -385,6 +383,6 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	return {
 		/** The study of case c, as read_study gives it, or null when its car has no variants open. */
 		study: (c) => (studyOf(c).variants.length ? studyOut(c) : null),
-		panel: { el, controls, render, count, sectionSlot, stop: () => {} },
+		panel: { el, render, count, sectionSlot },
 	};
 }

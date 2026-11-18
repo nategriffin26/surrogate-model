@@ -99,7 +99,7 @@ const annotations = createAnnotations({ session, engine, viewer, view, overlay, 
 const comparison = createComparison({ session, engine, update, run });
 const variants = createVariants({ session, engine, workspace, update, run });
 defineExportOperations(tool);
-const files = defineFileOperations(tool);
+defineFileOperations(tool);
 
 defineExport({
 	name: 'picture',
@@ -218,7 +218,7 @@ $('[data-model-toggle]').append(modelToggle);
 let modelMounted = null;
 function setMode(next) {
 	mode = next;
-	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelView }) => mountModelView(modelHost, { engine }));
+	if (mode === 'model') modelMounted ??= import('./model/index.js').then(({ mountModelPage }) => mountModelPage(modelHost, { engine }));
 	update('layout');
 }
 
@@ -434,7 +434,7 @@ function showWork(c) {
 	const analysing = c?.status === 'analysing' || c?.status === 'queued';
 	const shown = carShown(c);
 	viewer.setSweep(analysing && !shown ? progress.fraction(c) : null);
-	viewer.predicting(analysing && shown ? progress.predicted(c) : null);
+	viewer.showPredicting(analysing && shown ? progress.predicted(c) : null);
 }
 
 /** Put a case on screen, or bring the screen up to date with it: its surface, its result and everything drawn from it. */
@@ -570,4 +570,5 @@ addEventListener('keydown', (e) => {
 acceptDrops((file) => addFiles([file], { workspace, run }));
 present(null);
 
-export const app = { engine, session, viewer, view, workspace, update, run, openPath: files.openPath };
+// The browser checks under local/ read the tool through this.
+export const app = { engine, session, viewer, view, workspace, update, run };

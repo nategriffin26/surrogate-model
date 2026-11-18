@@ -11,7 +11,7 @@
 import { Annotations, rgbOf } from '../viewer/annotations.js';
 import { finite, oneOf, round, triple } from './checks.js';
 import { h, s } from './dom.js';
-import { FIELDS, MAPS, addField, removeField } from './fields.js';
+import { MAPS, addField, removeField } from './fields.js';
 import { count, niceTicks } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
@@ -19,7 +19,7 @@ import { defineOperation } from './operations.js';
 import { RAMPS, rampCss } from './ramps.js';
 
 /** Colours by name: the theme's ink and accents, with orange bright enough to stand out on the car. */
-export const PALETTE = {
+const PALETTE = {
 	ink: '#0d2233',
 	blue: '#0b6fbf',
 	orange: '#e2741d',

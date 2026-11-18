@@ -25,7 +25,7 @@ const KINDS = [
 	{ test: /\.(npy|npz)$/i, label: 'Array', icon: 'file', text: false },
 ];
 const OTHER = { label: 'File', icon: 'file', text: false };
-export const kindOf = (path) => KINDS.find((k) => k.test.test(path)) ?? OTHER;
+const kindOf = (path) => KINDS.find((k) => k.test.test(path)) ?? OTHER;
 const isGeometry = (path) => kindOf(path).icon === 'geometry';
 const baseOf = (path) => path.slice(path.lastIndexOf('/') + 1);
 const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
@@ -50,7 +50,7 @@ function settled(session, c) {
 /** The engine reads a File; a workspace blob becomes one named for its path, without copying its bytes. */
 const fileFor = (path, blob) => (blob instanceof File && blob.name === baseOf(path) ? blob : new File([blob], baseOf(path)));
 
-/** app: { session, workspace, engine, update }. Returns `openPath(path)`, which analyses a geometry or shows its case. */
+/** app: { session, workspace, engine, update }. */
 export function defineFileOperations({ session, workspace, engine, update }) {
 	const fileAt = (path) => {
 		const file = workspace.file(normalPath(path));
@@ -222,15 +222,13 @@ export function defineFileOperations({ session, workspace, engine, update }) {
 			return { path: file.path, size_bytes: file.size };
 		},
 	});
-
-	return { openPath };
 }
 
 /**
  * Run the model on a geometry from a control. A failed analysis is shown on its case's own card; the operation's
  * rejection repeats it for a caller that waits on the result, which a control does not.
  */
-export function openGeometry(run, path) {
+function openGeometry(run, path) {
 	run('open_file', { path }).catch(() => {});
 }
 
@@ -569,5 +567,5 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		else if (what === 'cases' || what === 'status' || what === 'active' || what === 'numbers') render();
 	});
 
-	return { el, toggle, setOpen, render };
+	return { el, toggle, setOpen };
 }

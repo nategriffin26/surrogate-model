@@ -50,7 +50,7 @@ export const MAPS = {
 };
 
 /** A field's value at vertex v of a mesh carrying cp, sigma, cfd and normals. */
-export function valueAt(mesh, field, v) {
+function valueAt(mesh, field, v) {
 	switch (field) {
 		case 'cp':
 			return mesh.cp[v];

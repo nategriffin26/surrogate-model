@@ -6,6 +6,7 @@
 // The numbers are the Result's totals, summed over every polygon of the file, and the CFD's are summed over the same
 // polygons.
 
+import { outsideTraining } from './cases.js';
 import { coefficient, h, s } from './dom.js';
 import { signed } from './format.js';
 
@@ -36,14 +37,6 @@ function profileOf(mesh, bounds) {
 	return { path: `M${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L')}Z`, height, map };
 }
 
-/** What the card reads out for a case: the whole car from its totals, with the CFD's when the file carries CFD. Extremes are {cp, point, normal}. */
-function subjectOf(c) {
-	const at = (e) => e && { cp: e.value, point: e.center, normal: e.normal };
-	const r = c.result;
-	const t = r.totals;
-	return { name: 'Whole car', coefficients: t.coefficients, reference: r.referenceTotals?.coefficients ?? null, byNetwork: r.forces.cdPModels, extremes: { max: at(t.cpMax), min: at(t.cpMin) } };
-}
-
 const COEFFICIENTS = [
 	['x', 'Pressure force along x on the frontal area: the pressure drag coefficient'],
 	['y', 'Pressure force along y on the frontal area: side force'],
@@ -51,12 +44,13 @@ const COEFFICIENTS = [
 ];
 
 /** The whole car's coefficients, with the CFD's beside them and the networks' spread of Cx under it. */
-function wholeCarRows(of, row) {
-	const cfd = of.reference;
-	const byNetwork = `${Math.min(...of.byNetwork).toFixed(3)}–${Math.max(...of.byNetwork).toFixed(3)}`;
+function wholeCarRows(r, row) {
+	const cfd = r.referenceTotals?.coefficients;
+	const byNetwork = r.forces.cdPModels;
+	const spread = `${Math.min(...byNetwork).toFixed(3)}–${Math.max(...byNetwork).toFixed(3)}`;
 	return COEFFICIENTS.flatMap(([axis, title], i) => [
-		row(coefficient(axis), title, signed(of.coefficients[i], 3), cfd && signed(cfd[i], 3)),
-		i === 0 ? row([coefficient('x'), ' by network'], 'Lowest and highest Cx among the networks; the prediction is their mean', byNetwork, null, 'num quiet') : null,
+		row(coefficient(axis), title, signed(r.totals.coefficients[i], 3), cfd && signed(cfd[i], 3)),
+		i === 0 ? row([coefficient('x'), ' by network'], 'Lowest and highest Cx among the networks; the prediction is their mean', spread, null, 'num quiet') : null,
 	]);
 }
 
@@ -66,7 +60,8 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	const markers = { max: h('div', { class: 'extreme-marker max', hidden: true }, h('span', {}, 'max')), min: h('div', { class: 'extreme-marker min', hidden: true }, h('span', {}, 'min')) };
 	overlay.append(markers.max, markers.min);
 	let shown = null;
-	let subject = null;
+	/** The pressure extremes of the car the card describes, {max, min}, each {value, center, normal}; or null. */
+	let extremesShown = null;
 	/** The extremes marked on the car: the one hovered in the card, and the one last flown to. */
 	const marked = { hovered: null, pinned: null };
 	const outline = (c) => outlines.get(c) ?? outlines.set(c, profileOf(c.result.mesh, c.result.geometry.bounds)).get(c);
@@ -74,11 +69,11 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	function placeMarkers() {
 		for (const which of ['max', 'min']) {
 			const marker = markers[which];
-			const spot = subject?.extremes[which];
+			const spot = extremesShown?.[which];
 			const on = Boolean(spot) && (marked.hovered === which || marked.pinned === which);
 			marker.hidden = !on;
 			if (!on) continue;
-			const p = viewer.project(spot.point);
+			const p = viewer.project(spot.center);
 			marker.hidden = !p.visible;
 			marker.style.transform = `translate(${p.x}px, ${p.y}px)`;
 		}
@@ -91,24 +86,24 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	});
 
 	/** The readout as a grid whose third column holds the CFD's, for a file that carries CFD; that column's head shares the title's row, so it costs no line. */
-	function readout(of) {
-		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), of.reference ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
-		const rows = wholeCarRows(of, row);
-		if (!of.reference) return [h('div', { class: 'result-label' }, of.name), h('dl', { class: 'result-forces' }, rows)];
+	function readout(r) {
+		const cfd = Boolean(r.referenceTotals);
+		const row = (label, title, text, aside, tone = 'num') => [h('dt', { title }, ...label), h('dd', { class: tone }, text), cfd ? h('dd', { class: 'result-aside num' }, aside ?? '') : null];
+		const rows = wholeCarRows(r, row);
+		if (!cfd) return [h('div', { class: 'result-label' }, 'Whole car'), h('dl', { class: 'result-forces' }, rows)];
 		return h('dl', { class: 'result-forces against' },
-			h('dt', { class: 'result-label' }, of.name),
+			h('dt', { class: 'result-label' }, 'Whole car'),
 			h('dd', { class: 'result-head' }, 'Predicted'),
 			h('dd', { class: 'result-head', title: 'Summed from the CFD in the file, over the same polygons' }, 'CFD'),
 			rows);
 	}
 
-	function extremes(c, of) {
-		const ex = of.extremes;
-		if (!ex.max) return null;
+	function extremes(c) {
+		const ex = extremesShown;
 		const profile = outline(c);
 		const fly = (which) => {
 			marked.pinned = which;
-			run('fly_to', { point: ex[which].point, normal: ex[which].normal });
+			run('fly_to', { point: ex[which].center, normal: ex[which].normal });
 			placeMarkers();
 		};
 		const hover = (el, which) => {
@@ -123,11 +118,11 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 			return el;
 		};
 		const spot = (which) => {
-			const [x, y] = profile.map(ex[which].point);
-			return hover(s('circle', { class: `spot ${which}`, cx: x, cy: y, r: 3.5, onclick: () => fly(which) }, s('title', {}, `Cp ${which} ${signed(ex[which].cp, 2)}`)), which);
+			const [x, y] = profile.map(ex[which].center);
+			return hover(s('circle', { class: `spot ${which}`, cx: x, cy: y, r: 3.5, onclick: () => fly(which) }, s('title', {}, `Cp ${which} ${signed(ex[which].value, 2)}`)), which);
 		};
 		const button = (which, label) => hover(h('button', { type: 'button', class: `extreme ${which}`, title: `Fly to the ${which === 'max' ? 'highest' : 'lowest'} Cp`, onclick: () => fly(which) },
-			h('i', { 'aria-hidden': 'true' }), label, h('b', { class: 'num' }, signed(ex[which].cp, 2))), which);
+			h('i', { 'aria-hidden': 'true' }), label, h('b', { class: 'num' }, signed(ex[which].value, 2))), which);
 		return h('div', { class: 'extremes' },
 			s('svg', { class: 'profile', viewBox: `-4 -4 ${WIDTH} ${profile.height + 8}`, width: WIDTH, height: profile.height + 8, role: 'img', 'aria-label': 'Side view with the highest and lowest Cp' },
 				s('path', { class: 'outline', d: profile.path }), spot('max'), spot('min')),
@@ -137,7 +132,7 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	/** The whole car's reference area and size, and which of its dimensions lie outside the training range. */
 	function facts(r) {
 		const g = r.geometry;
-		const outside = r.coverage.dimensions.filter((d) => d.value < d.trainMin || d.value > d.trainMax);
+		const outside = outsideTraining(r);
 		return [
 			h('dl', { class: 'result-facts' },
 				h('dt', {}, 'Frontal area'), h('dd', { class: 'num' }, `${g.frontalArea.toFixed(2)} m²`),
@@ -153,16 +148,16 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 		// The card is rebuilt, so nothing in it is hovered any more; a pinned spot belongs to the car it was on.
 		marked.hovered = null;
 		if (c !== shown) marked.pinned = null;
-		subject = c?.result ? subjectOf(c) : null;
+		extremesShown = c?.result ? { max: c.result.totals.cpMax, min: c.result.totals.cpMin } : null;
 		placeMarkers();
-		if (!subject) {
+		if (!c?.result) {
 			host.replaceChildren();
 			shown = c;
 			return;
 		}
 		const card = h('div', { class: `result-card${c === shown ? ' settled' : ''}` },
-			readout(subject),
-			extremes(c, subject),
+			readout(c.result),
+			extremes(c),
 			facts(c.result));
 		host.replaceChildren(card);
 		shown = c;

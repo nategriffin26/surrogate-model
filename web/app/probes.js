@@ -123,7 +123,7 @@ export async function readSet(engine, c, set) {
 }
 
 /** The probe table of a set on a case as CSV; a dropped file's probes name the file's cell, so each can be found again in the file. */
-export function probesCsv(c, set, sites) {
+function probesCsv(c, set, sites) {
 	const cells = c.kind === 'file';
 	const head = ['probe', ...(cells ? ['cell'] : []), ...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key))];
 	const rows = set.probes.map((p, i) => [p.n, ...(cells ? [sites[i].cell ?? ''] : []), ...COLUMNS.map((col) => col.read(sites[i]).toFixed(6))]);

@@ -94,7 +94,6 @@ export class Session extends EventTarget {
 			error: null,
 			result: null,
 			surface: null,
-			full: null,
 			/** Each probe's site on this car, by probe, cached by the probes. */
 			sites: null,
 			/** Whether its field has made its entrance. */
@@ -169,12 +168,10 @@ export class Session extends EventTarget {
 			},
 			fullMesh: (mesh) => {
 				c.surface.setFull(mesh);
-				c.full = { fraction: 0 };
 				this.notify(c, 'full');
 			},
 			fullFields: (fields, fraction) => {
 				c.surface.setFullFields(fields, fraction);
-				c.full.fraction = fraction;
 				this.notify(c, 'full');
 			},
 			// Drag, agreement and coverage summed over every polygon of the file, replacing the sampled ones.

@@ -75,7 +75,7 @@ async function made(name, session) {
  * Write a file into the workspace for whoever asked. The assistant never replaces a file the engineer wrote; with
  * no path given the file takes its own name, numbered if that is taken.
  */
-export function saveFile(workspace, path, fileName, blob, by) {
+function saveFile(workspace, path, fileName, blob, by) {
 	const target = path ?? workspace.freePath(fileName);
 	const existing = workspace.file(target);
 	if (existing && existing.by === 'engineer' && by === 'assistant') {

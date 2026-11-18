@@ -35,7 +35,6 @@ export function defineOperation(operation) {
 	if (operations.has(operation.name)) throw new Error(`Operation ${operation.name} is defined twice.`);
 	if (operation.parameters?.type !== 'object') throw new Error(`Operation ${operation.name} needs an object schema.`);
 	operations.set(operation.name, operation);
-	return operation;
 }
 
 /** Subscribers hear of every operation run, by anyone: the assistant's step list is one. */

@@ -46,7 +46,7 @@ body.resizing * { cursor: inherit !important; }
 /* ---- work area ---- */
 /* The stage (toolbar, view and dock) keeps the whole width. The file panel and the assistant open over its edges at
    once and close the same way, so opening one never resizes, reflows or redraws what is under it. */
-.work { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-column, 0px); grid-template-areas: "stage side"; position: relative; min-height: 0; }
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 0; grid-template-areas: "stage side"; position: relative; min-height: 0; }
 .stage { grid-area: stage; display: grid; grid-template-rows: 44px minmax(0, 1fr) 0 var(--dock); grid-template-areas: "toolbar" "view" "resizer" "dock"; min-width: 0; min-height: 0; }
 .toolbar-host { grid-area: toolbar; }
 .viewport { grid-area: view; }
@@ -81,7 +81,6 @@ body.dock-closed .dock-resizer { pointer-events: none; }
 .field:not(:disabled):hover .field-ramp { opacity: 0.6; }
 .field[aria-checked="true"] { color: var(--heading); }
 .field[aria-checked="true"] .field-ramp { opacity: 1; transform: none; }
-.field[data-field="none"][aria-checked="true"] { box-shadow: inset 0 -2px var(--heading); }
 .toolbar-end { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .tool-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--hair); }
 .tool { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background 0.15s, color 0.15s; }
@@ -432,7 +431,6 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .compare-table td.compare-name { font-weight: 500; }
 
 /* ---- variants ---- */
-.variants-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
 .variants { display: flex; flex-direction: column; height: 100%; }
 .variants > .dock-row { flex: 1; height: auto; }
 .variants-form { display: flex; align-items: center; gap: 6px; padding: 8px 0; font-size: 13px; }

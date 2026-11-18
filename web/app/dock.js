@@ -1,7 +1,7 @@
 // The dock under the 3D view: the section plot, the probe table, and the panels for comparing cars and making
 // variants. What each shows is exported from the Export menu.
 
-import { h } from './dom.js';
+import { h, s } from './dom.js';
 import { icon } from './icons.js';
 
 /** The least height, in px, a section plot is drawn in beside a panel's numbers: below it the curves are too flat to read. */
@@ -10,7 +10,7 @@ const SLOT_MIN_PX = 130;
 /**
  * view: the shared view (its dock tab and section). actions: tab(name), collapse(). The section tool supplies the
  * section plot and its controls, the probes their table and its actions. Each of `panels` is a tab of its own,
- * {name, label, el, controls, render(), count?(), sectionSlot?}, its count shown in the tab when above zero. A
+ * {name, label, el, controls?, render(), count?(), sectionSlot?}, its count shown in the tab when above zero. A
  * panel's `sectionSlot` is the place in its layout where the section plot sits, beside its numbers, while the section
  * is on.
  */
@@ -19,8 +19,7 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
 	const collapse = h('button', { type: 'button', class: 'icon-button dock-collapse', title: 'Collapse plots', onclick: () => actions.collapse() }, icon('chevron'));
-	const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-	svg.setAttribute('class', 'plot');
+	const svg = s('svg', { class: 'plot' });
 	const readout = h('div', { class: 'plot-readout' });
 	const table = h('div', { class: 'dock-table' });
 	// The key and the cursor readout sit together at the plot's top left, next to the axis they describe.
@@ -80,9 +79,10 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 			svg.replaceChildren();
 			return;
 		}
-		const wanted = [view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : panelShown().controls];
+		const wanted = view.dock === 'section' ? section.controls(c) : view.dock === 'probes' ? probes.actions(c) : panelShown().controls;
 		// The section controls are one element updated in place; detaching it would end a drag on its slider.
-		if (wanted.length !== controls.childNodes.length || wanted.some((node, i) => node !== controls.childNodes[i])) controls.replaceChildren(...wanted);
+		if (!wanted) controls.replaceChildren();
+		else if (controls.firstChild !== wanted || controls.childNodes.length !== 1) controls.replaceChildren(wanted);
 		key.replaceChildren(...(sectionHost() ? section.key() : []));
 		drawPlotNow();
 	}
