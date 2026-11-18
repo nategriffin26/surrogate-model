@@ -274,33 +274,34 @@ function workingCells(result) {
   if (result.cells) return result.cells;
   const { positions, indices, cp, sigma, cfd } = result.mesh;
   const count = indices.length / 3;
+  const offsets = new Uint32Array(count + 1);
   const centers = new Float32Array(3 * count);
   const normals = new Float32Array(3 * count);
   const areas = new Float64Array(count);
+  const cells = { cp: new Float32Array(count), sigma: new Float32Array(count), cfd: cfd ? new Float32Array(count) : null };
+  // One pass with plain loops: the page calls this on its own thread, where it must stay well under a frame budget.
   for (let t = 0; t < count; t++) {
-    const a = 3 * indices[3 * t], b = 3 * indices[3 * t + 1], c = 3 * indices[3 * t + 2];
+    const i = indices[3 * t], j = indices[3 * t + 1], k = indices[3 * t + 2];
+    const a = 3 * i, b = 3 * j, c = 3 * k;
     const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
     const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const length = Math.hypot(nx, ny, nz);
+    const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
     areas[t] = length / 2;
     if (length > 0) {
       normals[3 * t] = nx / length;
       normals[3 * t + 1] = ny / length;
       normals[3 * t + 2] = nz / length;
     }
-    for (let k = 0; k < 3; k++) centers[3 * t + k] = (positions[a + k] + positions[b + k] + positions[c + k]) / 3;
+    centers[3 * t] = (positions[a] + positions[b] + positions[c]) / 3;
+    centers[3 * t + 1] = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3;
+    centers[3 * t + 2] = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3;
+    cells.cp[t] = (cp[i] + cp[j] + cp[k]) / 3;
+    cells.sigma[t] = (sigma[i] + sigma[j] + sigma[k]) / 3;
+    if (cfd) cells.cfd[t] = (cfd[i] + cfd[j] + cfd[k]) / 3;
+    offsets[t + 1] = 3 * (t + 1);
   }
-  const mean = (values) => Float32Array.from({ length: count }, (_, t) => (values[indices[3 * t]] + values[indices[3 * t + 1]] + values[indices[3 * t + 2]]) / 3);
-  return {
-    points: positions,
-    connectivity: indices,
-    offsets: Uint32Array.from({ length: count + 1 }, (_, t) => 3 * t),
-    centers, normals, areas,
-    cp: mean(cp),
-    sigma: mean(sigma),
-    cfd: cfd ? mean(cfd) : null,
-  };
+  return { points: positions, connectivity: indices, offsets, centers, normals, areas, ...cells };
 }
 
 /**

@@ -85,6 +85,11 @@ export function describePolygon({ surface, cells, context, predicted }, ensemble
   return { index: c, corners, center: Array.from(center), normal: Array.from(normal), cp, sigma };
 }
 
+/** Distance from (x, y, z) to polygon `c`, as the triangle fan from its first corner. */
+export function distanceToPolygon(surface, c, x, y, z) {
+  return Math.sqrt(squaredDistanceToPolygon(surface, c, x, y, z));
+}
+
 /** Squared distance from (x, y, z) to polygon `c`, as the triangle fan from its first corner. */
 function squaredDistanceToPolygon({ points, connectivity, offsets }, c, x, y, z) {
   const start = offsets[c];

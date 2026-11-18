@@ -173,8 +173,11 @@
  *   file had carried the field: `result.reference`, `result.forces.cdPCfd`, `result.accuracy` and
  *   `result.mesh.cfd` are written into `result` itself, computed over every polygon exactly as the
  *   analysis computes them, and `fileCells`, `explain` and `exportVtp` use the field. Of the second
- *   file, only that array is kept. Runs while `canExportVtp(result)`; rejects otherwise, and with a
- *   message naming the arrays the file has when it lacks `array` or saying it has none.
+ *   file, only that array is kept. Runs while `canExportVtp(result)`; rejects otherwise, with a
+ *   message naming the arrays the file has when it lacks `array` or saying it has none, and with one
+ *   giving the median distance between the two surfaces when the second file's polygons are not the
+ *   car's and its surface lies more than 5 mm from the car's: a field on another car's surface is no
+ *   reference for this one.
  * @property {(result: Result) => Promise<ReferenceChange>} detachReference  Back to the field the
  *   car's own file or arrays carried, or to none; written into `result` as `attachReference` does.
  * @property {Promise<string>} device  What runs the networks, short enough to show as is:

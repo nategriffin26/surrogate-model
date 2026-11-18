@@ -32,8 +32,8 @@ import { createGpuNetworks } from './gpu.js';
 import { createPool } from './pool.js';
 import { buildMeshes, cellToPoint, surfaceMesh } from './meshes.js';
 import { Agreement, cfdDrag, coverage, evenPicks, surfaceAgreement, SurfaceTally } from './analysis.js';
-import { describePolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
-import { buildPointGrid, nearestPoint } from './nearest.js';
+import { describePolygon, distanceToPolygon, indexPolygons, polygonAt } from './polygon-lookup.js';
+import { nearestPoint } from './nearest.js';
 
 /** Helpers: every core but the one the page needs. */
 const HELPERS = Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
@@ -48,6 +48,16 @@ const FULL_PREDICTION_SECONDS = 60;
 const FULL_FIELDS_INTERVAL_MS = 1000;
 /** Side of the cubes the rest of the surface is predicted in, one cube at a time. */
 const REFINE_CUBE = 0.04;
+/**
+ * How far, as a median over the car's polygons, a second file's surface may lie from the car's for
+ * its field to count as a reference for this car. A remeshed export of the same geometry lies within
+ * its tessellation error: run 1's 600,000-triangle working mesh, simplified to 0.9 mm, lies a median
+ * 0.06 mm from run 1's polygon centres and at most 0.93 mm. DrivAerML's variants differ by
+ * centimetres: run 500 lies a median 25 mm from run 1.
+ */
+const SAME_SURFACE_DISTANCE = 0.005;
+/** Polygons of the car, spread through its file, at which that distance is measured. */
+const SURFACE_SAMPLES = 4096;
 
 const engine = prepare();
 engine.then(
@@ -792,9 +802,10 @@ function answerFileCells({ id, analysis }) {
 
 /**
  * A reference field for the car analysed last: the cell array `array` of `file`, put on the car's
- * polygons cell for cell when the two files have the same polygons, and otherwise from the polygon of
- * `file` whose centre is nearest, among those not facing away (any, where all do). The car then
- * holds it as its own CFD; of `file`, only that array is kept.
+ * polygons cell for cell when the two files have the same polygons, and otherwise, once `file` is
+ * found to describe the same surface, from the polygon of `file` whose centre is nearest, among those
+ * not facing away (any, where all do). The car then holds it as its own CFD; of `file`, only that
+ * array is kept.
  */
 async function attachReference({ id, analysis, file, array = CFD_ARRAY }) {
   const progress = (fraction) => self.postMessage({ type: 'answerProgress', id, fraction });
@@ -806,10 +817,22 @@ async function attachReference({ id, analysis, file, array = CFD_ARRAY }) {
         ? `${file.name} has no cell array named ${array}. Its cell arrays of one number per polygon are ${names.join(', ')}.`
         : `${file.name} has no cell array of one number per polygon, so it holds no pressure field to compare with.`);
     }
-    const reference = await readSurface(file, (fraction) => progress(0.8 * fraction), array);
-    const same = samePolygons(car.surface, reference);
-    car.surface.cfd = same ? reference.cfd : await nearestCellValues(car.cells, reference, (fraction) => progress(0.8 + 0.2 * fraction));
-    car.reference = { file: file.name, array, mapping: same ? 'polygons' : 'nearest' };
+    const surface = await readSurface(file, (fraction) => progress(0.8 * fraction), array);
+    let mapping = 'polygons';
+    if (samePolygons(car.surface, surface)) {
+      car.surface.cfd = surface.cfd;
+    } else {
+      const cells = measureCells(surface);
+      const reference = { surface, cells, index: indexPolygons(surface, cells) };
+      const apart = medianDistance(car, reference);
+      if (apart > SAME_SURFACE_DISTANCE) {
+        throw new Error(`${file.name} is not this car's surface: its polygons lie a median ${(apart * 1000).toFixed(1)} mm from this car's, `
+          + `and a field for this car must lie within ${SAME_SURFACE_DISTANCE * 1000} mm. Attach the CFD computed on this geometry.`);
+      }
+      car.surface.cfd = await nearestCellValues(car.cells, reference, (fraction) => progress(0.8 + 0.2 * fraction));
+      mapping = 'nearest';
+    }
+    car.reference = { file: file.name, array, mapping };
     answerReference(id, car);
   } catch (error) {
     self.postMessage({ type: 'answerFailed', id, message: error.message });
@@ -842,10 +865,25 @@ function samePolygons(a, b) {
   return equal(a.offsets, b.offsets) && equal(a.connectivity, b.connectivity) && equal(a.points, b.points);
 }
 
+/**
+ * The median distance from the car's polygon centres, a sample of them spread through the file, to the
+ * surface of the reference polygons nearest them that do not face away.
+ */
+function medianDistance({ cells }, reference) {
+  const count = cells.areas.length;
+  const samples = Math.min(SURFACE_SAMPLES, count);
+  const distances = new Float64Array(samples);
+  for (let k = 0; k < samples; k++) {
+    const c = Math.floor(((k + 0.5) / samples) * count);
+    const point = Array.from(cells.centers.subarray(3 * c, 3 * c + 3));
+    const found = polygonAt(reference, point, Array.from(cells.normals.subarray(3 * c, 3 * c + 3)));
+    distances[k] = found < 0 ? Infinity : distanceToPolygon(reference.surface, found, ...point);
+  }
+  return distances.sort()[Math.floor(samples / 2)];
+}
+
 /** For each of the car's polygons, the reference value at the nearest reference polygon centre that does not face away. */
-async function nearestCellValues(cells, reference, progress) {
-  const { centers, normals } = measureCells(reference);
-  const grid = buildPointGrid(centers);
+async function nearestCellValues(cells, { surface, cells: { normals }, index: { grid } }, progress) {
   const count = cells.areas.length;
   const values = new Float32Array(count);
   let nx = 0, ny = 0, nz = 0;
@@ -857,7 +895,7 @@ async function nearestCellValues(cells, reference, progress) {
     const x = cells.centers[3 * c], y = cells.centers[3 * c + 1], z = cells.centers[3 * c + 2];
     let i = nearestPoint(grid, x, y, z, facing);
     if (i < 0) i = nearestPoint(grid, x, y, z);
-    values[c] = reference.cfd[i];
+    values[c] = surface.cfd[i];
     // Explanations and picks asked meanwhile are answered between slices.
     if (c % 262_144 === 262_143) {
       progress(c / count);

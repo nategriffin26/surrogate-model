@@ -11,7 +11,7 @@
 //   bun tests/web_engine_outputs.mjs stretch  <surface.vtp> <out dir> <factor>
 //   bun tests/web_engine_outputs.mjs quick    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs write    <surface.vtp> <out dir>
-//   bun tests/web_engine_outputs.mjs reference <surface.vtp> <out dir> <cfd.vtp>,<remeshed cfd.vtp>,<bare.vtp>
+//   bun tests/web_engine_outputs.mjs reference <surface.vtp> <out dir> <cfd.vtp>,<remeshed cfd.vtp>,<bare.vtp>,<other car.vtp>
 //   bun tests/web_engine_outputs.mjs example  <example base>  <out dir>
 //
 // `parse` writes the parsed surface and its frontal area; `engine` adds the polygon geometry, the
@@ -30,7 +30,7 @@
 // and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
 // `quick` writes `predictQuick`'s result for the file's surface. `write` writes the file's surface
 // anew with `writeVtp`, with cell and point arrays of several types and widths. `reference` analyses
-// `cfd.vtp` alone, then the surface, attaches a reference to it from each of the three other files in
+// `cfd.vtp` alone, then the surface, attaches a reference to it from each of the four other files in
 // turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
 // analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example.
 
@@ -243,7 +243,7 @@ if (mode === 'quick') {
 }
 
 if (mode === 'reference') {
-  const [withCfd, remeshed, bare] = modelSource.split(',').map((source) => new File([readFileSync(source)], basename(source)));
+  const [withCfd, remeshed, bare, otherCar] = modelSource.split(',').map((source) => new File([readFileSync(source)], basename(source)));
   const engine = createEngine();
   const analyse = async (file) => {
     let exact;
@@ -261,6 +261,7 @@ if (mode === 'reference') {
   const names = { withCfd: await engine.cellArrayNames(withCfd), bare: await engine.cellArrayNames(bare) };
   const refusals = {
     bare: await refusal(engine.attachReference(result, bare)),
+    otherCar: await refusal(engine.attachReference(result, otherCar)),
     missing: await refusal(engine.attachReference(result, withCfd, { array: 'CpMissing' })),
   };
 

@@ -444,7 +444,8 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     """Catches a CFD field attached from a second file giving other numbers or fields than the same
     field read with the car's own file (agreement, CFD drag, working-mesh field, file polygons,
     export), mapping a file of other polygons onto the wrong polygons or onto the far side of a thin
-    panel, a refusal that does not say why, or a detach that leaves the field behind."""
+    panel, taking another car's field, a refusal that does not say why, or a detach that leaves the
+    field behind."""
     case = car.copy()
     case.cell_data.clear()
     bare = case.copy()
@@ -459,7 +460,11 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
         append.AddInputData(part)
     append.Update()
     remeshed = pv.wrap(append.GetOutput())
-    files = [_write_vtp(surface, tmp_path / name) for surface, name in ((car, "car.vtp"), (remeshed, "remeshed.vtp"), (bare, "bare.vtp"))]
+    # Another car: this one 2% larger, every face 15 to 45 mm out from the car's.
+    other = car.copy()
+    other.points = np.asarray(car.center + 1.02 * (car.points - car.center), dtype=np.float32)
+    surfaces = ((car, "car.vtp"), (remeshed, "remeshed.vtp"), (bare, "bare.vtp"), (other, "other.vtp"))
+    files = [_write_vtp(surface, tmp_path / name) for surface, name in surfaces]
     outcome = _run_engine("reference", _write_vtp(case, tmp_path / "case.vtp"), tmp_path / "out", ",".join(map(str, files)))
     out, cfd = tmp_path / "out", np.asarray(car.cell_data["CpMeanTrim"])
 
@@ -468,6 +473,7 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     assert outcome["before"] == {"reference": None, "cdPCfd": None, "accuracy": None, "meshHasCfd": False}
     assert outcome["names"] == {"withCfd": ["CpMeanTrim", "pMeanTrim"], "bare": []}
     assert "no cell array of one number per polygon" in outcome["refusals"]["bare"]
+    assert "other.vtp is not this car's surface: its polygons lie a median" in outcome["refusals"]["otherCar"]
     assert "CpMissing" in outcome["refusals"]["missing"] and "CpMeanTrim, pMeanTrim" in outcome["refusals"]["missing"]
     assert outcome["progressed"]
 
