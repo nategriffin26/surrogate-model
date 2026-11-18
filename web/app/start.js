@@ -1,10 +1,7 @@
 // The first screen: a drop zone and the bundled examples. Dropping a file anywhere on the window works too.
 
 import { h, s } from './dom.js';
-import { EXAMPLES } from './examples.js';
-import { millions } from './format.js';
-
-const EXAMPLE_BASE = new URL('../examples/', import.meta.url);
+import { EXAMPLES, exampleFacts } from './examples.js';
 
 function meshMark() {
 	return s('svg', { viewBox: '0 0 40 28', 'aria-hidden': 'true' },
@@ -15,16 +12,6 @@ function profile(d) {
 	return s('svg', { class: 'silhouette', viewBox: '0 0 132 40', 'aria-hidden': 'true' },
 		s('line', { x1: 0, x2: 132, y1: 37.5, y2: 37.5, class: 'floor' }),
 		s('path', { d }));
-}
-
-/** Facts for each example card, read from the example's own summary. */
-export async function exampleFacts() {
-	return Promise.all(EXAMPLES.map(async ({ id }) => {
-		const response = await fetch(new URL(`${id}.json`, EXAMPLE_BASE));
-		if (!response.ok) throw new Error(`${id}.json: ${response.status}`);
-		const { source } = await response.json();
-		return `${millions(source.cells)} cells`;
-	}));
 }
 
 export function startScreen({ onFile, onExample }) {
@@ -39,7 +26,7 @@ export function startScreen({ onFile, onExample }) {
 			h('span', { class: 'drop-sub' }, 'or ', h('span', { class: 'link' }, 'choose one'))),
 		h('div', { class: 'examples-head' }, 'Examples'),
 		h('div', { class: 'examples' }, EXAMPLES.map((example, i) =>
-			h('button', { type: 'button', class: 'example', 'data-example': example.id, onclick: () => onExample(example.id, example.label) },
+			h('button', { type: 'button', class: 'example', 'data-example': example.id, onclick: () => onExample(example.id) },
 				profile(example.profile),
 				h('span', { class: 'example-name' }, example.label),
 				metas[i]))));

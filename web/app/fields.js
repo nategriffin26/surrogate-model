@@ -69,6 +69,9 @@ function valueAt(mesh, field, v) {
 	}
 }
 
+/** A per-vertex value on face f of a mesh with `indices`: the mean of its three corners, as the viewer draws it at the face's centre. */
+export const faceMean = (values, indices, f) => (values[indices[3 * f]] + values[indices[3 * f + 1]] + values[indices[3 * f + 2]]) / 3;
+
 /**
  * The end of a scale spanning 98 % of `count` values (value(i) the i-th): |value| at the 98th percentile of an even
  * sample of about 20,000 of them, rounded up to a value the legend can label cleanly.

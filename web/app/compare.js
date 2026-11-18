@@ -13,8 +13,8 @@ import { sampled, totalsOver } from './cases.js';
 import { round } from './checks.js';
 import { coefficient, failureNote, h } from './dom.js';
 import { baseName, defineExport } from './export.js';
-import { MAPS, addField, removeField, scaleEnd } from './fields.js';
-import { signed } from './format.js';
+import { MAPS, addField, faceMean, removeField, scaleEnd } from './fields.js';
+import { csv, signed } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
@@ -211,7 +211,7 @@ export function createComparison({ session, engine, update, run }) {
 		const key = cfd ? cells : pair.difference;
 		if (!rmsKept.has(key)) {
 			const I = c.result.mesh.indices, d = pair.difference;
-			rmsKept.set(key, rmsOver(cells.areas, cfd ? (f) => cells.cp[f] - cells.cfd[f] : (f) => (d[I[3 * f]] + d[I[3 * f + 1]] + d[I[3 * f + 2]]) / 3));
+			rmsKept.set(key, rmsOver(cells.areas, cfd ? (f) => cells.cp[f] - cells.cfd[f] : (f) => faceMean(d, I, f)));
 		}
 		return rmsKept.get(key);
 	}
@@ -257,15 +257,14 @@ export function createComparison({ session, engine, update, run }) {
 			additionalProperties: false,
 		},
 		run(args) {
-			const c = session.active;
-			if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
+			const c = session.withResult();
 			const target = args.with;
 			if (target === null) {
 				view.compare = null;
 				removeField(COMPARED);
 				removeField(DIFFERENCE);
 				delete view.maps?.[DIFFERENCE];
-				labelled = null;
+				offeredFor = null;
 				if (view.field === COMPARED || view.field === DIFFERENCE) view.field = 'cp';
 				update('toolbar', 'legend', 'viewer', 'dock');
 				return { comparing: false };
@@ -297,8 +296,7 @@ export function createComparison({ session, engine, update, run }) {
 		description: 'The comparison for a case, without changing the view: the whole car\'s area, Cx, Cy, Cz and mean Cp on this car and on what it is compared with (each side summed on its own polygons, as summed_over says), their difference, and the area-weighted RMS of ΔCp over this car\'s faces.',
 		parameters: { type: 'object', properties: { case_id: { type: 'integer', description: 'Default the case on screen.' } }, additionalProperties: false },
 		run({ case_id }) {
-			const c = case_id === undefined ? session.active : session.byId(case_id);
-			if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
+			const c = session.withResult(case_id);
 			if (!compared(c)) throw new Error('Nothing is compared with this case. Start with set_comparison.');
 			return comparisonOut(c);
 		},
@@ -319,7 +317,7 @@ export function createComparison({ session, engine, update, run }) {
 		const whole = wholeCar(c);
 		const head = ['area_m2', ...QUANTITIES.flatMap((q) => [`${q.key}_this`, `${q.key}_other`, `${q.key}_difference`]), 'rms_dcp'];
 		const values = [whole.mine.area.toFixed(5), ...QUANTITIES.flatMap((q) => valuesOf(q, whole).map((v) => v.toFixed(5))), whole.rms.toFixed(5)];
-		return `# ${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}\n${head.join(',')}\n${values.join(',')}\n`;
+		return csv([head, values], `${c.name} compared with ${pair.other ? pair.other.name : 'CFD'}`);
 	}
 
 	// ---- the Compare tab ----

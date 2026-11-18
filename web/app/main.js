@@ -8,19 +8,18 @@
 
 import { createEngine } from '../engine/engine.js';
 import { createTriad } from '../viewer/triad.js';
-import { VIEWS, Viewer } from '../viewer/viewer.js';
+import { Viewer } from '../viewer/viewer.js';
 import { createAnnotations } from './annotations.js';
 import { createComparison } from './compare.js';
 import { defineCaseOperations } from './cases.js';
 import { defineDisplayOperations } from './display.js';
 import { createDock } from './dock.js';
-import { failureNote, h } from './dom.js';
-import { EXPORTS, baseName, defineExport, defineExportOperations, pictureOf } from './export.js';
+import { h } from './dom.js';
+import { baseName, createExportMenu, defineExport, defineExportOperations, pictureOf } from './export.js';
 import { FIELDS, RESULT_FIELDS, defaultMaps } from './fields.js';
 import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
-import { menu } from './menu.js';
 import { onOperation, operations, runOperation } from './operations.js';
 import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
@@ -29,7 +28,7 @@ import { createResultCard } from './results.js';
 import { createSectionTool, defineSectionOperations } from './section.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
-import { VIEW_KEYS, createToolbar } from './toolbar.js';
+import { createToolbar } from './toolbar.js';
 import { createVariants, shortName } from './variants.js';
 import { createWorkspace } from './workspace.js';
 
@@ -98,7 +97,6 @@ defineProbeOperations(context);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
 const comparison = createComparison({ session, engine, update, run });
 const variants = createVariants({ session, engine, workspace, update, run });
-defineExportOperations(context);
 defineFileOperations(context);
 
 defineExport({
@@ -110,19 +108,7 @@ defineExport({
 	make: (c) => pictureOf(c, viewer, { field: shownField(), map: view.maps[FIELDS[shownField()].map], marks: (ctx, scale) => annotations.paintLabels(ctx, scale) }),
 	fileName: (c) => `${baseName(c)}-${shownField().replace(/^custom:/, '')}.png`,
 });
-defineExport({
-	name: 'surface',
-	label: 'Surface',
-	format: 'VTP',
-	title: 'The analysed file with CpPredicted and CpSpread cell arrays added',
-	// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on. A variant's
-	// surface was written with its prediction when it was made.
-	unavailable: (c) => (engine.canExportVtp(c.result) ? null
-		: c.variant ? `The variant's surface, with CpPredicted and CpSpread, is in the workspace at ${c.path}.`
-			: 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
-	make: (c) => engine.exportVtp(c.result),
-	fileName: (c) => `${baseName(c)}_prediction.vtp`,
-});
+defineExportOperations(context);
 
 // ---- components ------------------------------------------------------------------------------------------------------
 
@@ -134,6 +120,7 @@ const toolbar = createToolbar({
 	fit: () => run('fit_view', {}),
 	projection: (projection) => run('set_projection', { projection }),
 	toggle: (what) => toggle(what),
+	hasCar: () => Boolean(active()?.surface),
 }, annotations.layers.el);
 $('[data-toolbar]').append(toolbar.el);
 
@@ -150,15 +137,7 @@ function toggle(what) {
 	}
 }
 
-const legend = createLegend({
-	change: (patch) => run('set_colour_scale', {
-		field: legendField(),
-		...(patch.lo !== undefined ? { min: patch.lo } : {}),
-		...(patch.hi !== undefined ? { max: patch.hi } : {}),
-		...(patch.ramp !== undefined ? { ramp: patch.ramp } : {}),
-		...(patch.banded !== undefined ? { banded: patch.banded } : {}),
-	}),
-});
+const legend = createLegend({ change: (patch) => run('set_colour_scale', { field: legendField(), ...patch }) });
 $('[data-legend]').append(legend.el);
 
 const probes = createProbes({ host: overlay, engine, viewer, active, session, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
@@ -176,6 +155,7 @@ const dock = createDock({
 	panels,
 	active: described,
 	view,
+	resizer: $('[data-dock-resizer]'),
 	actions: {
 		tab: (name) => {
 			// Choosing Section turns the section on, which brings its plot up; when it is on already the tab just shows it.
@@ -222,39 +202,8 @@ function setMode(next) {
 	update('layout');
 }
 
-/**
- * The Export menu: every export, downloaded by its row or saved into the workspace by the folder beside it. Those
- * that cannot be made now are disabled with the reason as their tooltip; the surface file is offered only while the
- * engine holds the car's whole predicted surface.
- */
-const exportNote = failureNote();
-const exportList = h('div', { class: 'menu-list export-list' });
-const exportButton = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
-const exportMenu = menu(exportButton, h('div', {}, exportList, exportNote.el), { align: 'right' });
+const exportMenu = createExportMenu({ run, active });
 $('[data-export]').append(exportMenu.el);
-
-async function exportTo(row, name, to) {
-	row.classList.add('busy');
-	const saved = await exportNote.run(run(to === 'download' ? 'download_export' : 'save_export', { export: name }));
-	row.classList.remove('busy');
-	if (saved) exportMenu.close();
-}
-
-function renderExportMenu() {
-	const c = active();
-	exportList.replaceChildren(...[...EXPORTS.values()].flatMap((e) => {
-		const why = e.unavailable(c);
-		if (e.name === 'surface' && why) return [];
-		const row = h('div', { class: 'export-row', 'data-export': e.name },
-			h('button', { type: 'button', class: 'menu-item', title: why ?? e.title, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'download') }, h('span', {}, e.label), h('kbd', {}, e.format)),
-			h('button', { type: 'button', class: 'icon-button export-keep', title: `Save ${e.label.toLowerCase()} to files`, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'files') }, icon('keep')));
-		return [row];
-	}));
-}
-exportButton.addEventListener('click', () => {
-	exportNote.hide();
-	renderExportMenu();
-});
 
 // ---- the assistant: a panel on the right, open in either view ------------------------------------------------------------
 
@@ -493,7 +442,7 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 			if (c !== active()) return;
 			update('card', 'dock');
 			// The surface export becomes available with the exact numbers, perhaps while the menu is open.
-			if (ready()) renderExportMenu();
+			if (ready()) exportMenu.render();
 			return;
 		case 'device':
 			if (active()?.status === 'analysing' || active()?.status === 'queued') update('center');
@@ -530,40 +479,6 @@ viewer.addEventListener('hover', ({ detail: { hit, clientX, clientY } }) => {
 viewer.addEventListener('tap', ({ detail: { hit, clientX, clientY } }) => {
 	if (mode !== 'result' || !ready()) return;
 	probes.pin(hit, clientX, clientY);
-});
-
-// ---- dock height ----------------------------------------------------------------------------------------------------------
-
-const dockResizer = $('[data-dock-resizer]');
-dockResizer.addEventListener('pointerdown', (e) => {
-	dockResizer.setPointerCapture(e.pointerId);
-	body.classList.add('resizing');
-	const move = (ev) => {
-		const bottom = $('[data-dock]').getBoundingClientRect().bottom;
-		body.style.setProperty('--dock', `${Math.min(innerHeight * 0.6, Math.max(150, bottom - ev.clientY))}px`);
-	};
-	const end = () => {
-		body.classList.remove('resizing');
-		dockResizer.removeEventListener('pointermove', move);
-		dockResizer.removeEventListener('pointerup', end);
-		dockResizer.removeEventListener('pointercancel', end);
-	};
-	dockResizer.addEventListener('pointermove', move);
-	dockResizer.addEventListener('pointerup', end);
-	dockResizer.addEventListener('pointercancel', end);
-});
-
-// ---- keys -------------------------------------------------------------------------------------------------------------------
-
-const VIEW_BY_KEY = Object.fromEntries(Object.entries(VIEW_KEYS).map(([name, key]) => [key, name]));
-addEventListener('keydown', (e) => {
-	if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
-	if (!active()?.surface) return;
-	const key = e.key.toLowerCase();
-	if (VIEW_BY_KEY[key] && VIEWS[VIEW_BY_KEY[key]]) run('set_camera_view', { view: VIEW_BY_KEY[key] });
-	else if (key === 'f') run('fit_view', {});
-	else if (key === 'p' || key === 'o') run('set_projection', { projection: key === 'p' ? 'perspective' : 'orthographic' });
-	else if (key === 'e' || key === 'g' || key === 's') toggle({ e: 'edges', g: 'ground', s: 'section' }[key]);
 });
 
 acceptDrops((file) => addFiles([file], { workspace, run }));

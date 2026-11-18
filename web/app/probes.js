@@ -10,15 +10,15 @@
 
 import { VertexGrid, FaceIndex } from '../viewer/picking.js';
 import { oneOf, round, triple } from './checks.js';
-import { CUT_AXES } from './mesh-cut.js';
-import { sectionStations } from './section.js';
-import { failureNote, h, put, s } from './dom.js';
+import { failureNote, h, put, s, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
-import { FIELDS } from './fields.js';
-import { signed } from './format.js';
+import { FIELDS, faceMean } from './fields.js';
+import { csv, signed } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
+import { CUT_AXES } from './mesh-cut.js';
 import { defineOperation } from './operations.js';
+import { sectionStations } from './section.js';
 
 /** A probe site's value of each field the Result view shows. */
 const VALUE = { cp: (site) => site.cp, sigma: (site) => site.sigma, drag: (site) => -site.cp * site.normal[0] };
@@ -108,8 +108,7 @@ async function siteAtPoint(engine, c, point, face = faceNear(c.result.mesh, poin
 function addedValue(c, field, f) {
 	const values = FIELDS[field]?.values?.(c);
 	if (!values) return null;
-	const I = c.result.mesh.indices;
-	return (values[I[3 * f]] + values[I[3 * f + 1]] + values[I[3 * f + 2]]) / 3;
+	return faceMean(values, c.result.mesh.indices, f);
 }
 
 /** Each probe's site on a case, by probe; looked up once per case. */
@@ -127,7 +126,7 @@ function probesCsv(c, set, sites) {
 	const cells = c.kind === 'file';
 	const head = ['probe', ...(cells ? ['cell'] : []), ...COLUMNS.map((col) => (col.unit ? `${col.key}_${col.unit}` : col.key))];
 	const rows = set.probes.map((p, i) => [p.n, ...(cells ? [sites[i].cell ?? ''] : []), ...COLUMNS.map((col) => col.read(sites[i]).toFixed(6))]);
-	return [head, ...rows].map((r) => r.join(',')).join('\n') + '\n';
+	return csv([head, ...rows]);
 }
 
 /** The first "Set n" no set is named. */
@@ -149,11 +148,6 @@ const probeResult = (p, site) => ({
 export function defineProbeOperations({ session, engine, update }) {
 	const view = session.view;
 	let nextSet = 1;
-	const target = (case_id) => {
-		const c = case_id === undefined ? session.active : session.byId(case_id);
-		if (!c?.result) throw new Error(case_id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${case_id} has no result yet (${c.status}).`);
-		return c;
-	};
 	const setById = (set_id) => {
 		const set = session.probeSets.find((x) => x.id === set_id);
 		if (!set) throw new Error(`There is no probe set ${set_id}. Sets: ${session.probeSets.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`);
@@ -205,7 +199,7 @@ export function defineProbeOperations({ session, engine, update }) {
 			additionalProperties: false,
 		},
 		async run({ point, case_id, set_id }) {
-			const c = target(case_id);
+			const c = session.withResult(case_id);
 			const at = triple('point', point);
 			if (set_id === undefined && !session.probeSets.some((x) => x.id === view.probeSet)) await addSet(freeSetName(session.probeSets), [], c);
 			const set = chosen(set_id);
@@ -229,7 +223,7 @@ export function defineProbeOperations({ session, engine, update }) {
 			additionalProperties: false,
 		},
 		async run({ count = STATIONS, branch = 'upper', name, case_id }) {
-			const c = target(case_id);
+			const c = session.withResult(case_id);
 			if (!Number.isInteger(count) || count < 1 || count > MOST_STATIONS) throw new Error(`count must be a whole number from 1 to ${MOST_STATIONS}; got ${count}.`);
 			const b = ['upper', 'lower'].indexOf(oneOf('branch', branch, ['upper', 'lower']));
 			const plane = view.section;
@@ -250,7 +244,7 @@ export function defineProbeOperations({ session, engine, update }) {
 			const sets = session.probeSets.map(setSummary);
 			const set = set_id === undefined ? session.probeSets.find((x) => x.id === view.probeSet) : setById(set_id);
 			if (!set) return { sets, in_use: null };
-			const c = target(case_id);
+			const c = session.withResult(case_id);
 			const sites = await readSet(engine, c, set);
 			return { sets, in_use: view.probeSet, set_id: set.id, name: set.name, probes: set.probes.map((p, i) => probeResult(p, sites[i])) };
 		},
@@ -518,22 +512,26 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 	setButton.addEventListener('click', () => renderSets());
 
 	const stationCount = h('input', { class: 'number', type: 'text', inputmode: 'numeric', value: String(STATIONS), 'aria-label': 'Stations' });
-	const branchButtons = [0, 1].map((b) => h('button', { type: 'button', role: 'radio', class: 'segment', 'aria-checked': String(b === 0), onclick: () => branchButtons.forEach((x, k) => x.setAttribute('aria-checked', String(k === b))) }));
+	let branch = 'upper';
+	const branches = segmented('Branch', [['upper', ''], ['lower', '']], (chosen) => {
+		branch = chosen;
+		branches.show(branch);
+	});
+	branches.show(branch);
 	const stationsForm = h('form', { class: 'stations', onsubmit: (e) => {
 		e.preventDefault();
 		const count = Number(stationCount.value);
-		const branch = branchButtons[1].getAttribute('aria-checked') === 'true' ? 'lower' : 'upper';
 		stations.close();
 		act('place_probes_along_section', { count, branch });
 	} },
 		h('label', { class: 'stations-row' }, h('span', { class: 'control-label' }, 'Stations'), stationCount),
-		h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Branch' }, branchButtons),
+		branches.el,
 		h('button', { type: 'submit', class: 'button' }, 'Place'));
 	const stationsButton = h('button', { type: 'button', class: 'tool', title: 'Probes at stations evenly spaced along the section' }, icon('section'), 'Along section');
 	const stations = menu(stationsButton, stationsForm);
 	stationsButton.addEventListener('click', () => {
 		const names = CUT_AXES[view.section.axis].branches;
-		branchButtons.forEach((b, k) => (b.textContent = names[k]));
+		branches.buttons.forEach((b, k) => (b.textContent = names[k]));
 	});
 
 	const clear = h('button', { type: 'button', class: 'tool', onclick: () => act('clear_probes', {}) }, icon('close'), 'Clear');

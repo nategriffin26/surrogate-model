@@ -12,7 +12,7 @@ import { Annotations, rgbOf } from '../viewer/annotations.js';
 import { finite, oneOf, round, triple } from './checks.js';
 import { h } from './dom.js';
 import { evaluate } from './expression.js';
-import { MAPS, addField, removeField } from './fields.js';
+import { MAPS, addField, faceMean, removeField } from './fields.js';
 import { count, niceTicks } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
@@ -125,10 +125,7 @@ function toVertices(mesh, cells, faces) {
 
 /** Per face, the mean of its corners: the value the viewer draws at its centre. */
 function toFaces(mesh, vertices) {
-	const { indices } = mesh;
-	const faces = new Float32Array(indices.length / 3);
-	for (let f = 0; f < faces.length; f++) faces[f] = (vertices[indices[3 * f]] + vertices[indices[3 * f + 1]] + vertices[indices[3 * f + 2]]) / 3;
-	return faces;
+	return Float32Array.from({ length: mesh.indices.length / 3 }, (_, f) => faceMean(vertices, mesh.indices, f));
 }
 
 /** Every face a layer paints in one colour, each keeping its opacity. */
@@ -222,11 +219,6 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 	/** What was last handed to the viewer, so an update that changes nothing hands it nothing. */
 	let pushed = {};
 
-	const caseFor = (case_id) => {
-		const c = case_id === undefined ? session.active : session.byId(case_id);
-		if (!c?.result) throw new Error(case_id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${case_id} has no result yet (${c.status}).`);
-		return c;
-	};
 	const layerOn = (store, name) => store.layers.find((layer) => layer.name === name);
 	const needLayer = (c, name) => {
 		const layer = layerOn(storeOf(c), name);
@@ -433,7 +425,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			required: ['name'],
 			additionalProperties: false,
 		},
-		run: (args, { by }) => showField(caseFor(args.case_id), args, by),
+		run: (args, { by }) => showField(session.withResult(args.case_id), args, by),
 	});
 
 	defineOperation({
@@ -452,7 +444,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			},
 			additionalProperties: false,
 		},
-		run: (args, { by }) => paintFaces(caseFor(args.case_id), args, by),
+		run: (args, { by }) => paintFaces(session.withResult(args.case_id), args, by),
 	});
 
 	defineOperation({
@@ -472,7 +464,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
 			if (!Array.isArray(args.texts) || args.texts.length !== points.length / 3) throw new Error(`texts must hold one text per point (${points.length / 3}); got ${Array.isArray(args.texts) ? args.texts.length : JSON.stringify(args.texts)}.`);
 			const texts = args.texts.map((t) => String(t).slice(0, LABEL_CHARS));
@@ -499,7 +491,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
 			const colours = args.colours === undefined ? null : itemColours('colours', args.colours, points.length / 3);
 			const layer = draw(c, args, by, 'points', { kind: 'points', points, size: args.size_px === undefined ? POINT_PX : widthOf('size_px', args.size_px), colours });
@@ -524,7 +516,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			if (!Array.isArray(args.lines) || args.lines.length === 0) throw new Error('lines must be a list of polylines, each a list of points [x, y, z].');
 			const polylines = args.lines.map((line, i) => pointsOf(`lines[${i}]`, line));
 			const starts = new Uint32Array(polylines.length + 1);
@@ -555,7 +547,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			const points = pointsOf('points', args.points);
 			const vectors = pointsOf('vectors', args.vectors);
 			if (vectors.length !== points.length) throw new Error(`vectors must hold one vector per point (${points.length / 3}); got ${vectors.length / 3}.`);
@@ -579,7 +571,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			const lo = triple('min', args.min), hi = triple('max', args.max);
 			if (!lo.every((v, k) => v < hi[k])) throw new Error(`min must be below max on every axis; got ${JSON.stringify(lo)} and ${JSON.stringify(hi)}.`);
 			return { layer: draw(c, args, by, 'box', { kind: 'box', min: [...lo], max: [...hi] }).name };
@@ -601,7 +593,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run(args, { by }) {
-			const c = caseFor(args.case_id);
+			const c = session.withResult(args.case_id);
 			const normal = triple('normal', args.normal);
 			if (Math.hypot(...normal) === 0) throw new Error('normal must not be zero.');
 			const length = c.result.geometry.length;
@@ -615,7 +607,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 		description: 'The layers on a car, in drawing order: each one\'s name, kind (field or drawing), who made it, whether it shows, and its colour, width, marks and painted faces or its field.',
 		parameters: { type: 'object', properties: { case_id: caseId }, additionalProperties: false },
 		run({ case_id }) {
-			const c = caseFor(case_id);
+			const c = session.withResult(case_id);
 			return { case_id: c.id, layers: storeOf(c).layers.map(layerSummary) };
 		},
 	});
@@ -637,7 +629,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			additionalProperties: false,
 		},
 		run({ layer: name, visible, name: rename, colour, width_px, case_id }) {
-			const c = caseFor(case_id);
+			const c = session.withResult(case_id);
 			const layer = needLayer(c, nameOf(name));
 			const store = storeOf(c);
 			if (rename !== undefined) {
@@ -692,7 +684,7 @@ export function createAnnotations({ session, engine, viewer, view, overlay, upda
 			return Boolean(c && stores.has(c) && removing(c, layer).some((each) => each.by === 'engineer'));
 		},
 		run({ layer: name, case_id }) {
-			const c = caseFor(case_id);
+			const c = session.withResult(case_id);
 			if (name !== undefined) needLayer(c, nameOf(name));
 			const gone = removing(c, name);
 			const store = storeOf(c);

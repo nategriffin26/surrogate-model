@@ -29,6 +29,17 @@ export function put(element, ...children) {
 }
 
 /**
+ * A row of radio buttons, one per option [value, text, title?]: a click runs `choose(value)`, and `show(value)` marks
+ * the option chosen. `buttons` are the buttons in option order.
+ */
+export function segmented(label, options, choose) {
+	const buttons = options.map(([value, text, title]) => h('button', { type: 'button', role: 'radio', class: 'segment', title, onclick: () => choose(value) }, text));
+	const el = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons);
+	const show = (chosen) => options.forEach(([value], k) => buttons[k].setAttribute('aria-checked', String(value === chosen)));
+	return { el, buttons, show };
+}
+
+/**
  * A note that shows why the operation a control ran failed, until that control or another runs again. `run(promise)`
  * resolves to the operation's result, or to undefined when it failed.
  */

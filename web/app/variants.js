@@ -11,9 +11,9 @@
 import { boundsOf } from '../engine/geometry.js';
 import { writeVtp } from '../engine/vtp.js';
 import { finite, oneOf, round } from './checks.js';
-import { coefficient, failureNote, h } from './dom.js';
+import { coefficient, failureNote, h, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
-import { signed } from './format.js';
+import { csv, parseNumber, signed } from './format.js';
 import { defineOperation } from './operations.js';
 
 const KINDS = ['stretch', 'ride_height'];
@@ -265,17 +265,16 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	function studyCsv(c) {
 		const { root, variants } = studyOf(c);
 		const keys = ['cx', 'cy', 'cz', 'mean_cp', 'frontal_area_m2'];
-		const line = (name, changes, values, difference) => [`"${name.replaceAll('"', '""')}"`, `"${changes}"`, ...keys.map((k) => values[k].toFixed(5)), ...DIFFERENCES.map((k) => (difference ? difference[k].toFixed(5) : ''))].join(',');
+		const row = (name, changes, values, difference) => [name, changes, ...keys.map((k) => values[k].toFixed(5)), ...DIFFERENCES.map((k) => (difference ? difference[k].toFixed(5) : ''))];
 		const base = numbers(root.baseline);
-		return [
-			`# ${root.name} and its variants. ${PREDICTED_ON}`,
-			['case', 'changes', ...keys, ...DIFFERENCES.map((k) => `${k}_difference`)].join(','),
-			line(root.name, 'unchanged', base, null),
+		return csv([
+			['case', 'changes', ...keys, ...DIFFERENCES.map((k) => `${k}_difference`)],
+			row(root.name, 'unchanged', base, null),
 			...variants.map((v) => {
 				const mine = numbers(v.result);
-				return line(v.name, v.variant.changes.map(describe).join('; '), mine, Object.fromEntries(DIFFERENCES.map((k) => [k, mine[k] - base[k]])));
+				return row(v.name, v.variant.changes.map(describe).join('; '), mine, Object.fromEntries(DIFFERENCES.map((k) => [k, mine[k] - base[k]])));
 			}),
-		].join('\n') + '\n';
+		], `${root.name} and its variants. ${PREDICTED_ON}`);
 	}
 
 	defineOperation({
@@ -299,8 +298,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 		description: 'The study of a car: the car predicted unchanged on its simplified mesh, as its variants are, and each open variant with its changes, Cx, Cy, Cz, mean Cp and frontal area, and their differences from the unchanged car. The same table the Variants tab shows, whoever made the variants. Give any case of the study; default the case on screen.',
 		parameters: { type: 'object', properties: { case_id: { type: 'integer', description: 'Default the case on screen.' } }, additionalProperties: false },
 		run({ case_id }) {
-			const c = case_id === undefined ? session.active : session.byId(case_id);
-			if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
+			const c = session.withResult(case_id);
 			return studyOut(c);
 		},
 	});
@@ -321,13 +319,8 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	let stretchAxis = 'x';
 	let making = false;
 
-	const segmented = (label, options, chosen, choose) => {
-		const buttons = options.map(([value, text, title]) => h('button', { type: 'button', role: 'radio', class: 'segment', title, 'data-value': value, onclick: () => { choose(value); render(); } }, text));
-		const el = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons);
-		return { el, update: () => buttons.forEach((b) => b.setAttribute('aria-checked', String(b.dataset.value === chosen()))) };
-	};
-	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]), () => kind, (k) => (kind = k));
-	const stretchAxes = segmented('Along', AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]), () => stretchAxis, (a) => (stretchAxis = a));
+	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]), (k) => { kind = k; render(); });
+	const stretchAxes = segmented('Along', AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]), (a) => { stretchAxis = a; render(); });
 	const number = (value, label) => h('input', { class: 'number', type: 'text', inputmode: 'decimal', value, 'aria-label': label, spellcheck: 'false' });
 	const unit = (text) => h('span', { class: 'unit' }, text);
 	const percent = number('5', 'Change in size, %');
@@ -348,8 +341,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 
 	async function submit(e) {
 		e.preventDefault();
-		const value = (input) => Number(input.value.trim().replace('\u2212', '-'));
-		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: value(percent) } : { kind, offset_mm: value(height) };
+		const change = kind === 'stretch' ? { kind, axis: stretchAxis, percent: parseNumber(percent.value) } : { kind, offset_mm: parseNumber(height.value) };
 		making = true;
 		render();
 		await note.run(run('make_variant', { changes: [change] }));
@@ -359,7 +351,8 @@ export function createVariants({ session, engine, workspace, update, run }) {
 
 	function render() {
 		const c = session.active;
-		for (const control of [kinds, stretchAxes]) control.update();
+		kinds.show(kind);
+		stretchAxes.show(stretchAxis);
 		for (const [k, part] of Object.entries(parts)) part.hidden = k !== kind;
 		make.disabled = making || !c?.result;
 		make.textContent = making ? 'Predicting…' : 'Make variant';

@@ -3,7 +3,7 @@
 
 import { h } from './dom.js';
 import { MAPS } from './fields.js';
-import { digitsFor, niceTicks, signed } from './format.js';
+import { digitsFor, niceTicks, parseNumber, signed } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { RAMPS, rampCss, rampPosition, sample } from './ramps.js';
@@ -66,12 +66,7 @@ function paintBar(canvas, map) {
 	canvas.getContext('2d').putImageData(image, 0, 0);
 }
 
-function parse(text) {
-	const value = Number(text.trim().replace('\u2212', '-'));
-	return Number.isFinite(value) ? value : null;
-}
-
-/** actions: change(patch to the map). */
+/** actions: change(patch), the patch in set_colour_scale's terms: {min?, max?, ramp?, banded?}. */
 export function createLegend(actions) {
 	const title = h('span', { class: 'legend-title' });
 	// A gradient, not a canvas: putting pixels into a canvas waits on the GPU process, which the networks keep busy.
@@ -89,9 +84,9 @@ export function createLegend(actions) {
 		h('div', { class: 'legend-scale' }, lo, ticks, hi));
 	let state = null;
 
-	for (const [input, end] of [[lo, 'lo'], [hi, 'hi']]) {
+	for (const [input, end, arg] of [[lo, 'lo', 'min'], [hi, 'hi', 'max']]) {
 		const commit = () => {
-			const value = parse(input.value);
+			const value = parseNumber(input.value);
 			const next = { lo: state.map.lo, hi: state.map.hi, [end]: value };
 			if (value === null || next.lo >= next.hi) {
 				input.classList.add('invalid');
@@ -99,7 +94,7 @@ export function createLegend(actions) {
 				render(state);
 				return;
 			}
-			actions.change({ [end]: value });
+			actions.change({ [arg]: value });
 		};
 		input.addEventListener('change', commit);
 		input.addEventListener('keydown', (e) => {
@@ -121,9 +116,9 @@ export function createLegend(actions) {
 		bar.setPointerCapture(e.pointerId);
 		const move = (ev) => {
 			const d = (ev.clientX - start.x) * perPixel;
-			if (grab === 'lo') actions.change({ lo: round(Math.min(start.lo + d, start.hi - perPixel * 8)) });
-			else if (grab === 'hi') actions.change({ hi: round(Math.max(start.hi + d, start.lo + perPixel * 8)) });
-			else actions.change({ lo: round(start.lo + d), hi: round(start.hi + d) });
+			if (grab === 'lo') actions.change({ min: round(Math.min(start.lo + d, start.hi - perPixel * 8)) });
+			else if (grab === 'hi') actions.change({ max: round(Math.max(start.hi + d, start.lo + perPixel * 8)) });
+			else actions.change({ min: round(start.lo + d), max: round(start.hi + d) });
 		};
 		const end = () => {
 			bar.removeEventListener('pointermove', move);

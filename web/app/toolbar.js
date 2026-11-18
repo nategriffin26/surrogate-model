@@ -7,13 +7,18 @@ import { menu } from './menu.js';
 import { rampCss } from './ramps.js';
 import { VIEWS } from '../viewer/viewer.js';
 
-export const VIEW_KEYS = { isometric: '0', front: '1', rear: '2', left: '3', right: '4', top: '5', bottom: '6' };
+const VIEW_KEYS = { isometric: '0', front: '1', rear: '2', left: '3', right: '4', top: '5', bottom: '6' };
+const VIEW_BY_KEY = Object.fromEntries(Object.entries(VIEW_KEYS).map(([name, key]) => [key, name]));
+const TOGGLE_BY_KEY = { e: 'edges', g: 'ground', s: 'section' };
 
 function tool(name, label, title, onclick) {
 	return h('button', { type: 'button', class: 'tool', title, 'data-tool': name, onclick }, icon(name), h('span', { class: 'tool-label' }, label));
 }
 
-/** actions: what the controls do; layers: the Layers menu, beside the section toggle as another thing drawn on the car. */
+/**
+ * actions: what the controls and their keys do, and hasCar(), whether a car is on screen for the keys to act on.
+ * layers: the Layers menu, beside the section toggle as another thing drawn on the car.
+ */
 export function createToolbar(actions, layers) {
 	const fields = h('div', { class: 'fields', role: 'radiogroup', 'aria-label': 'Field' });
 	const projection = ['perspective', 'orthographic'].map((p) => h('button', {
@@ -43,6 +48,17 @@ export function createToolbar(actions, layers) {
 			h('div', { class: 'tool-group' }, tools.edges, tools.ground),
 			h('div', { class: 'tool-group' }, tools.section, layers),
 			controls.el));
+
+	// The keys the Mouse and keys list names, unless a text field has the focus.
+	addEventListener('keydown', (e) => {
+		if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
+		if (!actions.hasCar()) return;
+		const key = e.key.toLowerCase();
+		if (VIEW_BY_KEY[key]) actions.view(VIEW_BY_KEY[key]);
+		else if (key === 'f') actions.fit();
+		else if (key === 'p' || key === 'o') actions.projection(key === 'p' ? 'perspective' : 'orthographic');
+		else if (TOGGLE_BY_KEY[key]) actions.toggle(TOGGLE_BY_KEY[key]);
+	});
 
 	/** state: {fields: [names], field, maps, enabled, projection, display: {edges, ground}, section} */
 	function render(state) {

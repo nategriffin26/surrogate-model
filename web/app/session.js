@@ -8,6 +8,7 @@
 
 import { loadResult } from '../engine/result.js';
 import { Surface } from '../viewer/surface.js';
+import { EXAMPLE_BASE } from './examples.js';
 
 const MOVES = {
 	queued: ['analysing', 'failed'],
@@ -18,7 +19,6 @@ const MOVES = {
 };
 
 export const STAGES = ['reading', 'measuring', 'meshing', 'predicting'];
-const EXAMPLES = new URL('../examples/', import.meta.url);
 
 export class Session extends EventTarget {
 	constructor(engine) {
@@ -58,6 +58,13 @@ export class Session extends EventTarget {
 		const c = this.cases.find((x) => x.id === id);
 		if (!c) throw new Error(`There is no open case ${id}. Open cases: ${this.cases.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'}.`);
 		return c;
+	}
+
+	/** The case with an id, else the one on screen; either must have a result, or the error says why it has none. */
+	withResult(id) {
+		const c = id === undefined ? this.active : this.byId(id);
+		if (c?.result) return c;
+		throw new Error(id === undefined ? 'No case with a result is on screen. Open a file or an example first.' : `Case ${id} has no result yet (${c.status}).`);
 	}
 
 	/** detail.what: 'cases' (opened, closed), 'active', 'status', 'stage', 'geometry', 'full', 'numbers', 'device'. */
@@ -117,7 +124,7 @@ export class Session extends EventTarget {
 	async openExample(id, label) {
 		const c = this.add({ ...this.newCase(label, 'example', null, 'loading'), example: id });
 		try {
-			const result = await loadResult(new URL(id, EXAMPLES).href);
+			const result = await loadResult(new URL(id, EXAMPLE_BASE).href);
 			if (c.closed) return;
 			c.result = result;
 			c.surface = new Surface(result.mesh);
@@ -174,7 +181,7 @@ export class Session extends EventTarget {
 				c.surface.setFullFields(fields, fraction);
 				this.notify(c, 'full');
 			},
-			// Drag, agreement and coverage summed over every polygon of the file, replacing the sampled ones.
+			// The forces, accuracy and totals summed over every polygon of the file, replacing the sampled ones.
 			exact: (numbers) => {
 				c.exact = numbers;
 				if (c.result) Object.assign(c.result, numbers);

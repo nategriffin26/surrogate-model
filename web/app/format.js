@@ -1,4 +1,5 @@
-// Number formats for everything on screen. Negative numbers use the minus sign; files use plain ASCII.
+// Number formats for everything on screen, and the CSV the exports are written as. Negative numbers on screen use the
+// minus sign; files use plain ASCII.
 
 const MINUS = '\u2212';
 
@@ -7,6 +8,14 @@ export const signed = (x, digits = 3) => {
 	const magnitude = Math.abs(x).toFixed(digits);
 	return `${x < 0 && Number(magnitude) !== 0 ? MINUS : ''}${magnitude}`;
 };
+
+/** A number typed by the engineer, read with either minus sign; null when the text is not one. */
+export function parseNumber(text) {
+	const trimmed = text.trim();
+	const value = trimmed ? Number(trimmed.replace(MINUS, '-')) : NaN;
+	return Number.isFinite(value) ? value : null;
+}
+
 export const seconds = (s) => (s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`);
 export const count = (n) => n.toLocaleString('en-US');
 export const millions = (n) => `${(n / 1e6).toFixed(n < 1e7 ? 2 : 1)} M`;
@@ -16,6 +25,16 @@ export function bytes(n) {
 	if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
 	if (n >= 1e3) return `${Math.round(n / 1e3)} kB`;
 	return `${n} B`;
+}
+
+/** A CSV file: `comment`, if given, as a first line after `#`, then one line per row; a field holding a comma, quote or line break is quoted. */
+export function csv(rows, comment) {
+	const field = (value) => {
+		const text = String(value);
+		return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+	};
+	const lines = rows.map((row) => row.map(field).join(','));
+	return `${comment ? `# ${comment}\n` : ''}${lines.join('\n')}\n`;
 }
 
 /** Digits that resolve a step on an axis or a legend. */

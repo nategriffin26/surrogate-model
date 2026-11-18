@@ -6,12 +6,11 @@
 
 import { caseSummary } from './cases.js';
 import { download, failureNote, h, s } from './dom.js';
-import { EXAMPLES } from './examples.js';
+import { EXAMPLES, exampleFacts } from './examples.js';
 import { bytes, millions, seconds } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
-import { exampleFacts } from './start.js';
 import { normalPath } from './workspace.js';
 
 /** What a file is, by its extension: a label, an icon, and whether it reads as text. */

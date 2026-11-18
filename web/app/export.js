@@ -2,9 +2,11 @@
 // menu offers every one that is available, to download or to save into the workspace, and so do the operations.
 // The picture is the view with its legend and the file's name; the tools add their own tables.
 
-import { download } from './dom.js';
+import { download, failureNote, h } from './dom.js';
 import { FIELDS } from './fields.js';
+import { icon } from './icons.js';
 import { paintLegend } from './legend.js';
+import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
 
 /** Download names start from the file analysed, without its extension. */
@@ -64,8 +66,7 @@ export function pictureOf(c, viewer, { field, map, marks }) {
 async function makeExport(name, session) {
 	const spec = EXPORTS.get(name);
 	if (!spec) throw new Error(`There is no export "${name}". Exports: ${[...EXPORTS.keys()].join(', ')}.`);
-	const c = session.active;
-	if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
+	const c = session.withResult();
 	const why = spec.unavailable(c);
 	if (why) throw new Error(why);
 	return { blob: await spec.make(c), fileName: spec.fileName(c) };
@@ -84,8 +85,22 @@ function saveFile(workspace, path, fileName, blob, by) {
 	return workspace.write(target, blob, by);
 }
 
-/** context: { session, workspace } */
-export function defineExportOperations({ session, workspace }) {
+/** context: { session, workspace, engine }. The surface export, and the operations that make any export. */
+export function defineExportOperations({ session, workspace, engine }) {
+	defineExport({
+		name: 'surface',
+		label: 'Surface',
+		format: 'VTP',
+		title: 'The analysed file with CpPredicted and CpSpread cell arrays added',
+		// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on. A
+		// variant's surface was written with its prediction when it was made.
+		unavailable: (c) => (engine.canExportVtp(c.result) ? null
+			: c.variant ? `The variant's surface, with CpPredicted and CpSpread, is in the workspace at ${c.path}.`
+				: 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
+		make: (c) => engine.exportVtp(c.result),
+		fileName: (c) => `${baseName(c)}_prediction.vtp`,
+	});
+
 	const describe = () => [...EXPORTS.values()].map((e) => `${e.name} (${e.label}, ${e.format})`).join(', ');
 	const exportParameter = () => ({ type: 'string', enum: [...EXPORTS.keys()], description: `What to export: ${describe()}.` });
 
@@ -123,4 +138,41 @@ export function defineExportOperations({ session, workspace }) {
 			return { file_name: fileName, size_bytes: blob.size };
 		},
 	});
+}
+
+/**
+ * The Export menu: every export, downloaded by its row or saved into the workspace by the folder beside it. Those
+ * that cannot be made now are disabled with the reason as their tooltip; the surface file is offered only while the
+ * engine holds the car's whole predicted surface. `render()` brings the rows up to date with the case on screen.
+ */
+export function createExportMenu({ run, active }) {
+	const note = failureNote();
+	const list = h('div', { class: 'menu-list export-list' });
+	const button = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
+	const exportMenu = menu(button, h('div', {}, list, note.el), { align: 'right' });
+
+	async function exportTo(row, name, to) {
+		row.classList.add('busy');
+		const saved = await note.run(run(to === 'download' ? 'download_export' : 'save_export', { export: name }));
+		row.classList.remove('busy');
+		if (saved) exportMenu.close();
+	}
+
+	function render() {
+		const c = active();
+		list.replaceChildren(...[...EXPORTS.values()].flatMap((e) => {
+			const why = e.unavailable(c);
+			if (e.name === 'surface' && why) return [];
+			const row = h('div', { class: 'export-row', 'data-export': e.name },
+				h('button', { type: 'button', class: 'menu-item', title: why ?? e.title, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'download') }, h('span', {}, e.label), h('kbd', {}, e.format)),
+				h('button', { type: 'button', class: 'icon-button export-keep', title: `Save ${e.label.toLowerCase()} to files`, disabled: Boolean(why), onclick: () => exportTo(row, e.name, 'files') }, icon('keep')));
+			return [row];
+		}));
+	}
+	button.addEventListener('click', () => {
+		note.hide();
+		render();
+	});
+
+	return { el: exportMenu.el, render };
 }

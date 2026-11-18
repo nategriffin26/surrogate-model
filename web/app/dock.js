@@ -6,15 +6,18 @@ import { icon } from './icons.js';
 
 /** The least height, in px, a section plot is drawn in beside a panel's numbers: below it the curves are too flat to read. */
 const SLOT_MIN_PX = 130;
+/** The dock's height as its top edge is dragged: at least DOCK_MIN_PX, at most DOCK_MAX_SHARE of the window's height. */
+const DOCK_MIN_PX = 150;
+const DOCK_MAX_SHARE = 0.6;
 
 /**
- * view: the shared view (its dock tab and section). actions: tab(name), collapse(). The section tool supplies the
- * section plot and its controls, the probes their table and its actions. Each of `panels` is a tab of its own,
- * {name, label, el, controls?, render(), count?(), sectionSlot?}, its count shown in the tab when above zero. A
- * panel's `sectionSlot` is the place in its layout where the section plot sits, beside its numbers, while the section
- * is on.
+ * view: the shared view (its dock tab and section). actions: tab(name), collapse(). resizer: the edge above the dock,
+ * dragged to set its height. The section tool supplies the section plot and its controls, the probes their table and
+ * its actions. Each of `panels` is a tab of its own, {name, label, el, controls?, render(), count?(), sectionSlot?},
+ * its count shown in the tab when above zero. A panel's `sectionSlot` is the place in its layout where the section
+ * plot sits, beside its numbers, while the section is on.
  */
-export function createDock({ section, probes, panels, active, view, actions }) {
+export function createDock({ section, probes, panels, active, view, actions, resizer }) {
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
@@ -27,6 +30,24 @@ export function createDock({ section, probes, panels, active, view, actions }) {
 	const body = h('div', { class: 'dock-body' }, sectionPlot, table);
 	const el = h('div', { class: 'dock' }, h('div', { class: 'dock-head' }, tabs, controls, collapse), body);
 	new ResizeObserver(() => drawPlotNow()).observe(body);
+
+	resizer.addEventListener('pointerdown', (e) => {
+		resizer.setPointerCapture(e.pointerId);
+		document.body.classList.add('resizing');
+		const move = (ev) => {
+			const bottom = el.parentElement.getBoundingClientRect().bottom;
+			document.body.style.setProperty('--dock', `${Math.min(innerHeight * DOCK_MAX_SHARE, Math.max(DOCK_MIN_PX, bottom - ev.clientY))}px`);
+		};
+		const end = () => {
+			document.body.classList.remove('resizing');
+			resizer.removeEventListener('pointermove', move);
+			resizer.removeEventListener('pointerup', end);
+			resizer.removeEventListener('pointercancel', end);
+		};
+		resizer.addEventListener('pointermove', move);
+		resizer.addEventListener('pointerup', end);
+		resizer.addEventListener('pointercancel', end);
+	});
 
 	const panelShown = () => panels.find((p) => p.name === view.dock);
 	/** Where the section plot is drawn: the whole dock on the Section tab, beside a panel's numbers, or nowhere. */

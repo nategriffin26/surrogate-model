@@ -5,10 +5,10 @@
 
 import { finite, oneOf, round } from './checks.js';
 import { COMPARED, counterpart } from './compare.js';
-import { h } from './dom.js';
+import { h, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS } from './fields.js';
-import { niceTicks, signed } from './format.js';
+import { csv, niceTicks, parseNumber, signed } from './format.js';
 import { defineOperation } from './operations.js';
 import { drawCursor, drawPlot, valueAlong } from './plots.js';
 import { CUT_AXES, branches, cut, interpolated } from './mesh-cut.js';
@@ -138,23 +138,18 @@ function plotSeries(view, shown, cases) {
 function sectionCsv(view, shown, cases) {
 	const names = CUT_AXES[view.section.axis].branches;
 	const plane = `${AXIS_NAMES[view.section.axis]}=${view.section.offset}`;
-	const lines = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', quantityOf(plottedField(view.field, shown)).key].join(',')];
+	const rows = [['case', 'section', 'branch', 'x_m', 'y_m', 'z_m', quantityOf(plottedField(view.field, shown)).key]];
 	for (const series of plotSeries(view, shown, cases)) {
 		sectionRows(series.case, view.section, series.field).forEach((paths, branch) => paths.forEach((path) => {
-			for (const r of path) lines.push([`"${series.source.replaceAll('"', '""')}"`, plane, names[branch], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)].join(','));
+			for (const r of path) rows.push([series.source, plane, names[branch], ...r.p.map((v) => v.toFixed(6)), r.value.toFixed(6)]);
 		}));
 	}
-	return lines.join('\n') + '\n';
+	return csv(rows);
 }
 
 /** context: { session, update }. The section as operations, and its plot's points as an export. */
 export function defineSectionOperations({ session, update }) {
 	const view = session.view;
-	const shown = () => {
-		const c = session.active;
-		if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example first.');
-		return c;
-	};
 	const summary = () => ({ on: view.section.on, axis: AXIS_NAMES[view.section.axis], position_m: view.section.offset });
 
 	defineOperation({
@@ -170,7 +165,7 @@ export function defineSectionOperations({ session, update }) {
 			additionalProperties: false,
 		},
 		run({ on, axis, position_m }) {
-			const c = shown();
+			const c = session.withResult();
 			const s = view.section;
 			if (axis !== undefined) {
 				const index = AXIS_NAMES.indexOf(oneOf('axis', axis, AXIS_NAMES));
@@ -208,8 +203,7 @@ export function defineSectionOperations({ session, update }) {
 			additionalProperties: false,
 		},
 		run({ case_id, field = 'cp', at_m = [] }) {
-			const c = case_id === undefined ? shown() : session.byId(case_id);
-			if (!c.result) throw new Error(`Case ${c.id} has no result yet (${c.status}).`);
+			const c = session.withResult(case_id);
 			if (!readable(field, c)) throw new Error(`Case ${c.id} has no field ${JSON.stringify(field)}. It has ${[...Object.keys(QUANTITY), ...Object.keys(FIELDS).filter((key) => !QUANTITY[key])].filter((key) => readable(key, c)).join(', ')}.`);
 			at_m.forEach((x, i) => finite(`at_m[${i}]`, x));
 			if (!view.section.on) throw new Error('The section is off. Turn it on with set_section first.');
@@ -428,17 +422,17 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	// the drag after its first step.
 	const position = h('input', { class: 'number', type: 'text', inputmode: 'decimal', 'aria-label': 'Position, m', spellcheck: 'false' });
 	position.addEventListener('change', () => {
-		const value = Number(position.value.replace('\u2212', '-'));
-		if (Number.isFinite(value)) run('set_section', { position_m: value });
+		const value = parseNumber(position.value);
+		if (value !== null) run('set_section', { position_m: value });
 		else position.value = signed(view.section.offset, 3);
 	});
 	position.addEventListener('keydown', (e) => e.key === 'Enter' && position.blur());
 	const slider = h('input', { type: 'range', class: 'slider', step: 0.001, 'aria-label': 'Position' });
 	slider.addEventListener('input', () => run('set_section', { position_m: Number(slider.value) }));
-	const normals = AXIS_NAMES.map((name) => h('button', { type: 'button', role: 'radio', class: 'segment', onclick: () => run('set_section', { axis: name }) }, name));
+	const normals = segmented('Normal', AXIS_NAMES.map((name, axis) => [axis, name]), (axis) => run('set_section', { axis: AXIS_NAMES[axis] }));
 	const axisLabel = h('span', { class: 'control-label' });
 	const controlsEl = h('div', { class: 'cut-controls' },
-		h('span', { class: 'control-label' }, 'Normal'), h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Normal' }, normals),
+		h('span', { class: 'control-label' }, 'Normal'), normals.el,
 		h('label', { class: 'position' }, axisLabel, position, h('span', { class: 'unit' }, 'm')),
 		slider);
 
@@ -451,7 +445,7 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		slider.value = s.offset;
 		if (document.activeElement !== position) position.value = signed(s.offset, 3);
 		axisLabel.textContent = AXIS_NAMES[s.axis];
-		normals.forEach((button, axis) => button.setAttribute('aria-checked', String(axis === s.axis)));
+		normals.show(s.axis);
 		return controlsEl;
 	}
 

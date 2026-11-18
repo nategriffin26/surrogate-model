@@ -12,13 +12,6 @@ const VIEW_NAMES = Object.keys(VIEWS);
 /** A colour map as an operation reports it. */
 const mapResult = (field, map) => ({ field, min: round(map.lo), max: round(map.hi), ramp: map.ramp, banded: Boolean(map.banded), bands: bandCount(map) });
 
-/** The case whose view is changed: the one on screen, with its result. */
-function shown(session) {
-	const c = session.active;
-	if (!c?.result) throw new Error('No case with a result is on screen. Open a file or an example, or wait for its analysis.');
-	return c;
-}
-
 /** The camera moves as soon as a car is on screen, while its pressure is still being predicted too. */
 function carOnScreen(session) {
 	if (!session.active?.surface) throw new Error('No car is on screen. Open a file or an example first.');
@@ -41,7 +34,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 			};
 		},
 		run({ field }) {
-			shown(session);
+			session.withResult();
 			view.field = oneOf('field', field, offeredFields());
 			update('toolbar', 'legend', 'viewer', 'dock', 'markers');
 			return mapResult(field, view.maps[FIELDS[field].map]);
@@ -66,7 +59,7 @@ export function defineDisplayOperations({ session, viewer, update }) {
 			};
 		},
 		run({ field = view.field, min, max, ramp, banded, reset }) {
-			const c = shown(session);
+			const c = session.withResult();
 			oneOf('field', field, offeredFields());
 			const name = FIELDS[field].map;
 			// An added field starts at the scale it was added with; the model's start from the surface's values.
