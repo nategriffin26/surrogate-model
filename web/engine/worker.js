@@ -8,7 +8,7 @@
  * meshing     the full mesh, drawn at once, and the working mesh (meshes.js)
  * predicting  the networks at the file's own polygons, at their centres with their normals, as they
  *             were trained: every polygon around a working-mesh vertex, which gives the working mesh
- *             its fields, and evenly spaced area picks, which give the drag, the agreement with CFD
+ *             its fields, and evenly spaced area picks, which give the drag, the accuracy against CFD
  *             and the spread. Features in the helper workers; the networks on the GPU (gpu.js) or,
  *             without WebGPU, in the helpers too (network.js)
  *
