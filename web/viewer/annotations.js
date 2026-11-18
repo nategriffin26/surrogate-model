@@ -28,7 +28,7 @@ import { FaceIndex, VertexGrid } from './picking.js';
  *   points; `closed` joins each one's last point to its first.
  */
 
-/** White beyond a mark's edge, CSS px, and its opacity. */
+/** White beyond a mark's edge, CSS px. */
 const HALO = 1.25;
 /** How strongly the part of a mark behind the car shows. */
 const BEHIND = 0.3;
@@ -234,6 +234,8 @@ class Batch {
 const POINT = { size: 3, type: Float32Array };
 const COLOUR = { size: 4, type: Uint8Array };
 const NUMBER = { size: 1, type: Float32Array };
+/** The viewport of the pane being drawn, read before each mark's draw. */
+const viewport = new THREE.Vector4();
 
 /** sRGB bytes of a '#rrggbb' colour. */
 export function rgbOf(hex) {
@@ -318,7 +320,7 @@ export class Annotations {
 		}
 		const any = Object.values(batches).some((batch) => batch.count > 0);
 		this.group.visible = any;
-		this.viewer.setAnnotations(any ? this.group : null);
+		this.viewer.setOverlay(any ? this.group : null);
 		this.labels.show(labels, mesh);
 	}
 
@@ -327,8 +329,6 @@ export class Annotations {
 		this.labels.paint(ctx, scale);
 	}
 }
-
-const viewport = new THREE.Vector4();
 
 /** A kind's marks as a new geometry: its instances' attributes, or its triangles. */
 function geometryOf(part, batch) {
@@ -441,6 +441,7 @@ const GAP = 9;
 const RINGS = [34, 64, 104];
 /** Labels keep this far from each other and from the view's edges. */
 const CLEAR = 3;
+/** Side of the square buckets, CSS px, that placed label boxes are filed in to find overlaps quickly. */
 const BUCKET = 96;
 
 /** Edge of the cubes the car is held in for finding whether it hides a label's point, metres. */
@@ -558,7 +559,10 @@ class Labels {
 		});
 		this.mesh = mesh;
 		if (same) return this.place();
-		for (const item of this.items) item.dot.remove(), item.box.remove();
+		for (const item of this.items) {
+			item.dot.remove();
+			item.box.remove();
+		}
 		for (const item of items) {
 			item.dot = document.createElement('div');
 			item.dot.className = 'annotation-dot';

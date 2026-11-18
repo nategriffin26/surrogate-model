@@ -3,7 +3,8 @@
 
 import * as THREE from 'three';
 import {
-	BLUR_FRAGMENT, GROUND_FRAGMENT, GROUND_VERTEX, LATTICE_FRAGMENT, LATTICE_VERTEX, SHADOW_DEPTH_FRAGMENT, SHADOW_DEPTH_VERTEX,
+	BLUR_FRAGMENT, GROUND_FRAGMENT, LATTICE_FRAGMENT, LATTICE_VERTEX, SCREEN_VERTEX, SHADOW_DEPTH_FRAGMENT, SHADOW_DEPTH_VERTEX,
+	WORLD_VERTEX,
 } from './shaders.js';
 
 export class Ground {
@@ -23,7 +24,7 @@ export class Ground {
 		};
 		this.object = new THREE.Mesh(
 			new THREE.PlaneGeometry(60, 60),
-			new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: GROUND_VERTEX, fragmentShader: GROUND_FRAGMENT, transparent: true, depthWrite: false }),
+			new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: WORLD_VERTEX, fragmentShader: GROUND_FRAGMENT, transparent: true, depthWrite: false }),
 		);
 		this.object.renderOrder = 1;
 		this.object.visible = false;
@@ -43,7 +44,7 @@ export class Ground {
 		this.depthCamera = new THREE.OrthographicCamera();
 		this.blur = new THREE.ShaderMaterial({
 			uniforms: { uSource: { value: null }, uStep: { value: new THREE.Vector2() } },
-			vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+			vertexShader: SCREEN_VERTEX,
 			fragmentShader: BLUR_FRAGMENT,
 		});
 		this.blurScene = new THREE.Scene().add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.blur));

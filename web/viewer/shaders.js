@@ -1,5 +1,6 @@
-// GLSL for the car, its mesh edges, picking and the ground. Fields are per-vertex attributes; every colour
-// mapping, the section line and the arrival of a field are uniforms, so none of them touches a buffer.
+// GLSL for the car, its mesh edges, picking, the floor with its baked shadow, the lattice, and the waiting car's
+// composite. Fields are per-vertex attributes; every colour mapping, the section line and the arrival of a field are
+// uniforms, so none of them touches a buffer.
 
 export const CAR_VERTEX = /* glsl */ `
 attribute float cp;
@@ -42,17 +43,17 @@ vec3 waitingClay(float x) {
 	return mix(uClay, uAccent, 0.2 * done + 0.28 * pulse) + 0.06 * pulse;
 }`;
 
-/** Uniforms, inputs and functions of the car's fragment shaders: the colour of a field, and its shading. */
+/** Uniforms, constants, inputs and functions of the car's fragment shaders: the colour of a field, and its shading. */
 const CAR_COMMON = /* glsl */ `
 uniform sampler2D uRamp;
 uniform int uField;          // 0 cp, 1 cfd, 2 cp - cfd, 3 sigma, 4 -cp nx, 5 none, 6 the custom field
 uniform vec4 uMap;           // lo, hi, bands (0 = continuous), ramp row
 uniform vec3 uClay;
 uniform vec3 uInk;
-uniform vec3 uKey;
-uniform vec3 uFill;
-uniform float uShade;
-uniform float uGloss;
+const vec3 KEY = vec3(-0.451129228, -0.551380157, 0.701756597);  // the key light, unit, toward the light
+const vec3 FILL = vec3(0.792593896, 0.566138506, 0.226455405);   // the fill light, unit, toward the light
+const float SHADE = 0.8;    // how much the lighting darkens a colour
+const float GLOSS = 0.35;   // strength of the studio reflection and highlight
 uniform float uZmin;
 uniform float uOrtho;
 uniform vec3 uViewDir;
@@ -118,18 +119,18 @@ vec3 shaded(vec3 base) {
 	if (!gl_FrontFacing) N = -N;
 	vec3 V = uOrtho > 0.5 ? -uViewDir : normalize(cameraPosition - vWorld);
 	float hemi = 0.5 + 0.5 * N.z;
-	float key = max(dot(N, uKey), 0.0);
-	float fill = max(dot(N, uFill), 0.0);
+	float key = max(dot(N, KEY), 0.0);
+	float fill = max(dot(N, FILL), 0.0);
 	float nearGround = mix(0.72, 1.0, smoothstep(0.0, 0.25, vWorld.z - uZmin));
 	float light = (0.4 + 0.3 * hemi + 0.48 * key + 0.14 * fill) * mix(1.0, nearGround, step(N.z, 0.25));
-	vec3 colour = base * mix(1.0, light, uShade);
+	vec3 colour = base * mix(1.0, light, SHADE);
 	// Studio reflection: a bright soft sky above the horizon, the pale floor below, strongest at grazing angles.
 	vec3 R = reflect(-V, N);
 	float sky = smoothstep(-0.08, 0.22, R.z);
 	float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
-	colour = mix(colour, mix(colour * 0.8, vec3(1.0), sky), uGloss * fresnel * 0.9);
-	vec3 H = normalize(uKey + V);
-	colour += uGloss * 0.35 * pow(max(dot(N, H), 0.0), 80.0);
+	colour = mix(colour, mix(colour * 0.8, vec3(1.0), sky), GLOSS * fresnel * 0.9);
+	vec3 H = normalize(KEY + V);
+	colour += GLOSS * 0.35 * pow(max(dot(N, H), 0.0), 80.0);
 	// The inside of the shell, seen through an opening, reads darker than the outside.
 	if (!gl_FrontFacing) colour *= 0.62;
 	if (uSection > 0.5) colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
@@ -213,7 +214,8 @@ void main() {
 	#include <colorspace_fragment>
 }`;
 
-export const PICK_VERTEX = /* glsl */ `
+/** Any surface placed in the world, its world position passed on: for picking and for the floor. */
+export const WORLD_VERTEX = /* glsl */ `
 varying vec3 vWorld;
 void main() {
 	vec4 world = modelMatrix * vec4(position, 1.0);
@@ -225,14 +227,6 @@ export const PICK_FRAGMENT = /* glsl */ `
 varying vec3 vWorld;
 void main() {
 	gl_FragColor = vec4(vWorld, 1.0);
-}`;
-
-export const GROUND_VERTEX = /* glsl */ `
-varying vec3 vWorld;
-void main() {
-	vec4 world = modelMatrix * vec4(position, 1.0);
-	vWorld = world.xyz;
-	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
 export const GROUND_FRAGMENT = /* glsl */ `

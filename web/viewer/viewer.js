@@ -9,7 +9,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
 import { FaceIndex, VertexGrid } from './picking.js';
-import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
+import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT, WORLD_VERTEX } from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 const SHADER_FIELD = { cp: 0, cfd: 1, error: 2, sigma: 3, drag: 4, none: 5 };
@@ -19,7 +19,8 @@ const INK = '#0d2233';
 const CLAY = '#e4e9ed';
 const ACCENT = '#0b6fbf';
 const FOV = 30;
-const ORTHO_DISTANCE = 20;
+/** How far the orthographic camera stands from what it looks at, in metres; its far plane is three times this. */
+export const ORTHO_DISTANCE = 20;
 /** How close `flyTo` comes, as a share of the distance that frames the whole car. */
 const CLOSE_UP = 0.4;
 /** The camera counts as moving until this long after its last change. */
@@ -68,23 +69,24 @@ export class Viewer extends EventTarget {
 		/** A field the app supplies (setCustomField), and paint on the car (setPaint), per working-mesh vertex, or null. */
 		this.custom = null;
 		this.paint = null;
-		/** Objects the annotations draw with the car (setAnnotations), or null. */
-		this.annotations = null;
+		/** Objects drawn with the car in world space (setOverlay): the annotations' marks, or the Model page's stencil. */
+		this.overlay = null;
 		this.lastUpload = 0;
 		/** Signalled once the GPU has taken in the last piece uploaded. */
 		this.uploadFence = null;
 		this.panes = [{ field: 'none', map: null }];
 		this.display = { edges: false, ground: true };
 		this.section = null;
-		this.markers = null;
 		this.animations = new Set();
 		this.dirty = true;
 		this.pending = false;
 		this.lastMotion = -Infinity;
 		this.lastFrame = 0;
-		/** What the last frame drew: its layer and triangle count. */
+		/** The corners of the car's box on screen at the last frame, to measure the camera's motion. */
+		this.corners = null;
+		/** What the last frame drew: its layer. */
 		this.drawn = null;
-		this.lod = { budget: MOVING_BUDGET_MS };
+		this.lod = {};
 		this.resetLod(null);
 
 		const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -136,10 +138,6 @@ export class Viewer extends EventTarget {
 			uMap: { value: new THREE.Vector4(-1, 1, 0, 0) },
 			uClay: { value: new THREE.Color(CLAY) },
 			uInk: { value: new THREE.Color(INK) },
-			uKey: { value: new THREE.Vector3(-0.45, -0.55, 0.7).normalize() },
-			uFill: { value: new THREE.Vector3(0.7, 0.5, 0.2).normalize() },
-			uShade: { value: 0.8 },
-			uGloss: { value: 0.35 },
 			uZmin: { value: 0 },
 			uOrtho: { value: 0 },
 			uViewDir: { value: new THREE.Vector3() },
@@ -196,7 +194,7 @@ export class Viewer extends EventTarget {
 		this.scene.add(this.car, this.edges, this.ground.object, this.lattice.object, this.plane);
 
 		this.pickMaterial = new THREE.ShaderMaterial({
-			vertexShader: PICK_VERTEX,
+			vertexShader: WORLD_VERTEX,
 			fragmentShader: PICK_FRAGMENT,
 			side: THREE.DoubleSide,
 		});
@@ -214,8 +212,7 @@ export class Viewer extends EventTarget {
 		this.hoverBusy = false;
 
 		this.bindPointer();
-		this.resizeObserver = new ResizeObserver(() => this.resize());
-		this.resizeObserver.observe(host);
+		new ResizeObserver(() => this.resize()).observe(host);
 		this.resize();
 		this.warmUp();
 	}
@@ -443,18 +440,10 @@ export class Viewer extends EventTarget {
 		this.attachToWorking('paintCover', this.paint?.cover, 1, true);
 	}
 
-	/** Objects the annotations draw with the car in world space, in every pane, or null. The caller owns and disposes them. */
-	setAnnotations(object) {
-		if (this.annotations) this.scene.remove(this.annotations);
-		this.annotations = object;
-		if (object) this.scene.add(object);
-		this.requestRender();
-	}
-
-	/** Objects drawn with the car in world space (the model view's stencil), or null. The caller owns and disposes them. */
-	setMarkers(object) {
-		if (this.markers) this.scene.remove(this.markers);
-		this.markers = object;
+	/** Objects drawn with the car in world space, in every pane, or null. The caller owns and disposes them. */
+	setOverlay(object) {
+		if (this.overlay) this.scene.remove(this.overlay);
+		this.overlay = object;
 		if (object) this.scene.add(object);
 		this.requestRender();
 	}
@@ -559,7 +548,7 @@ export class Viewer extends EventTarget {
 	 * faint tint run downstream from the nose, and soft pulses carried downstream. null when nothing is predicted; a
 	 * field waiting to arrive ends the wait itself, as its front replaces it.
 	 */
-	predicting(share) {
+	showPredicting(share) {
 		const u = this.uniforms.uWait.value;
 		if (share === null) {
 			if (this.waiting && !this.arrival && !this.animating('arrival')) {
@@ -732,7 +721,6 @@ export class Viewer extends EventTarget {
 		this.uniforms.uOrtho.value = projection === 'orthographic' ? 1 : 0;
 		this.resize();
 		this.controls.update();
-		this.dispatchEvent(new CustomEvent('projection'));
 	}
 
 	/** Everything needed to put the camera back where it was. */
@@ -748,7 +736,6 @@ export class Viewer extends EventTarget {
 			this.controls.object = this.camera;
 			this.uniforms.uOrtho.value = state.projection === 'orthographic' ? 1 : 0;
 			this.resize();
-			this.dispatchEvent(new CustomEvent('projection'));
 		}
 		this.camera.position.fromArray(state.position);
 		this.target.fromArray(state.target);
@@ -800,15 +787,6 @@ export class Viewer extends EventTarget {
 		return { index, x: x - index * w, y, w, h };
 	}
 
-	/** World-space ray through a client point. */
-	rayAt(clientX, clientY) {
-		const at = this.paneAt(clientX, clientY);
-		if (!at) return null;
-		const raycaster = new THREE.Raycaster();
-		raycaster.setFromCamera(new THREE.Vector2((at.x / at.w) * 2 - 1, -(at.y / at.h) * 2 + 1), this.camera);
-		return raycaster.ray;
-	}
-
 	/**
 	 * Fit the drawing buffer to the view and draw at once. Resizing a WebGL canvas clears it, and waiting for the next
 	 * animation frame would show that empty canvas for a frame. A view hidden with its page (0 × 0) keeps its buffer.
@@ -828,7 +806,6 @@ export class Viewer extends EventTarget {
 		this.resetLod(this.lod.layer);
 		this.disposeStill();
 		this.render();
-		this.dispatchEvent(new CustomEvent('resize'));
 	}
 
 	// ---- picking ----------------------------------------------------------------------------------------------------
@@ -964,7 +941,7 @@ export class Viewer extends EventTarget {
 	}
 
 	schedule() {
-		if (this.pending || this.disposed) return;
+		if (this.pending) return;
 		this.pending = true;
 		requestAnimationFrame((now) => this.frame(now));
 	}
@@ -1087,13 +1064,12 @@ export class Viewer extends EventTarget {
 		lod.samples.push(performance.now() - start);
 		if (lod.samples.length < 5) return;
 		lod.decided = true;
-		lod.frameMs = median(lod.samples);
-		lod.fullWhileMoving = lod.frameMs <= lod.budget;
+		lod.fullWhileMoving = median(lod.samples) <= MOVING_BUDGET_MS;
 	}
 
 	/** Forget the measured frame cost: a new full mesh or a new canvas size is measured afresh. */
 	resetLod(layer) {
-		Object.assign(this.lod, { layer, samples: [], frameMs: null, decided: false, fullWhileMoving: true });
+		Object.assign(this.lod, { layer, samples: [], decided: false, fullWhileMoving: true });
 	}
 
 	render(layerName = this.chooseLayer(false)) {
@@ -1140,22 +1116,13 @@ export class Viewer extends EventTarget {
 		});
 		renderer.autoClear = true;
 		renderer.setScissorTest(false);
-		this.drawn = { layer: layer ? layerName : null, triangles: layer ? layer.triangles : 0 };
+		this.drawn = { layer: layer ? layerName : null };
 		this.dispatchEvent(new CustomEvent('camera'));
 	}
 
 	/** Draw now at full detail and return the canvas; read it in the same task, before the browser clears it. */
 	snapshot() {
-		this.render(this.chooseLayer(false));
+		this.render();
 		return this.canvas;
-	}
-
-	dispose() {
-		this.disposed = true;
-		this.disposeStill();
-		this.resizeObserver.disconnect();
-		this.controls.dispose();
-		this.renderer.dispose();
-		this.canvas.remove();
 	}
 }

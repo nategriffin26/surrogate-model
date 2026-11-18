@@ -1,6 +1,7 @@
 // Where a picked surface point sits on the working mesh. The GPU says where the cursor meets the surface; the vertex
 // grid says which vertex sits nearest there, and the face index which face the point lies on.
 
+/** Edge of the vertex grid's cubes, in metres. */
 const CELL = 0.02;
 
 export class VertexGrid {

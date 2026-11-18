@@ -21,7 +21,6 @@ const CALL_BYTES = 1 << 20;
 class Layer {
 	constructor(mesh) {
 		this.mesh = mesh;
-		this.triangles = mesh.indices.length / 3;
 		this.bounds = mesh.bounds;
 		this.disposed = false;
 		this.gl = null;
