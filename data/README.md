@@ -14,7 +14,7 @@ raw/holdout/run_N/        unseen cases (run_1, run_500) for testing inference an
 
 Each `run_N/` holds:
 
-- `boundary_N.vtp`: surface mesh, ~8.2M cells and ~600 MB per file. All fields are cell data (no point data): `CpMeanTrim` (the target; run_80 spans −4.5 to 1.05), `pMeanTrim`, `pPrime2MeanTrim`, `wallShearStressMeanTrim`
+- `boundary_N.vtp`: surface mesh, 570 to 710 MB per file (run 1 has 8.8 million cells). All fields are cell data (no point data): `CpMeanTrim` (the target; run_80 spans −4.5 to 1.05), `pMeanTrim`, `pPrime2MeanTrim`, `wallShearStressMeanTrim`
 - `force_mom_N.csv`, `force_mom_constref_N.csv`: integrated forces and moments for the run
 - `geo_parameters_N.csv`: the run's morph parameters
 - `geo_ref_N.csv`: reference area and length

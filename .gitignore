@@ -7,5 +7,3 @@ __pycache__/
 data/raw/
 data/processed/
 local/
-frontend/node_modules/
-frontend/dist/
