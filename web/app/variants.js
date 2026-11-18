@@ -333,7 +333,7 @@ export function createVariants({ session, engine, workspace, update, run }) {
 	const make = h('button', { type: 'submit', class: 'button' }, 'Make variant');
 	const form = h('form', { class: 'variants-form', onsubmit: (e) => submit(e) }, kinds.el, ...Object.values(parts), make);
 	const note = failureNote();
-	const table = h('table', { class: 'variants-table' });
+	const table = h('table', { class: 'data-table variants-table' });
 	const basis = h('p', { class: 'variants-basis' }, PREDICTED_ON);
 	// The section plot sits beside the study table: shown on a variant compared with its car, it draws both.
 	const sectionSlot = h('div', { class: 'section-slot' });

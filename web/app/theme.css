@@ -26,6 +26,9 @@
 	--orange: #a35b1a;
 	--violet: #9a55e8;
 	--cyan: #7af0f5;
+	/* The ends of the cool-to-warm ramp (ramps.js): the highest and lowest pressure. */
+	--cp-high: #b40426;
+	--cp-low: #3b4cc0;
 	--head: "TASA Orbiter", "Hanken Grotesk", system-ui, sans-serif;
 	--body: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
 	--ease: cubic-bezier(0.2, 0.7, 0.2, 1);

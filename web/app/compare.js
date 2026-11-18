@@ -329,7 +329,7 @@ export function createComparison({ session, engine, update, run }) {
 	const chooser = menu(withButton, choices);
 	const sideBySide = h('button', { type: 'button', class: 'tool', 'aria-pressed': 'false', onclick: () => compare({ side_by_side: !view.compare?.sideBySide }) }, icon('compare'), 'Side by side');
 	const controls = h('div', { class: 'compare-controls' }, chooser.el, sideBySide);
-	const table = h('table', { class: 'compare-table' });
+	const table = h('table', { class: 'data-table compare-table' });
 	const note = h('p', { class: 'compare-note' });
 	const empty = h('div', { class: 'compare-empty' });
 	// The section plot sits beside the table, so a difference in the numbers can be found along the car.

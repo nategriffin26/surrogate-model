@@ -475,7 +475,7 @@ export function createProbes({ host, engine, viewer, active, session, update, ru
 		const sites = known(c, set);
 		return h('div', { class: 'probes' },
 			failure.el,
-			h('table', { class: 'probe-table' },
+			h('table', { class: 'data-table probe-table' },
 				h('thead', {}, h('tr', {}, h('th', {}, '#'), COLUMNS.map((col) => h('th', {}, col.label, col.unit ? h('span', { class: 'unit' }, ` ${col.unit}`) : null)), h('th', {}))),
 				h('tbody', {}, set.probes.map((p, i) => h('tr', { 'data-probe': p.n },
 					h('td', { class: 'probe-n' }, p.n),
