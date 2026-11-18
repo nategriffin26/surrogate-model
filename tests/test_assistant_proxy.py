@@ -11,6 +11,7 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -234,6 +235,24 @@ def test_the_kernel_worker_is_served_with_its_network_policy(tmp_path: Path) -> 
     assert worker_headers["Content-Security-Policy"] == KERNEL_POLICY
     assert "connect-src https://cdn.jsdelivr.net/pyodide/" in KERNEL_POLICY
     assert "Content-Security-Policy" not in page_headers
+
+
+def test_a_page_load_arriving_all_at_once_is_served_whole(tmp_path: Path) -> None:
+    """Catches the server dropping connections when the tool's modules are requested together, as a proxy in
+    front of it does: with the standard library's queue of five waiting connections the page came up blank."""
+    (tmp_path / "index.html").write_text("<!doctype html>")
+    base, server = serve(AssistantConfig(key=None, model=MODEL, enabled=False), root=tmp_path)
+    with ThreadPoolExecutor(max_workers=60) as pool:
+        statuses = list(pool.map(lambda _: get_or_error(base, "/index.html"), range(60)))
+    server.shutdown()
+    assert statuses == [200] * 60
+
+
+def get_or_error(base: str, path: str) -> int | str:
+    try:
+        return get(base, path)[0]
+    except OSError as error:
+        return type(error).__name__
 
 
 @pytest.mark.skipif(shutil.which("deno") is None, reason="the Worker's tests run under Deno")

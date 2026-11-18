@@ -173,10 +173,17 @@ class ToolRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_server(port: int, root: Path = WEB_ROOT, assistant: AssistantConfig | None = None) -> ThreadingHTTPServer:
+class ToolServer(ThreadingHTTPServer):
+    """The page asks for about forty modules at once. The standard library lets five connections wait and
+    drops the rest, which a proxy in front of the server turns into failed modules and a blank page."""
+
+    request_queue_size = 128
+
+
+def make_server(port: int, root: Path = WEB_ROOT, assistant: AssistantConfig | None = None) -> ToolServer:
     """Bind the tool's server to 127.0.0.1; port 0 picks a free one."""
     handler = partial(ToolRequestHandler, directory=str(root), assistant=assistant or assistant_config())
-    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+    return ToolServer(("127.0.0.1", port), handler)
 
 
 def main() -> None:
