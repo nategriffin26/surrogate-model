@@ -1,12 +1,12 @@
 # Surface pressure surrogate for DrivAerML
 
-A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and Surrogate Model, a browser tool for working with the prediction on a dropped `.vtp` file. The model is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On the two cars kept out of training (runs 1 and 500) it explains 96% of the variance of the CFD pressure (area-weighted $R^2$ `0.9558`).
+A model that predicts the mean surface pressure coefficient (`CpMeanTrim`) at every cell of a car body from its geometry alone, and Surrogate Model, a browser tool for working with the prediction on a dropped `.vtp` file. The model is trained on the ten assigned [DrivAerML](https://huggingface.co/datasets/neashton/drivaerml) cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445, 474). On two test cars kept out of training (runs 1 and 500) it explains 96% of the variance of the CFD pressure (area-weighted $R^2$ `0.9558`).
 
 ![Surrogate Model showing the predicted pressure on DrivAerML run 1](docs/images/surrogate-model.png)
 
 ## Run it
 
-Needs [uv](https://docs.astral.sh/uv/), which installs Python (3.11 to 3.13) and the dependencies on first use. The repository as cloned holds the trained model and two analysed examples, so the tool runs at once:
+Needs [uv](https://docs.astral.sh/uv/), which installs Python (3.11 to 3.13) and the dependencies on first use. The repository as cloned holds the trained model and two analysed examples, so the tool won't need to download them:
 
 ```bash
 uv run surrogate app
