@@ -1,0 +1,12 @@
+# Third-party code and generated files stay out of GitHub's language statistics and collapse in diffs.
+web/vendor/** linguist-vendored
+uv.lock linguist-generated
+web/model/ensemble.json linguist-generated
+web/model/training-cars.json linguist-generated
+web/examples/*.json linguist-generated
+artifacts/metrics.json linguist-generated
+data/metadata/** linguist-documentation
+
+*.pt binary
+*.bin binary
+*.woff2 binary

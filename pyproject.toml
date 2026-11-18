@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "drivaer-surrogate"
 version = "0.1.0"
-description = "Surface-only aerodynamics pressure surrogate and 3D inspection app on DrivAerML"
+description = "Surface pressure (Cp) surrogate for DrivAerML cars, and the Cp Predictor browser tool"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -19,9 +19,10 @@ dependencies = [
 [project.scripts]
 surrogate = "surrogate.cli:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.3",
+    "ruff>=0.17",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -29,6 +30,14 @@ packages = ["src/surrogate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+# σ, − and × in strings and docstrings are notation.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pyright]
 venvPath = "."
