@@ -27,6 +27,7 @@ import { onOperation, operations, runOperation } from './operations.js';
 import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
 import { createRegions, createRegionsPanel } from './regions.js';
+import { defineReport } from './report.js';
 import { createResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
@@ -167,6 +168,7 @@ $('[data-legend]').append(legend.el);
 
 const probes = createProbes({ host: overlay, engine, viewer, active, session, workspace, update, run, fieldIn: (pane) => panes()[pane]?.field ?? shownField() });
 const section = createSectionTool({ host: overlay, viewport, viewer, active, cases: () => session.cases, view, run });
+defineReport({ session, engine, regions, section, comparison, variants });
 const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
 /** The dock's panel tabs; each one's `stop` undoes what it shows on the car when another tab is chosen. */
 const panels = [

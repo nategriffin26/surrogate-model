@@ -566,6 +566,11 @@ export function createRegions({ session, engine, update }) {
 		/** The faces of a case some steps pick, as 0 or 1 per working-mesh face. */
 		maskOf: (c, steps) => maskOf(cellsOf(c.result), steps, session.regions),
 		describe: (rule) => describeRule(rule, session.regions),
+		/** Some terms read on a case as measure_region gives them: the readout, with shares, and what it summed over. */
+		readoutOf: (c, terms) => {
+			const { part, whole, over } = readout(c, terms);
+			return { readout: report(part, whole), summed_over: over };
+		},
 	};
 }
 

@@ -21,6 +21,12 @@ import { defineOperation } from './operations.js';
 
 const KINDS = ['stretch', 'ride_height', 'move'];
 const KIND_LABELS = { stretch: 'Stretch', ride_height: 'Ride height', move: 'Move region' };
+/** What each change does, said once, in its control's tooltip. */
+const KIND_TITLES = {
+	stretch: 'The whole car scales along the axis, its wheels with it',
+	ride_height: 'The body moves up or down and the wheels stay on the ground: the axles are found where the tyres touch it, and the wheels taken as DrivAerML\'s, 0.318 m in radius',
+	move: 'The selection or a saved region moves, and the surface around it follows over the falloff, measured along the surface',
+};
 const AXES = ['x', 'y', 'z'];
 /** What a stretch along each axis changes. */
 const DIMENSIONS = { x: 'length', y: 'width', z: 'height' };
@@ -456,7 +462,7 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 		const el = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': label }, buttons);
 		return { el, update: () => buttons.forEach((b) => b.setAttribute('aria-checked', String(b.dataset.value === chosen()))) };
 	};
-	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k]]), () => kind, (k) => (kind = k));
+	const kinds = segmented('Change', KINDS.map((k) => [k, KIND_LABELS[k], KIND_TITLES[k]]), () => kind, (k) => (kind = k));
 	const stretchAxes = segmented('Along', AXES.map((a) => [a, DIMENSIONS[a][0].toUpperCase() + DIMENSIONS[a].slice(1)]), () => stretchAxis, (a) => (stretchAxis = a));
 	const moveAxes = segmented('Along', AXES.map((a) => [a, a, DIRECTIONS[a]]), () => moveAxis, (a) => (moveAxis = a));
 	const number = (value, label) => h('input', { class: 'number', type: 'text', inputmode: 'decimal', value, 'aria-label': label, spellcheck: 'false' });
@@ -538,5 +544,9 @@ export function createVariants({ session, engine, workspace, regions, update, ru
 
 	const count = () => (session.active?.result ? studyOf(session.active).variants.length : 0);
 
-	return { panel: { el, controls, render, count, stop: () => {} } };
+	return {
+		/** The study of case c, as read_study gives it, or null when its car has no variants open. */
+		study: (c) => (studyOf(c).variants.length ? studyOut(c) : null),
+		panel: { el, controls, render, count, stop: () => {} },
+	};
 }

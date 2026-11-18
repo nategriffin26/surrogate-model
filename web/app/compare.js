@@ -353,7 +353,13 @@ export function createComparison({ session, regions, update, run }) {
 		);
 	}
 
-	return { fields, panes, panel: { el, controls, render, stop: () => {} } };
+	return {
+		fields,
+		panes,
+		/** The comparison table of case c, as read_comparison gives it, or null when c is compared with nothing. */
+		read: (c) => (compared(c) ? comparisonOut(c) : null),
+		panel: { el, controls, render, stop: () => {} },
+	};
 }
 
 /** Area-weighted root mean square of a per-face difference, delta(f), over the faces a mask picks (every face without one). */

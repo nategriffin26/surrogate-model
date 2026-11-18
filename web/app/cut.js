@@ -135,6 +135,8 @@ function plotRange(c, field, map) {
 }
 
 const planeLabel = ({ axis, offset }) => `${AXIS_NAMES[axis]} = ${signed(offset, 3)} m`;
+/** Whether a kept section lies where the live one is: it is then plotted once, as the live one. */
+const underLive = (kept, s) => kept.axis === s.axis && Math.abs(kept.offset - s.offset) < 1e-9;
 
 /**
  * What the section plot shows: the live section and the kept ones that run along the same axis, each on the case
@@ -146,7 +148,7 @@ export function plotSeries(view, shown, cases) {
 	const s = view.section;
 	const along = CUT_AXES[s.axis].along;
 	const field = plottedField(view.field, shown);
-	const planes = [{ id: null, axis: s.axis, offset: s.offset }, ...s.kept.filter((k) => CUT_AXES[k.axis].along === along)];
+	const planes = [{ id: null, axis: s.axis, offset: s.offset }, ...s.kept.filter((k) => CUT_AXES[k.axis].along === along && !underLive(k, s))];
 	// The car shown comes first, so its live section is plotted in the ink its line is drawn in.
 	const cars = s.cars === 'all' ? [shown, ...cases.filter((c) => c.result && c !== shown)] : [shown];
 	const pair = field === 'cp' ? counterpart(view, cases, shown) : null;
@@ -418,11 +420,14 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 
 	const seriesNow = () => plotSeries(view, active(), cases());
 
-	/** The kept sections drawn on the car shown, each in the colour of its line for that car; grey when not plotted. */
+	/**
+	 * The kept sections drawn on the car shown, each in the colour of its line for that car; grey when not plotted.
+	 * One where the live section is is the live line.
+	 */
 	function keptLines() {
 		const c = active();
 		const series = seriesNow().filter((s) => s.case === c);
-		return view.section.kept.map((k) => ({ axis: k.axis, offset: k.offset, colour: series.find((s) => s.plane === k)?.colour ?? UNPLOTTED }));
+		return view.section.kept.filter((k) => !underLive(k, view.section)).map((k) => ({ axis: k.axis, offset: k.offset, colour: series.find((s) => s.plane === k)?.colour ?? UNPLOTTED }));
 	}
 
 	/** Markers on the car shown where the plot cursor meets each branch of each of its sections, in their colours. */
@@ -456,8 +461,8 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 	}
 	viewer.addEventListener('camera', placeMarkers);
 
-	/** The section plot into an SVG of a given size, with its readout element. */
-	function drawSection(svg, readout, width, height) {
+	/** Draw the section plot into an SVG of a given size: its frame, the series drawn and their rows. */
+	function plotInto(svg, width, height) {
 		const s = view.section;
 		const field = plottedField(view.field, active());
 		const q = quantityOf(field);
@@ -474,7 +479,12 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const ranges = [...new Set(read.map((one) => one.case))].map((c) => plotRange(c, field, view.maps?.[FIELDS[field].map]));
 		const label = s.abscissa === 'fraction' ? fraction.label : `${AXIS_NAMES[along]}, m`;
 		const frame = drawPlot(svg, { width, height, x: { domain, label }, y: { domain: [Math.min(...ranges.map((r) => r[0])), Math.max(...ranges.map((r) => r[1]))], label: q.label, invert: q.invert }, series: lines });
-		plot = { frame, series, readout, along, names, label };
+		return { frame, series, along, names, label };
+	}
+
+	/** The section plot into an SVG of a given size, with its readout element. */
+	function drawSection(svg, readout, width, height) {
+		plot = { ...plotInto(svg, width, height), readout };
 		setCursor(cursorAt);
 		svg.onpointermove = (e) => {
 			const rect = svg.getBoundingClientRect();
@@ -582,13 +592,29 @@ export function createSectionTool({ host, viewport, viewer, active, cases, view,
 		const sample = (colour, dashed) => h('i', { style: `border-top: 2px ${dashed ? 'dashed' : 'solid'} ${colour}` });
 		const items = series.length === 1 ? [] : series.map((one) => h('span', { class: 'key-item' }, sample(one.colour, false), one.label,
 			one.plane.id === null ? null : h('button', { type: 'button', class: 'key-remove', title: `Remove ${planeLabel(one.plane)}`, onclick: () => run('remove_section', { section_id: one.plane.id }) }, icon('close'))));
-		const unplotted = s.kept.filter((k) => !series.some((one) => one.plane === k)).map((k) => h('span', { class: 'key-item unplotted', title: `Runs along ${AXIS_NAMES[CUT_AXES[k.axis].along]}; plotted with sections that do` }, planeLabel(k),
+		const unplotted = s.kept.filter((k) => !underLive(k, s) && !series.some((one) => one.plane === k)).map((k) => h('span', { class: 'key-item unplotted', title: `Runs along ${AXIS_NAMES[CUT_AXES[k.axis].along]}; plotted with sections that do` }, planeLabel(k),
 			h('button', { type: 'button', class: 'key-remove', title: `Remove ${planeLabel(k)}`, onclick: () => run('remove_section', { section_id: k.id }) }, icon('close'))));
 		const colour = series.length === 1 ? series[0].colour : 'var(--muted)';
 		return [...items, ...unplotted, h('span', { class: 'key-item' }, sample(colour, false), names[0]), h('span', { class: 'key-item' }, sample(colour, true), names[1])];
 	}
 
-	return { drawSection, controls, key, keptLines, followCar, setCursor, forget: () => (plot = null) };
+	/**
+	 * The plot as a report shows it: drawn into a new SVG of the given size, with its key as {label, colour, dashed}
+	 * and the live section's plane.
+	 */
+	function picture(width, height) {
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		const { series, names } = plotInto(svg, width, height);
+		const colour = series.length === 1 ? series[0].colour : 'var(--muted)';
+		const key = [
+			...(series.length === 1 ? [] : series.map((one) => ({ label: one.label, colour: one.colour, dashed: false }))),
+			{ label: names[0], colour, dashed: false },
+			{ label: names[1], colour, dashed: true },
+		];
+		return { svg, key, plane: planeLabel(view.section) };
+	}
+
+	return { drawSection, picture, controls, key, keptLines, followCar, setCursor, forget: () => (plot = null) };
 }
 
 /** Value at a position on the first path of a branch that spans it. */
