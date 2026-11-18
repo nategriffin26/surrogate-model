@@ -181,6 +181,8 @@ export function createSectionTool({ host, viewport, viewer, active, view, run })
 
 	// The cut line can be grabbed only while it is drawn: not with the section off, nor while the Model view owns the car.
 	const enabled = () => Boolean(active()?.result && viewer.section);
+	// While a tool owns the left button (painting, a lasso), a stroke across the cut line is the tool's, not a drag of it.
+	const grabbable = () => enabled() && !viewer.tool;
 
 	/** Distance in pixels from a client point to the cut line on screen, and the cut point nearest to it. */
 	function nearestOnScreen(clientX, clientY) {
@@ -214,7 +216,7 @@ export function createSectionTool({ host, viewport, viewer, active, view, run })
 
 	let dragging = false;
 	viewport.addEventListener('pointerdown', (e) => {
-		if (e.button !== 0 || !enabled()) return;
+		if (e.button !== 0 || !grabbable()) return;
 		const near = nearestOnScreen(e.clientX, e.clientY);
 		if (near.d > GRAB_PX) return;
 		const n = screenNormal(near.point);
@@ -241,8 +243,8 @@ export function createSectionTool({ host, viewport, viewer, active, view, run })
 	}, { capture: true });
 
 	viewport.addEventListener('pointermove', (e) => {
-		if (dragging || e.buttons || !enabled()) return;
-		const near = nearestOnScreen(e.clientX, e.clientY).d <= GRAB_PX;
+		if (dragging || e.buttons) return;
+		const near = grabbable() && nearestOnScreen(e.clientX, e.clientY).d <= GRAB_PX;
 		viewport.classList.toggle('over-cut', near);
 		if (Boolean(viewer.section?.plane) !== near) viewer.setSection({ ...view.section, plane: near });
 	});

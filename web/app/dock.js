@@ -1,14 +1,14 @@
-// The dock under the 3D view: the section plot and the probe table. The section plot can be saved as CSV; the probe
-// table has its own copy and save.
+// The dock under the 3D view: the section plot, the probe table and the regions tool. The section plot can be saved as
+// CSV; the probe table has its own copy and save.
 
 import { h } from './dom.js';
 import { icon } from './icons.js';
 
 /**
  * view: the shared view (its dock tab and section). actions: tab(name), collapse(), save(). The section tool
- * supplies the section plot and its controls, the probes their table and its actions.
+ * supplies the section plot and its controls, the probes their table and its actions, the regions panel its rules.
  */
-export function createDock({ section, probes, active, view, actions }) {
+export function createDock({ section, probes, regions, active, view, actions }) {
 	const tabs = h('div', { class: 'dock-tabs', role: 'tablist' });
 	const controls = h('div', { class: 'dock-controls' });
 	const key = h('div', { class: 'plot-key' });
@@ -38,6 +38,11 @@ export function createDock({ section, probes, active, view, actions }) {
 				section.forget();
 				table.replaceChildren(probes.table(c));
 				return;
+			case 'regions':
+				section.forget();
+				regions.render();
+				if (table.firstChild !== regions.el) table.replaceChildren(regions.el);
+				return;
 			default:
 				throw new Error(`Unknown dock tab ${view.dock}`);
 		}
@@ -48,9 +53,9 @@ export function createDock({ section, probes, active, view, actions }) {
 		const c = active();
 		const result = Boolean(c?.result);
 		const count = result ? c.probes.length : 0;
-		tabs.replaceChildren(...[['section', 'Section'], ['probes', count ? `Probes (${count})` : 'Probes']].map(([name, label]) =>
+		tabs.replaceChildren(...[['section', 'Section'], ['probes', count ? `Probes (${count})` : 'Probes'], ['regions', 'Regions']].map(([name, label]) =>
 			h('button', { type: 'button', role: 'tab', class: 'dock-tab', 'data-tab': name, disabled: !result, 'aria-selected': String(result && name === view.dock), onclick: () => actions.tab(name) }, label)));
-		save.hidden = view.dock === 'probes';
+		save.hidden = view.dock !== 'section';
 		save.disabled = !result;
 		collapse.disabled = !result;
 		el.classList.toggle('collapsed', view.dockCollapsed);
@@ -63,7 +68,7 @@ export function createDock({ section, probes, active, view, actions }) {
 			svg.replaceChildren();
 			return;
 		}
-		const wanted = view.dock === 'section' ? [section.controls(c)] : [probes.actions(c)];
+		const wanted = [{ section: () => section.controls(c), probes: () => probes.actions(c), regions: () => regions.controls }[view.dock]()];
 		// The section controls are one element updated in place; detaching it would end a drag on its slider.
 		if (wanted.length !== controls.childNodes.length || wanted.some((node, i) => node !== controls.childNodes[i])) controls.replaceChildren(...wanted);
 		key.replaceChildren(...(view.dock === 'section' ? section.key() : []));

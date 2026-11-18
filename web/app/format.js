@@ -2,11 +2,17 @@
 
 const MINUS = '\u2212';
 
-export const signed = (x, digits = 3) => `${x < 0 ? MINUS : ''}${Math.abs(x).toFixed(digits)}`;
+/** A number with a typographic minus; one that rounds to zero has none. */
+export const signed = (x, digits = 3) => {
+	const magnitude = Math.abs(x).toFixed(digits);
+	return `${x < 0 && Number(magnitude) !== 0 ? MINUS : ''}${magnitude}`;
+};
 export const metres = (x, digits = 3) => `${signed(x, digits)} m`;
 export const seconds = (s) => (s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`);
 export const count = (n) => n.toLocaleString('en-US');
 export const millions = (n) => `${(n / 1e6).toFixed(n < 1e7 ? 2 : 1)} M`;
+/** A share as a percentage: whole numbers from 10 % up, one decimal below. */
+export const percent = (share) => `${signed(100 * share, Math.abs(share) < 0.1 ? 1 : 0)} %`;
 
 /**
  * One drag count is a change of 0.001 in drag coefficient, the automotive convention (DrivAerML, arXiv 2408.11969:

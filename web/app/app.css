@@ -342,29 +342,18 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 .headline { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
 .symbol { color: var(--muted); font-size: 14px; font-style: italic; }
 .symbol sub { font-size: 10px; font-style: normal; }
-.big { font-family: var(--head); font-size: 32px; font-weight: 600; line-height: 1.1; color: var(--heading); letter-spacing: -0.01em; }
-.result-range { color: var(--muted); font-size: 12px; }
+.result-forces { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0 0; font-size: 12.5px; }
+.result-forces dt { color: var(--muted); }
+.result-forces dt sub { font-size: 9.5px; }
+.result-forces dd { margin: 0; color: var(--heading); font-weight: 600; text-align: right; }
+.result-forces.shares { grid-template-columns: max-content minmax(0, 1fr) 44px; }
+.result-forces .result-share { color: var(--muted); font-weight: 400; }
 .result-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--hair); font-size: 12.5px; }
 .result-facts dt { color: var(--muted); }
 .result-facts dd { margin: 0; color: var(--heading); font-weight: 500; text-align: right; }
 .result-outside { display: grid; gap: 2px; margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: rgba(163, 91, 26, 0.08); color: var(--orange); font-size: 12px; }
 .result-outside > div:first-child { font-weight: 600; }
 .result-run { margin-top: 9px; color: var(--faint); font-size: 11.5px; }
-/* Where the drag comes from: forward- and rearward-facing surfaces, signed about zero, with the net marked. */
-.split { margin-top: 10px; }
-.split-bar { display: block; overflow: visible; }
-.split-part { transition: opacity 0.15s; }
-.split-part.forward { fill: var(--link); }
-.split-part.rearward { fill: var(--teal); }
-.split-bar .zero { stroke: var(--muted); stroke-width: 1; }
-.split-bar .net { stroke: var(--heading); stroke-width: 2; }
-.split-legend { display: flex; justify-content: space-between; margin-top: 5px; }
-.split-item { display: grid; color: var(--muted); font-size: 11.5px; transition: opacity 0.15s; }
-.split-item b { font-size: 13px; font-weight: 600; }
-.split-item.forward b { color: var(--link); }
-.split-item.rearward { text-align: right; }
-.split-item.rearward b { color: var(--teal); }
-.split:has(.forward:hover) .rearward, .split:has(.rearward:hover) .forward { opacity: 0.35; }
 /* The pressure extremes on a side view of the car; their colours are the ends of the cool-to-warm ramp. */
 .extremes { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
 .profile { display: block; overflow: visible; }
@@ -398,6 +387,29 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 .probe-actions { display: flex; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
 .probe-actions .tool { height: 28px; }
 .probe-actions .icon { width: 14px; height: 14px; }
+
+/* ---- regions ---- */
+.regions-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
+.regions-controls .segmented { margin-right: 6px; }
+.regions-controls .tool { height: 28px; }
+.regions-controls .icon { width: 14px; height: 14px; }
+/* Menus in the dock open upward, into the view, rather than below the window. */
+.dock .popover { top: auto; bottom: calc(100% + 6px); animation: none; }
+.regions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 280px); gap: 28px; max-width: 900px; padding-top: 6px; font-size: 13px; }
+.regions-steps { margin: 0; padding: 0; list-style: none; color: var(--heading); line-height: 1.8; }
+.regions-op { display: inline-block; width: 16px; color: var(--muted); }
+.regions-save { display: flex; gap: 6px; margin-top: 8px; }
+.regions-name { width: 160px; text-align: left; }
+.regions-row { display: flex; align-items: center; gap: 10px; height: 30px; border-bottom: 1px solid var(--hair); }
+.regions-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--heading); }
+.regions-row .icon-button { width: 22px; height: 22px; }
+.regions-row .icon-button .icon { width: 12px; height: 12px; }
+.link-button { color: var(--link); font-size: 12.5px; }
+.link-button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.lasso { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.lasso polygon { fill: rgba(11, 111, 191, 0.08); stroke: var(--link); stroke-width: 1.5; stroke-dasharray: 5 4; stroke-linejoin: round; }
+.brush { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.brush::before { content: ""; position: absolute; left: calc(var(--brush) / -2); top: calc(var(--brush) / -2); width: var(--brush); height: var(--brush); border: 1.5px solid var(--link); border-radius: 50%; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8); }
 
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 @keyframes pop { from { opacity: 0; transform: translateY(-3px); } }

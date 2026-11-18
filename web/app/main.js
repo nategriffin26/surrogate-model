@@ -23,6 +23,7 @@ import { menu } from './menu.js';
 import { onOperation, operations, runOperation } from './operations.js';
 import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
+import { createRegions, createRegionsPanel } from './regions.js';
 import { createResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
@@ -84,6 +85,7 @@ defineDisplayOperations(tool);
 defineCaseOperations(tool);
 defineSectionOperations(tool);
 defineProbeOperations(tool);
+const regions = createRegions(tool);
 defineExportOperations(tool);
 const files = defineFileOperations(tool);
 
@@ -147,14 +149,18 @@ $('[data-legend]').append(legend.el);
 
 const probes = createProbes({ host: overlay, engine, viewer, active, view, run });
 const section = createSectionTool({ host: overlay, viewport, viewer, active, view, run });
+const regionsPanel = createRegionsPanel({ regions, session, viewer, host: overlay, run });
 
 const dock = createDock({
 	section,
 	probes,
+	regions: regionsPanel,
 	active: described,
 	view,
 	actions: {
 		tab: (name) => {
+			// Painting or lassoing belongs to the Regions tab; leaving it gives the left button back to the camera.
+			if (name !== 'regions') regionsPanel.stop();
 			if (name === 'section') return run('set_section', { on: true });
 			view.dock = name;
 			view.dockCollapsed = false;
@@ -256,7 +262,7 @@ function setAssistant(open) {
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
-const resultCard = createResultCard({ host: card, overlay, viewer, active: described, run });
+const resultCard = createResultCard({ host: card, overlay, viewer, active: described, regions, run });
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
@@ -340,7 +346,7 @@ function renderLayout() {
 	modelToggle.title = mode === 'model' ? 'Back to the tool' : 'How the model is built';
 	$('[data-export]').hidden = !ready();
 	modelHost.hidden = mode !== 'model';
-	viewer.hoverPicking = ready();
+	viewer.hoverPicking = ready() && !viewer.tool;
 	body.classList.toggle('dock-closed', view.dockCollapsed);
 }
 
@@ -374,6 +380,9 @@ function applyViewer() {
 	const s = view.section;
 	viewer.setSection(c?.result && s.on ? { axis: s.axis, offset: s.offset, clip: s.clip, plane: Boolean(viewer.section?.plane) } : null);
 	viewer.setDisplay(view.display);
+	// The selection's tint, on the car it was worked out for; a new array only when the selection or the car changes.
+	const tint = ready() ? regions.tintOf(c) : null;
+	if (tint !== viewer.selection) viewer.setSelection(tint);
 }
 
 const RENDER = {

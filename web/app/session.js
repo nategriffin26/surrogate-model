@@ -38,7 +38,11 @@ export class Session extends EventTarget {
 			section: { on: true, axis: 1, offset: 0, clip: 0 },
 			dock: 'section',
 			dockCollapsed: false,
+			/** The faces picked out, as rules ({terms}: see regions.js), so every car shown picks the same part; or null. */
+			selection: null,
 		};
+		/** Saved regions, {id, name, terms}, which any car can be measured on. */
+		this.regions = [];
 		engine.device.then((device) => {
 			this.device = device;
 			this.notify(null, 'device');
