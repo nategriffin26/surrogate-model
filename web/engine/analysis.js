@@ -1,5 +1,5 @@
 /**
- * The numbers the engine reports about a car: pressure drag, whole-car totals, agreement with the
+ * The numbers the engine reports about a car: pressure drag, whole-car totals, accuracy against the
  * reference field, and its dimensions against the training cars.
  *
  * The networks were trained on the file's own polygons, at their centres with their normals, so they
@@ -30,7 +30,7 @@ export function evenPicks(areas, count) {
 
 /**
  * Area-weighted sums over polygons, added one polygon (or one pick) at a time: each network's drag,
- * split by the way the polygon faces, and the whole-car totals of the networks' mean.
+ * and the whole-car totals of the networks' mean.
  */
 export class SurfaceTally {
   /**
@@ -42,9 +42,8 @@ export class SurfaceTally {
     this.networks = networks;
     this.frontalArea = frontalArea;
     this.cells = cells;
-    /** Each network's drag from polygons facing forward (n_x < 0) and from the rest. */
-    this.dragForward = new Float64Array(networks);
-    this.dragRearward = new Float64Array(networks);
+    /** Each network's drag. */
+    this.drag = new Float64Array(networks);
     this.area = 0;
     this.pressure = 0;
     this.forceY = 0;
@@ -62,8 +61,7 @@ export class SurfaceTally {
   add(weight, cell, models, at, count, cp) {
     const { normals } = this.cells;
     const nx = normals[3 * cell];
-    const drag = nx < 0 ? this.dragForward : this.dragRearward;
-    for (let f = 0; f < this.networks; f++) drag[f] -= models[f * count + at] * nx * weight;
+    for (let f = 0; f < this.networks; f++) this.drag[f] -= models[f * count + at] * nx * weight;
     this.area += weight;
     this.pressure += cp * weight;
     this.forceY -= cp * normals[3 * cell + 1] * weight;
@@ -73,11 +71,9 @@ export class SurfaceTally {
   }
 
   forces() {
-    const mean = (drag) => drag.reduce((sum, value) => sum + value, 0) / this.networks / this.frontalArea;
-    const cdPModels = Array.from(this.dragForward, (value, f) => (value + this.dragRearward[f]) / this.frontalArea);
+    const cdPModels = Array.from(this.drag, (value) => value / this.frontalArea);
     const cdP = cdPModels.reduce((sum, value) => sum + value, 0) / this.networks;
-    const cdPStd = Math.sqrt(cdPModels.reduce((sum, value) => sum + (value - cdP) ** 2, 0) / this.networks);
-    return { cdP, cdPStd, cdPModels, byFacing: { forward: mean(this.dragForward), rearward: mean(this.dragRearward) } };
+    return { cdP, cdPModels };
   }
 
   /** @returns {import('./result.js').Totals} */
@@ -98,8 +94,8 @@ export class SurfaceTally {
   }
 }
 
-/** Sums for the area-weighted agreement of the networks' mean Cp with CFD, one polygon at a time. */
-export class Agreement {
+/** Sums for the area-weighted accuracy (R²) of the networks' mean Cp against CFD, one polygon at a time. */
+export class Accuracy {
   area = 0;
   truth = 0;
   truthSquared = 0;
@@ -114,20 +110,20 @@ export class Agreement {
   }
 
   /** @returns {{ r2: number }} */
-  accuracy() {
+  result() {
     const variance = this.truthSquared - (this.truth * this.truth) / this.area;
     return { r2: 1 - this.errorSquared / Math.max(variance, 1e-12) };
   }
 }
 
 /**
- * The agreement summed over every polygon in file order, so a CFD field attached to a car later
+ * The accuracy summed over every polygon in file order, so a CFD field attached to a car later
  * gives the same number, to the last digit, as the same field read with the car's own file.
  */
-export function surfaceAgreement(areas, cp, cfd) {
-  const agreement = new Agreement();
-  for (let c = 0; c < areas.length; c++) agreement.add(areas[c], cp[c], cfd[c]);
-  return agreement.accuracy();
+export function surfaceAccuracy(areas, cp, cfd) {
+  const accuracy = new Accuracy();
+  for (let c = 0; c < areas.length; c++) accuracy.add(areas[c], cp[c], cfd[c]);
+  return accuracy.result();
 }
 
 /**

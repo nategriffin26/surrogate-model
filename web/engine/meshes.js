@@ -17,6 +17,9 @@
  * @typedef {import('./result.js').DisplayMesh} DisplayMesh
  */
 
+import { boundsOf } from './geometry.js';
+import { helperCount } from './pool.js';
+
 /** Cubes along the longest side of the surface's bounding box in the grid that cuts it into jobs. */
 const GRID_DIVISIONS = 48;
 /** Most triangles one simplification job is given. */
@@ -48,12 +51,12 @@ const NORMAL_WEIGHT = 0.2;
  *           full?: (mesh: DisplayMesh) => void,
  *           working?: (mesh: DisplayMesh & { sourcePoint: Uint32Array }) => void,
  *           progress?: (fraction: number) => void }} on
+ *   `full` fires first, when the full mesh fits in memory. Otherwise `preview` fires with the working
+ *   mesh, as the first mesh there is to draw, just before `working` does.
  * @returns {Promise<void>} once every mesh that will be built has been delivered
  *
- * When the full mesh fits in memory it is also the preview: `preview` and `full` receive the same
- * object. Otherwise `full` never fires and the working mesh is the preview. `full.positions` is
- * `surface.points` itself; it, `full.normals` and `full.cfd` are read until the promise settles,
- * `full.indices` never again.
+ * `full.positions` is `surface.points` itself; it, `full.normals` and `full.cfd` are read until the
+ * promise settles, `full.indices` never again.
  */
 export async function buildMeshes(surface, { flip, average, signal }, on) {
   signal?.throwIfAborted();
@@ -64,15 +67,13 @@ export async function buildMeshes(surface, { flip, average, signal }, on) {
     const normals = pointNormals(surface, flip);
     const cfd = surface.cfd && average.all(surface.cfd);
     const indices = triangulate(surface, flip, sourceTriangles);
-    let preview = null;
-    if (indices) {
+    const hasFull = indices !== null;
+    if (hasFull) {
       signal?.throwIfAborted();
-      preview = { positions: points, normals, indices, ...(cfd && { cfd }) };
-      on.preview?.(preview);
-      on.full?.(preview);
+      on.full?.({ positions: points, normals, indices, ...(cfd && { cfd }) });
     }
 
-    const bounds = boundingBox(points);
+    const bounds = boundsOf(points);
     const longest = Math.max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]);
     const cube = longest / GRID_DIVISIONS;
     const limits = { tolerance: WORKING_TOLERANCE * longest, normalWeight: NORMAL_WEIGHT * longest };
@@ -92,7 +93,7 @@ export async function buildMeshes(surface, { flip, average, signal }, on) {
     );
 
     const working = workingMesh(secondRound, points, normals, cfd, localOf);
-    if (!preview) on.preview?.(working);
+    if (!hasFull) on.preview?.(working);
     on.working?.(working);
   } finally {
     for (const worker of workers) worker.terminate();
@@ -115,10 +116,8 @@ export function surfaceMesh(surface, flip) {
 
 /**
  * @typedef {Object} CellToPoint  Per-polygon values put on points, as the meshes' `cfd` is made.
- * @property {(values: ArrayLike<number>, done?: Uint8Array) => Float32Array} all
+ * @property {(values: ArrayLike<number>) => Float32Array} all
  *   (C) per polygon in, (P) out: the value at every file point, which are the full mesh's vertices.
- *   With `done` (C, 1 = has its value), only those polygons count, and a point none of whose
- *   polygons is done gets NaN.
  * @property {(sourcePoint: Uint32Array) => { cells: Uint32Array, average: (values: ArrayLike<number>) => Float32Array }} around
  *   For vertices sitting on the file points `sourcePoint` (the working mesh's): `cells`, every
  *   polygon touching one of them in ascending order, and `average`, which takes `values[k]` for
@@ -141,22 +140,14 @@ export function cellToPoint({ points, connectivity, offsets }, areas) {
     for (let i = offsets[cell]; i < offsets[cell + 1]; i++) pointArea[connectivity[i]] += areas[cell];
   }
 
-  const all = (values, done) => {
+  const all = (values) => {
     const out = new Float32Array(pointCount);
-    const weight = done ? new Float32Array(pointCount) : pointArea;
     for (let cell = 0; cell < cellCount; cell++) {
-      if (done && !done[cell]) continue;
       const weighted = areas[cell] * values[cell];
-      for (let i = offsets[cell]; i < offsets[cell + 1]; i++) {
-        out[connectivity[i]] += weighted;
-        if (done) weight[connectivity[i]] += areas[cell];
-      }
+      for (let i = offsets[cell]; i < offsets[cell + 1]; i++) out[connectivity[i]] += weighted;
     }
-    for (let p = 0; p < pointCount; p++) {
-      if (weight[p] > 0) out[p] /= weight[p];
-      else if (done) out[p] = NaN;
-      // Without `done`, a point no polygon uses keeps zero.
-    }
+    // A point no polygon uses keeps zero.
+    for (let p = 0; p < pointCount; p++) if (pointArea[p] > 0) out[p] /= pointArea[p];
     return out;
   };
 
@@ -260,25 +251,12 @@ function triangulate({ connectivity, offsets }, flip, triangleCount) {
   return indices;
 }
 
-/** [xmin, xmax, ymin, ymax, zmin, zmax] of the points. */
-function boundingBox(points) {
-  const bounds = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
-  for (let i = 0; i < points.length; i += 3) {
-    for (let axis = 0; axis < 3; axis++) {
-      const value = points[i + axis];
-      if (value < bounds[2 * axis]) bounds[2 * axis] = value;
-      if (value > bounds[2 * axis + 1]) bounds[2 * axis + 1] = value;
-    }
-  }
-  return bounds;
-}
-
 /**
- * Workers for the simplification jobs: one per core but one, so the page keeps a core while they
- * work. This worker only hands out jobs meanwhile.
+ * Workers for the simplification jobs, as many as the engine's helpers up to `MAX_WORKERS`. This
+ * worker only hands out jobs meanwhile.
  */
 function startWorkers() {
-  const count = Math.max(1, Math.min(MAX_WORKERS, navigator.hardwareConcurrency - 1));
+  const count = Math.min(MAX_WORKERS, helperCount());
   return Array.from({ length: count }, () =>
     new Worker(new URL('./simplify-worker.js', import.meta.url), { type: 'module' }));
 }

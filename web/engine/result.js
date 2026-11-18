@@ -7,27 +7,26 @@
  * normals, and over the lookups as raw arrays; see `packResult`), so the interface never needs to
  * know which of the two it is showing.
  *
- * Beside the `Engine`, two plain functions run on whatever thread calls them: `writeVtp` (vtp.js)
- * writes any surface with cell and point arrays as a .vtp file, and `sampleFields` (nearest.js) reads
- * one car's fields at another car's vertices, for difference maps.
+ * Beside the `Engine`, three plain functions run on whatever thread calls them: `writeVtp` (vtp.js)
+ * writes any surface with cell and point arrays as a .vtp file, `sampleFields` (nearest.js) reads
+ * one car's fields at another car's vertices, for difference maps, and `boundsOf` (geometry.js) gives
+ * the bounds of a set of points.
  *
  * Frame: metres, x downstream, z up, the car's centre plane at y = 0.
  *
  * @typedef {Object} Result
- * @property {'full' | 'quick'} form  How it was made. 'full': by `analyze` or `analyzeSurface`, from
- *   a working mesh simplified from the surface, with forces from an area sample of its polygons and
- *   then, through `exact`, from every one. 'quick': by `predictQuick`, every polygon of the surface it
- *   was given predicted at once, with the lookups built from those polygons, for studies.
+ * @property {'full' | 'quick'} form  How it was made. 'full': by `analyze`, from a working mesh
+ *   simplified from the surface, with forces from an area sample of its polygons and then, through
+ *   `exact`, from every one. 'quick': by `predictQuick`, every polygon of the surface it was given
+ *   predicted at once, with the lookups built from those polygons, for studies.
  * @property {{ name: string, cells: number }} source  The surface analysed: its name (the file's) and polygon count.
  * @property {{ bounds: number[], length: number, width: number, height: number, frontalArea: number }} geometry
  *   `bounds` is [xmin, xmax, ymin, ymax, zmin, zmax]. `frontalArea` is the reference area for coefficients.
- * @property {{ cdP: number, cdPStd: number, cdPModels: number[],
- *              byFacing: { forward: number, rearward: number } }} forces
- *   Pressure drag coefficient: mean of the ensemble's networks, their standard deviation and each
- *   network's value. `byFacing` splits the networks' mean between polygons facing forward (outward
- *   n_x < 0) and the rest (n_x ≥ 0, which only rearward-facing ones add to); the two sum to `cdP`.
+ * @property {{ cdP: number, cdPModels: number[] }} forces
+ *   Pressure drag coefficient: the mean of the ensemble's networks and each network's value.
  * @property {{ r2: number } | null} accuracy
- *   Area-weighted agreement with the reference field over the surface. Null when there is none.
+ *   Area-weighted R² of the networks' mean Cp against the reference field over the surface. Null
+ *   when there is none.
  * @property {Totals} totals  The whole car's sums of the networks' mean Cp.
  *   `forces`, `accuracy` and `totals` are sums over the surface's polygons. In a full Result as
  *   `analyze` resolves with it they run over an evenly spaced area sample of them (drag within about
@@ -44,7 +43,7 @@
  * @property {string} device  What ran the networks, as `Engine.device` names it.
  * @property {string} model   SHA-256 of the network weights it was computed with (`web/model/weights.bin`).
  * @property {DisplayMesh} mesh  A full Result's working mesh, or a quick Result's surface itself.
- * @property {SurfaceLookups} lookups
+ * @property {ResultLookups} lookups
  * @property {CellSet} [cells]  A quick Result's polygons with the values the networks gave each.
  *
  * @typedef {Object} Totals
@@ -86,7 +85,7 @@
  * @property {Float32Array} sigma         (C) spread σ(Cp)
  * @property {Float32Array | null} cfd    (C) the reference field, when there is one
  *
- * @typedef {import('./lookups.js').SurfaceLookups & { definition: import('./features.js').FeatureDefinition }} SurfaceLookups
+ * @typedef {import('./lookups.js').SurfaceLookups & { definition: import('./features.js').FeatureDefinition }} ResultLookups
  *   The whole-car lookups the features read (`lookups.js`, about 55 MB on a DrivAerML car), built
  *   from every polygon of the file, with the feature definition they were built for. They let
  *   `explain` answer for a result without its file; a bundled example keeps of them what `explain`
@@ -104,7 +103,7 @@
  * @property {Uint32Array} indices     (T, 3) wound counter-clockwise seen from outside
  * @property {number[]} bounds         [xmin, xmax, ymin, ymax, zmin, zmax] of `positions`
  * @property {Float32Array} [cp]       (V) mean Cp of the networks; absent until predicted
- * @property {Float32Array} [sigma]    (V) spread σ(Cp): the networks' standard deviation × `ModelCard.spreadScale`
+ * @property {Float32Array} [sigma]    (V) spread σ(Cp): the networks' standard deviation × the model's spread scale
  * @property {Float32Array} [cfd]      (V) the reference field (`Result.reference`), only when there is one
  *
  * @typedef {'reading' | 'measuring' | 'meshing' | 'predicting'} Stage
@@ -121,18 +120,14 @@
  *   has started. Aborting `signal` abandons this analysis, whether waiting, running or ended, and
  *   releases what the engine holds of it: its promise rejects with a DOMException named 'AbortError'
  *   if still pending, and its events stop, including those after it resolved.
- * @property {(surface: ParsedSurface, on?: AnalyzeEvents, options?: { signal?: AbortSignal }) => Promise<Result>} analyzeSurface
- *   `analyze` for a surface given as arrays, such as a variant of a car made on the page: the same
- *   stages, events and Result, and afterwards the same `explain`, `polygonAt`, `exportVtp` and
- *   `fileCells`. `analyze(file)` is reading the file, then this. The arrays move to the engine's
- *   worker rather than being copied, so the caller's are empty afterwards; each must therefore be a
- *   whole buffer of its own (`byteOffset` 0, its buffer's full length), or the call rejects saying so.
- *   Rejects with an Error naming the array that is wrong.
  * @property {(surface: ParsedSurface, options?: { signal?: AbortSignal }) => Promise<Result>} predictQuick
  *   A quick Result (`Result.form`) for a surface given as arrays, typically a variant of a working
  *   mesh (`workingCells`): no events, nothing drawn first, nothing held afterwards. It waits its turn
  *   behind running analyses like they do, but leaves the car analysed last held. The arrays move to
- *   the worker as for `analyzeSurface`. Aborting `signal` abandons it.
+ *   the engine's worker rather than being copied, so the caller's are empty afterwards; each must
+ *   therefore be a whole buffer of its own (`byteOffset` 0, its buffer's full length), or the call
+ *   rejects saying so. Rejects with an Error naming the array that is wrong. Aborting `signal`
+ *   abandons it.
  *   A mesh coarser than a working mesh still gives whole lookups (`lookups.js` takes a wide polygon
  *   in pieces), but the networks are asked at its polygons' centres and normals, which follow the
  *   car less closely, so the prediction loses some accuracy.
@@ -161,21 +156,15 @@
  *   from its analysis's `exact` event until the next analysis starts or its `signal` is aborted (the
  *   engine holds the last car's prediction only); never for a bundled example or a quick Result, nor
  *   on a device too slow to predict every polygon. Check it when offering the export.
- * @property {(result: Result, onProgress?: (fraction: number) => void) => Promise<File>} exportVtp
- *   The analysed car with the prediction added as two Float32 cell arrays, one value per polygon:
- *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). For a
- *   file, every other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and
- *   the File is composed from slices of the original rather than a copy, so saving it streams from
- *   the user's disk. A surface given as arrays is written as a new file (`writeVtp`). An attached
- *   reference field, and a surface's own one given as arrays, is written as a cell array of the name
- *   it was read under (`Result.reference.array`). Named `<name>_prediction.vtp`. `onProgress`
- *   reports 0 to 1. Rejects with an Error whose message says what to do when `canExportVtp` is false
- *   or the original can no longer be read.
- * @property {(file: File) => Promise<string[]>} cellArrayNames  The cell arrays of a .vtp that hold one
- *   floating-point number per polygon, in file order: the fields `attachReference` can read from it.
- *   Reads only the file's XML up to the end of its cell data.
- * @property {(result: Result, file: File, options?: { array?: string, onProgress?: (fraction: number) => void }) =>
- *              Promise<ReferenceChange>} attachReference
+ * @property {(result: Result) => Promise<File>} exportVtp
+ *   The analysed file with the prediction added as two Float32 cell arrays, one value per polygon:
+ *   `CpPredicted`, the networks' mean pressure coefficient, and `CpSpread`, the spread σ(Cp). Every
+ *   other byte is the file's own (an earlier `CpPredicted` or `CpSpread` is replaced), and the File
+ *   is composed from slices of the original rather than a copy, so saving it streams from the user's
+ *   disk. An attached reference field is written as a cell array of the name it was read under
+ *   (`Result.reference.array`). Named `<name>_prediction.vtp`. Rejects with an Error whose message
+ *   says what to do when `canExportVtp` is false or the original can no longer be read.
+ * @property {(result: Result, file: File, options?: { array?: string }) => Promise<ReferenceChange>} attachReference
  *   Gives the car a reference field from a second file: its cell array `array` (default `CpMeanTrim`),
  *   put on the car's polygons as `ReferenceSource.mapping` says. The car then answers as if its own
  *   file had carried the field: `result.reference`, `result.referenceTotals`, `result.accuracy` and
@@ -186,19 +175,14 @@
  *   giving the median distance between the two surfaces when the second file's polygons are not the
  *   car's and its surface lies more than 5 mm from the car's: a field on another car's surface is no
  *   reference for this one.
- * @property {(result: Result) => Promise<ReferenceChange>} detachReference  Back to the field the
- *   car's own file or arrays carried, or to none; written into `result` as `attachReference` does.
  * @property {Promise<string>} device  What runs the networks, short enough to show as is:
  *   "WebGPU (<adapter>)" when the browser names the adapter, "WebGPU", or "CPU (<n> threads)".
- * @property {Promise<ModelCard>} model  The model, for the model view.
+ * @property {Promise<ModelCard>} model  The model, for the Model page.
  *
- * @typedef {Object} ReferenceChange  What a change of reference wrote into the Result, and the field
- *   for the full mesh, which the page draws and must update itself.
- * @property {ReferenceSource | null} reference
- * @property {ReferenceTotals | null} referenceTotals
- * @property {Result['accuracy']} accuracy
- * @property {Float32Array | null} cfd       (V) the new `mesh.cfd`
- * @property {Float32Array | null} fullCfd   (P) the field at every vertex of the full mesh, when
+ * @typedef {Object} ReferenceChange  The reference field on the meshes the page draws, which it must
+ *   update itself.
+ * @property {Float32Array} cfd             (V) the new `mesh.cfd`
+ * @property {Float32Array | null} fullCfd  (P) the field at every vertex of the full mesh, when
  *   `fullMesh` fired for this car
  *
  * @typedef {Object} AnalyzeEvents  Everything is optional; each fires at most as described.
@@ -207,7 +191,7 @@
  *   decrease, and it reports 1 before the next one starts.
  * @property {(mesh: DisplayMesh) => void} [geometry]
  *   The first drawable mesh, without fields, as early as possible so the car appears before any
- *   pressure is predicted. May fire again with a better mesh.
+ *   pressure is predicted: the full mesh, or the working mesh when the full one does not fire.
  * @property {(mesh: DisplayMesh) => void} [fullMesh]
  *   The file's own surface, every triangle, for drawing at full resolution, with `cfd` when the
  *   surface carries a reference field. Its `cp` and `sigma` arrive through `fullFields`. Does not
@@ -231,7 +215,7 @@
  * @property {Float32Array} features    the model's inputs there, one per entry of `ModelCard.columns`
  * @property {number[]} cpModels        each network's Cp
  * @property {number} cp                their mean
- * @property {number} sigma             spread σ(Cp): their standard deviation × `ModelCard.spreadScale`
+ * @property {number} sigma             spread σ(Cp): their standard deviation × the model's spread scale
  * @property {number | null} cfd        the reference field there: the polygon's own value, or
  *   `Result.mesh.cfd` at the vertex; null when there is no reference
  * @property {Float32Array[][]} activations  per network, what it computed on the way to its Cp:
@@ -249,36 +233,29 @@
  * @property {number} sigma          spread σ(Cp) there, likewise
  *
  * @typedef {Object} ModelCard  What the model is and how it scored, from training (`export_web.py`).
- * @property {{ name: string, family: string, freestreamSpeed: number, yawDegrees: number, wheels: string,
- *              source: string }} dataset  the training data: its name, car family, freestream speed in
- *   m/s, yaw angle in degrees, the wheels' state, and where it is published
+ * @property {{ name: string, family: string, freestreamSpeed: number, yawDegrees: number, wheels: string }} dataset
+ *   the training data: its name, car family, freestream speed in m/s, yaw angle in degrees and the
+ *   wheels' state
  * @property {number[]} trainRuns  the DrivAerML runs the ensemble was trained on
  * @property {number} samplesPerCar  the area-weighted surface cells each training car gave the networks
  * @property {{ trainRuns: number[], validationRuns: number[], layers: number[] }[]} networks
  *   per network: the runs it was fitted on, the runs held out to validate it, and its widths from
- *   input to output, e.g. [191, 256, 256, 256, 1]
+ *   input to output (the input count first, 1 last)
  * @property {string} activation  what the networks compute between layers, e.g. 'GELU'
- * @property {number} spreadScale  the factor, fitted on the training cars, that turns the networks'
- *   standard deviation into the spread σ(Cp) the engine reports
  * @property {number} spreadCoverage  the share of the surface of the runs outside training where
  *   |Cp − CFD| ≤ σ(Cp), with σ already scaled (measured in training on an area-weighted cell sample)
  * @property {Record<'length' | 'width' | 'height', { min: number, max: number }>} dimensions  the
  *   training cars' range of each, in metres
- * @property {{ meanR2: number, dragMae: number }} crossValidation
- *   each training car predicted by the networks that did not see it
- * @property {{ run: number, r2: number, dragMae: number }[]} outsideRuns
- *   runs outside the training set
- * @property {{ learner: 'constant' | 'pointnet' | 'mlp' | 'trees' | 'ensemble', inputs: string[],
- *              crossValidationR2: number, dragMae: number }[]} comparison  the models compared in
- *   training: `learner` a stable id of what was fitted ('ensemble' is the shipped one), `inputs` the
- *   column kinds it was given, from the set of `ModelColumn.kind` in that order ([] for the constant
- *   baseline)
+ * @property {{ meanR2: number }} crossValidation  each training car predicted by the networks that
+ *   did not see it
+ * @property {{ run: number, r2: number }[]} outsideRuns  runs outside the training set
+ * @property {{ learner: 'constant' | 'pointnet' | 'mlp' | 'trees' | 'ensemble', dragMae: number }[]} comparison
+ *   the models compared in training: `learner` a stable id of what was fitted ('ensemble' is the
+ *   shipped one), and its drag error in cross-validation
  * @property {ModelColumn[]} columns  what each of the model's inputs is, in order
  *
  * @typedef {Object} ModelColumn
  * @property {'position' | 'surface' | 'slice'} kind  its family, a stable id
- * @property {string} group     the family's display label
- * @property {string} name      a short plain name
  * @property {string} unit      'm' for distances, 'm²' for a slice's area, '' for the rest
  * @property {number[]} offset  the place it reads relative to the point asked about, [dx, dy, dz] in
  *   metres along the file's axes: dx downstream, dy toward +y (the car's right as seen from the
@@ -299,11 +276,9 @@
  *   slice's area, or how far the body in it reaches outboard of the point at the point's height,
  *   above it or below it at the point's distance from the centre plane (to the ground where the
  *   slice holds no body there)
- * @property {number[]} range  the input over the training cells: its 2nd percentile, median and 98th
- *   percentile, from the model file
  *
  * @typedef {Object} ParsedSurface  A surface as the parser hands it to the rest of the engine, or as
- *   the page gives it to `analyzeSurface` and `predictQuick`, where `cfd` may be left out.
+ *   the page gives it to `predictQuick`, where `cfd` may be left out.
  * @property {string} name
  * @property {Float32Array} points        (P, 3)
  * @property {Uint32Array} connectivity   the point ids of every polygon, back to back

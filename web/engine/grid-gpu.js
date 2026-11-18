@@ -13,12 +13,21 @@
 const THREADS = 256;
 /** Workgroups along x of a dispatch; more go on along y. WebGPU guarantees 65535. */
 const ROW_GROUPS = 65535;
+/** The spread's fixed-point sums count in steps of 2⁻⁴⁰. */
+const FIXED_POINT = 2 ** 40;
+
+/** The point or node a thread works on, from its workgroup and its place in it, as `groupsFor` lays them out. */
+const ITEM_INDEX = /* wgsl */ `
+fn itemIndex(group: vec3u, thread: u32) -> u32 {
+  return (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
+}
+`;
 
 /**
  * The grid's origin and step, node counts and the points a pass spreads, with the node nearest each
  * point and the quadratic B-spline weights around it, as `grid.js` `splineAround` takes them.
  */
-const POINTS_ON_GRID = /* wgsl */ `
+const POINTS_ON_GRID = /* wgsl */ `${ITEM_INDEX}
 struct Grid {
   origin: vec3f,
   step: f32,
@@ -40,10 +49,6 @@ fn nearestOf(point: u32) -> array<vec3f, 2> {
   let nearest = clamp(floor(q + 0.5), vec3f(1.0), vec3f(grid.nodes - 2u));
   return array<vec3f, 2>(nearest, q - nearest);
 }
-
-fn pointIndex(group: vec3u, thread: u32) -> u32 {
-  return (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
-}
 `;
 
 const SPREAD = /* wgsl */ `${POINTS_ON_GRID}
@@ -52,7 +57,7 @@ const SPREAD = /* wgsl */ `${POINTS_ON_GRID}
 // The nodes these sums hold: the first, and how many.
 @group(0) @binding(4) var<uniform> block: vec2u;
 
-const FIXED = 1099511627776.0;
+const FIXED = ${FIXED_POINT}.0;
 
 // value × 2^40 as a two's-complement 64-bit integer, low word then high, added with a carry; nothing
 // for a node outside the block (below it, node − first wraps past the block's length).
@@ -75,7 +80,7 @@ fn add(node: u32, value: f32) {
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let point = pointIndex(group, thread);
+  let point = itemIndex(group, thread);
   if (point >= grid.count) {
     return;
   }
@@ -98,7 +103,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
 }
 `;
 
-const FIXED_TO_FLOAT = /* wgsl */ `
+const FIXED_TO_FLOAT = /* wgsl */ `${ITEM_INDEX}
 // The nodes the sums hold: the first, and how many.
 @group(0) @binding(0) var<uniform> block: vec2u;
 @group(0) @binding(1) var<storage, read> sums: array<vec2u>;
@@ -106,7 +111,7 @@ const FIXED_TO_FLOAT = /* wgsl */ `
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let slot = (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
+  let slot = itemIndex(group, thread);
   if (slot >= block.y) {
     return;
   }
@@ -118,7 +123,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
     low = ~low + 1u;
     top = ~top + select(0u, 1u, low == 0u);
   }
-  let magnitude = (f32(top) * 4294967296.0 + f32(low)) / 1099511627776.0;
+  let magnitude = (f32(top) * 4294967296.0 + f32(low)) / ${FIXED_POINT}.0;
   field[block.x + slot] = select(magnitude, -magnitude, negative);
 }
 `;
@@ -133,7 +138,7 @@ const MARK = /* wgsl */ `${POINTS_ON_GRID}
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let point = pointIndex(group, thread);
+  let point = itemIndex(group, thread);
   if (point >= grid.count) {
     return;
   }
@@ -153,7 +158,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
 `;
 
 /** A field's values at listed nodes, into one lane of rows of `lanes` floats. */
-const GATHER = /* wgsl */ `
+const GATHER = /* wgsl */ `${ITEM_INDEX}
 struct Rows {
   count: u32,
   lane: u32,
@@ -167,7 +172,7 @@ struct Rows {
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let row = (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
+  let row = itemIndex(group, thread);
   if (row >= rows.count) {
     return;
   }
@@ -175,7 +180,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
 }
 `;
 
-const CORRELATE = /* wgsl */ `
+const CORRELATE = /* wgsl */ `${ITEM_INDEX}
 struct Axis {
   count: u32,
   length: u32,
@@ -197,7 +202,7 @@ fn reflected(index: i32, n: i32) -> i32 {
 
 @compute @workgroup_size(${THREADS})
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
-  let node = (group.x + group.y * ${ROW_GROUPS}u) * ${THREADS}u + thread;
+  let node = itemIndex(group, thread);
   if (node >= axis.count) {
     return;
   }
@@ -217,13 +222,6 @@ function groupsFor(count) {
   const groups = Math.ceil(count / THREADS);
   return [Math.min(groups, ROW_GROUPS), Math.ceil(groups / ROW_GROUPS)];
 }
-
-/**
- * @typedef {Object} GridOnGpu  A grid as the passes take it.
- * @property {number[]} origin
- * @property {number} step
- * @property {number[]} nodes
- */
 
 /**
  * @param {GPUDevice} device
@@ -269,7 +267,7 @@ export function createGridOperations(device) {
      * spread into them). What a point gives the grid's other nodes is left out, so a grid whose sums
      * are larger than one buffer binding may hold is spread one block of nodes at a time.
      * @param {GPUCommandEncoder} encoder
-     * @param {GridOnGpu} grid
+     * @param {import('./grid.js').Grid} grid
      * @param {{ positions: GPUBuffer, weights: GPUBuffer, count: number, sums: GPUBuffer, first: number, length: number }} buffers
      */
     spread(encoder, grid, { positions, weights, count, sums, first, length }) {
@@ -289,7 +287,7 @@ export function createGridOperations(device) {
      * The nodes a read within `reach` (metres) of each of `count` points touches, set in `bits`
      * (one bit a node, 32 to a word; cleared by the caller).
      * @param {GPUCommandEncoder} encoder
-     * @param {GridOnGpu} grid
+     * @param {import('./grid.js').Grid} grid
      * @param {{ positions: GPUBuffer, count: number, reach: number, bits: GPUBuffer }} buffers
      */
     mark(encoder, grid, { positions, count, reach, bits }) {

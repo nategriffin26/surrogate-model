@@ -1,7 +1,12 @@
 /**
  * The engine's helper workers (`prediction-worker.js`), one task at a time each, tasks handed to
- * whichever is free first.
+ * whichever is free first; and how many workers the engine runs beside the page.
  */
+
+/** Workers to run beside the page: one per core but the one the page keeps. */
+export function helperCount() {
+  return Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
+}
 
 /**
  * @param {number} size

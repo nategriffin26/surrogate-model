@@ -8,8 +8,8 @@ import { unpackResult } from './result.js';
 self.onmessage = async ({ data: base }) => {
   try {
     const [summary, buffer] = await Promise.all([
-      fetch(`${base}.json`).then((response) => response.json()),
-      fetch(`${base}.bin`).then((response) => response.arrayBuffer()),
+      fetchOk(`${base}.json`).then((response) => response.json()),
+      fetchOk(`${base}.bin`).then((response) => response.arrayBuffer()),
     ]);
     const result = await unpackResult(summary, buffer);
     self.postMessage({ result }, buffersOf(result));
@@ -17,6 +17,12 @@ self.onmessage = async ({ data: base }) => {
     self.postMessage({ message: error.message });
   }
 };
+
+async function fetchOk(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`The bundled example could not be loaded (${response.status} ${url}). Reload the page.`);
+  return response;
+}
 
 /** Every distinct ArrayBuffer under `value`, for the transfer list. */
 function buffersOf(value, found = new Set()) {

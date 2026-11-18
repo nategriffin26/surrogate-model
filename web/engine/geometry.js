@@ -16,8 +16,8 @@
  */
 
 /**
- * A surface handed over as arrays (`analyzeSurface`, `predictQuick`), checked as the reader checks a
- * file's, so a wrong array is named where it comes in rather than failing somewhere in the analysis.
+ * A surface handed over as arrays (`predictQuick`), checked as the reader checks a file's, so a
+ * wrong array is named where it comes in rather than failing somewhere in the prediction.
  * @param {import('./result.js').ParsedSurface} surface
  * @returns {import('./result.js').ParsedSurface} the same arrays, with `cfd` null when left out
  */

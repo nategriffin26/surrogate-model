@@ -1,6 +1,6 @@
 /**
  * The ensemble's networks on WebGPU. Each hidden layer is one tiled matrix-multiply dispatch: 128
- * points by 128 neurons per workgroup, 8 by 8 per thread, the input standardised and clipped on the
+ * points by 128 neurons per workgroup, 8 by 8 per thread, the input standardized and clipped on the
  * way in for the first layer, GELU on the way out. The output neuron is a dot product per point.
  * Points go through in chunks so the buffers stay small and other GPU work (drawing the page) gets turns.
  */

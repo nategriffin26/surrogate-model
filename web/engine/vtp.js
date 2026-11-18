@@ -4,7 +4,7 @@
  * stepped over without decoding (read past when inline, never read when appended), and reading
  * stops once every needed array is in, so a DrivAerML file's trailing solver fields are never read.
  * Besides the polygons it reads one cell array, the field the prediction is compared with:
- * `CpMeanTrim`, or another the user picks from those `cellArrayNames` lists.
+ * `CpMeanTrim`, or another asked for by name (`cellArrayNames` lists the candidates).
  *
  * Handles inline binary (base64), appended raw and appended base64 data, zlib compression, UInt32
  * and UInt64 headers, ASCII arrays, and polygons of any size. Anything else is rejected with an Error
@@ -25,6 +25,8 @@ const SCALAR_BYTES = {
 };
 
 const RESAVE = 'Open it in ParaView and save it again as a .vtp file (File > Save Data), binary, with zlib compression or none.';
+const EMPTY_FILE = 'The file is empty. Choose the surface file again; it may not have finished copying.';
+const NOT_VTK_XML = 'This is not a VTK XML file. The tool reads surfaces saved as VTK XML PolyData (.vtp), such as DrivAerML\'s boundary files.';
 
 /**
  * @typedef {'points' | 'connectivity' | 'offsets' | 'cfd'} Role
@@ -38,7 +40,7 @@ const RESAVE = 'Open it in ParaView and save it again as a .vtp file (File > Sav
  * @returns {Promise<import('./result.js').ParsedSurface>}
  */
 export async function readSurface(file, onProgress = () => {}, cellArray = CFD_ARRAY) {
-  if (file.size === 0) throw new Error('The file is empty. Choose the surface file again; it may not have finished copying.');
+  if (file.size === 0) throw new Error(EMPTY_FILE);
   const source = new SliceReader(file);
   const document = await readDocument(source, onProgress, cellArray);
   const { piece, arrays, values } = document;
@@ -103,8 +105,29 @@ async function checkKind(source) {
   if (head.startsWith('# vtk DataFile')) {
     throw new Error(`This is a legacy VTK file; the tool reads VTK XML PolyData. ${RESAVE}`);
   }
-  if (!head.startsWith('<')) {
-    throw new Error('This is not a VTK XML file. The tool reads surfaces saved as VTK XML PolyData (.vtp), such as DrivAerML\'s boundary files.');
+  if (!head.startsWith('<')) throw new Error(NOT_VTK_XML);
+}
+
+/** A file's binary settings before its `VTKFile` tag says otherwise (`readFileAttributes`). */
+function newDocument() {
+  return { headerBytes: 4, compressed: false };
+}
+
+/**
+ * The first tag at or after `position`, declarations and comments (`<?`, `<!`) stepped over: where it
+ * opens (its '<'), where it ends (just past its '>'), its name (with a leading '/' when it closes an
+ * element), its attributes and whether it closes itself. Null when the file ends first.
+ */
+async function nextTag(source, position) {
+  for (;;) {
+    const open = await source.indexOf(0x3c, position);
+    if (open < 0) return null;
+    const close = await source.indexOf(0x3e, open);
+    if (close < 0) throw truncated(source);
+    const text = latin1.decode(await source.bytes(open + 1, close));
+    position = close + 1;
+    if (text.startsWith('?') || text.startsWith('!')) continue;
+    return { open, end: position, name: /^\/?\w+/.exec(text)?.[0], attributes: parseAttributes(text), selfClosing: text.endsWith('/') };
   }
 }
 
@@ -116,27 +139,24 @@ async function checkKind(source) {
  * @returns {Promise<string[]>}
  */
 export async function cellArrayNames(file) {
-  if (file.size === 0) throw new Error('The file is empty. Choose the surface file again; it may not have finished copying.');
+  if (file.size === 0) throw new Error(EMPTY_FILE);
   const source = new SliceReader(file);
   await checkKind(source);
-  const document = { headerBytes: 4, compressed: false };
+  const document = newDocument();
   const names = [];
   let inCellData = false;
   let position = 0;
   for (;;) {
-    const open = await source.indexOf(0x3c, position);
-    if (open < 0) throw truncated(source);
-    const close = await source.indexOf(0x3e, open);
-    if (close < 0) throw truncated(source);
-    const text = latin1.decode(await source.bytes(open + 1, close));
-    position = close + 1;
-    const attributes = parseAttributes(text);
-    switch (/^\/?\w+/.exec(text)?.[0]) {
+    const tag = await nextTag(source, position);
+    if (!tag) throw truncated(source);
+    const { name, attributes } = tag;
+    position = tag.end;
+    switch (name) {
       case 'VTKFile':
         readFileAttributes(document, attributes);
         break;
       case 'CellData':
-        if (text.endsWith('/')) return names;
+        if (tag.selfClosing) return names;
         inCellData = true;
         break;
       case '/CellData':
@@ -146,7 +166,7 @@ export async function cellArrayNames(file) {
         const scalar = Number(attributes.NumberOfComponents ?? 1) === 1 && attributes.type?.startsWith('Float');
         if (inCellData && scalar) names.push(attributes.Name ?? '');
         const format = attributes.format ?? 'ascii';
-        if (!text.endsWith('/') && format !== 'appended') position = await skipInline(source, document, { format }, position);
+        if (!tag.selfClosing && format !== 'appended') position = await skipInline(source, document, { format }, position);
         break;
       }
       default:
@@ -164,8 +184,7 @@ async function readDocument(source, onProgress, cellArray) {
   await checkKind(source);
 
   const document = {
-    headerBytes: 4,
-    compressed: false,
+    ...newDocument(),
     appended: null,
     piece: null,
     /** @type {Partial<Record<Role, ArrayRef>>} */
@@ -180,17 +199,12 @@ async function readDocument(source, onProgress, cellArray) {
   let position = 0;
 
   for (;;) {
-    const open = await source.indexOf(0x3c, position);
-    if (open < 0) break;
-    const close = await source.indexOf(0x3e, open);
-    if (close < 0) throw truncated(source);
-    const text = latin1.decode(await source.bytes(open + 1, close));
-    position = close + 1;
-    if (text.startsWith('?') || text.startsWith('!')) continue;
-    const name = /^\/?\w+/.exec(text)?.[0];
-    const attributes = parseAttributes(text);
+    const tag = await nextTag(source, position);
+    if (!tag) break;
+    const { attributes } = tag;
+    position = tag.end;
 
-    switch (name) {
+    switch (tag.name) {
       case 'VTKFile':
         sawVtkFile = true;
         readFileAttributes(document, attributes);
@@ -224,7 +238,7 @@ async function readDocument(source, onProgress, cellArray) {
         const array = readArrayAttributes(section, attributes, cellArray);
         if (array.role && !document.piece) throw new Error(`The file's arrays come before its Piece. ${RESAVE}`);
         if (array.role) document.arrays[array.role] = array;
-        if (array.format === 'appended' || text.endsWith('/')) break;
+        if (array.format === 'appended' || tag.selfClosing) break;
         if (array.role) {
           const read = await readInline(source, document, array, position);
           document.values[array.role] = read.values;
@@ -344,9 +358,7 @@ function arrayRole(section, attributes, cellArray) {
 }
 
 function checkDocument(document, sawVtkFile, source) {
-  if (!sawVtkFile) {
-    throw new Error('This is not a VTK XML file. The tool reads surfaces saved as VTK XML PolyData (.vtp), such as DrivAerML\'s boundary files.');
-  }
+  if (!sawVtkFile) throw new Error(NOT_VTK_XML);
   if (!document.piece) {
     if (source.reachedEnd) throw truncated(source);
     throw new Error(`The file holds no surface piece. ${RESAVE}`);
@@ -359,8 +371,9 @@ function checkDocument(document, sawVtkFile, source) {
 
 /** Spread reading progress over the needed arrays by their expected value counts. */
 function progressByRole(piece, onProgress) {
-  const expected = { points: 3 * piece.points, connectivity: 4 * piece.polys, offsets: piece.polys, cfd: piece.polys };
-  const total = expected.points + expected.connectivity + expected.offsets + expected.cfd;
+  const roles = ['points', 'connectivity', 'offsets', 'cfd'];
+  const expected = Object.fromEntries(roles.map((role) => [role, expectedValues(role, piece)]));
+  const total = roles.reduce((sum, role) => sum + expected[role], 0);
   const done = { points: 0, connectivity: 0, offsets: 0, cfd: 0 };
   let reported = 0;
   return (role) => (fraction) => {
@@ -393,7 +406,7 @@ function truncated(source) {
  */
 async function readInline(source, document, array, position) {
   const onProgress = document.progress(array.role);
-  const expectedBytes = expectedValues(array, document.piece) * SCALAR_BYTES[array.type];
+  const expectedBytes = expectedValues(array.role, document.piece) * SCALAR_BYTES[array.type];
   if (array.format === 'ascii') return readAscii(source, position, (bytes) => onProgress(bytes / (expectedBytes * 3)));
   const start = await skipWhitespace(source, position);
   const word = document.headerBytes;
@@ -405,7 +418,7 @@ async function readInline(source, document, array, position) {
     return { values, end: await expectTag(source, end) };
   }
   // A plain array's header and values are one base64 stream, unless the header block is padded.
-  const separate = latin1.decode(await source.bytes(start, start + base64Length(word))).endsWith('=');
+  const separate = await headerIsPadded(source, start, word);
   const dataStart = separate ? start + base64Length(word) : start;
   const { parts, end } = await decodeBase64ToTag(source, dataStart, (bytes) => onProgress(bytes / expectedBytes));
   return { values: concat(parts, separate ? 0 : word), end };
@@ -421,7 +434,7 @@ async function skipInline(source, document, array, position) {
     const header = await readBlockTable(source, word, start);
     end = header.dataStart + base64Length(header.table.compressedBytes);
   } else {
-    const separate = latin1.decode(await source.bytes(start, start + base64Length(word))).endsWith('=');
+    const separate = await headerIsPadded(source, start, word);
     const header = decodeBase64(latin1.decode(await source.bytes(start, start + base64Length(word + 2))));
     const byteCount = readWord(header, 0, word);
     end = separate ? start + base64Length(word) + base64Length(byteCount) : start + base64Length(word + byteCount);
@@ -433,6 +446,11 @@ async function skipInline(source, document, array, position) {
     if ((await source.bytes(landing, landing + 1))[0] === 0x3c) return landing;
   }
   return expectTag(source, start);
+}
+
+/** Whether a plain base64 array's size header is a padded block of its own rather than the start of one stream with the values. */
+async function headerIsPadded(source, start, word) {
+  return latin1.decode(await source.bytesExactly(start, start + base64Length(word))).endsWith('=');
 }
 
 function isBase64Character(byte) {
@@ -547,7 +565,7 @@ async function readAppended(source, document, array, onProgress) {
     await decodeBase64Into(source, header.dataStart, compressed, (f) => onProgress(0.5 * f));
     return inflateBlocks(compressed, header.table, (f) => onProgress(0.5 + 0.5 * f));
   }
-  const separate = latin1.decode(await source.bytesExactly(start, start + base64Length(word))).endsWith('=');
+  const separate = await headerIsPadded(source, start, word);
   const header = decodeBase64(latin1.decode(await source.bytesExactly(start, start + base64Length(word + 2))));
   const byteCount = readWord(header, 0, word);
   if (separate) {
@@ -588,6 +606,9 @@ function blockTable(header, word) {
   return { blocks, blockSize, lastSize, compressed, compressedBytes, byteCount };
 }
 
+/** Blocks inflated at once: enough to keep the browser's decompression busy while results are copied out. */
+const INFLATE_LANES = 16;
+
 /** Inflate VTK's zlib blocks, each its own zlib stream, into one array, several at a time. */
 async function inflateBlocks(compressed, table, onProgress) {
   const out = new Uint8Array(table.byteCount);
@@ -622,7 +643,7 @@ async function inflateBlocks(compressed, table, onProgress) {
       onProgress(finished / table.blocks);
     }
   };
-  await Promise.all(Array.from({ length: 16 }, lane));
+  await Promise.all(Array.from({ length: INFLATE_LANES }, lane));
   return out;
 }
 
@@ -637,13 +658,13 @@ function readWord(bytes, index, word) {
 // ---------------------------------------------------------------------------------------------
 // Typed views
 
-function expectedValues(array, piece) {
-  switch (array.role) {
+function expectedValues(role, piece) {
+  switch (role) {
     case 'points': return 3 * piece.points;
     case 'connectivity': return 4 * piece.polys;
     case 'offsets':
     case 'cfd': return piece.polys;
-    default: throw new Error(`Unknown array role ${array.role}`);
+    default: throw new Error(`Unknown array role ${role}`);
   }
 }
 
@@ -737,22 +758,20 @@ const DEFLATE_BLOCK_BYTES = 1 << 20;
  * same name already in the file is replaced; every other byte is the file's own.
  * @param {Blob} file  a file `readSurface` has read
  * @param {Record<string, Float32Array>} arrays  by name, one value per polygon in the file's order
- * @param {(fraction: number) => void} [onProgress]
  * @returns {Promise<Blob>}
  */
-export async function addCellArrays(file, arrays, onProgress = () => {}) {
+export async function addCellArrays(file, arrays) {
   const source = new SliceReader(file);
   const names = Object.keys(arrays);
-  const layout = await locateCellData(source, names, (fraction) => onProgress(0.5 * fraction));
+  const layout = await locateCellData(source, names);
   const encoding = layout.appended?.encoding ?? 'raw';
   const end = await lastTagIn(file, layout.appended ? '</AppendedData>' : '</VTKFile>');
 
   const stored = [];
-  for (const [k, values] of Object.values(arrays).entries()) {
+  for (const values of Object.values(arrays)) {
     const { header, body } = await binaryArray(values, layout.document);
     const parts = encoding === 'raw' ? [header, ...body] : [header.toBase64(), concat(body, 0).toBase64()];
     stored.push({ parts, length: parts.reduce((sum, part) => sum + part.length, 0) });
-    onProgress(0.5 + 0.5 * (k + 1) / names.length);
   }
   // Offsets count from just after the appended data's '_', in stored bytes or base64 characters.
   let offset = layout.appended ? end - layout.appended.start : 0;
@@ -851,8 +870,8 @@ function escapeXml(text) {
  * `<CellData/>`, or at the start of the piece when there is no cell data. Records the cell arrays
  * named `names` (to be replaced), the file's binary settings and its appended data block.
  */
-async function locateCellData(source, names, onProgress) {
-  const document = { headerBytes: 4, compressed: false };
+async function locateCellData(source, names) {
+  const document = newDocument();
   /** @type {number[][]} [from, to) of each cell array to replace */
   const replaced = [];
   let cellData = null;
@@ -863,19 +882,12 @@ async function locateCellData(source, names, onProgress) {
   let position = 0;
 
   walk: for (;;) {
-    const open = await source.indexOf(0x3c, position);
-    if (open < 0) break;
-    const close = await source.indexOf(0x3e, open);
-    if (close < 0) throw truncated(source);
-    const text = latin1.decode(await source.bytes(open + 1, close));
-    position = close + 1;
-    onProgress(position / source.size);
-    if (text.startsWith('?') || text.startsWith('!')) continue;
-    const name = /^\/?\w+/.exec(text)?.[0];
-    const attributes = parseAttributes(text);
-    const selfClosing = text.endsWith('/');
+    const tag = await nextTag(source, position);
+    if (!tag) break;
+    const { open, attributes, selfClosing } = tag;
+    position = tag.end;
 
-    switch (name) {
+    switch (tag.name) {
       case 'VTKFile':
         readFileAttributes(document, attributes);
         break;

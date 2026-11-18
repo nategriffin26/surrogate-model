@@ -97,7 +97,7 @@ def _write_vtp(surface: pv.PolyData, path: Path, *, mode: str = "binary", encode
 
 def _run_engine(mode: str, path: Path, out_dir: Path, argument: Path | str | None = None) -> dict:
     """Run the engine's modules on `path`; `argument` is the model directory (engine, pick), a feature
-    definition (features) or the stretch factor (stretch)."""
+    definition (features) or the four files a reference is attached from (reference)."""
     out_dir.mkdir(exist_ok=True)
     command = [*RUNTIME, str(RUNNER), mode, str(path), str(out_dir)] + ([str(argument)] if argument else [])
     subprocess.run(command, check=True, cwd=REPO, timeout=300)
@@ -289,18 +289,15 @@ def test_a_second_analysis_waits_for_the_first_to_end(car: pv.PolyData, tmp_path
     assert cars == sorted(cars), "the two analyses' events interleave: one ran before the other had ended"
 
 
-def _drag_by_facing(surface: SurfaceMesh, cp: np.ndarray, frontal_area: float) -> dict[str, float]:
-    """`forces.byFacing` as result.js defines it, from Cp at every polygon."""
+def _drag(surface: SurfaceMesh, cp: np.ndarray, frontal_area: float) -> float:
+    """`forces.cdP` as result.js defines it, from Cp at every polygon."""
     nx = surface.normals[:, 0].astype(np.float64)
-    drag = -np.asarray(cp, dtype=np.float64) * nx * surface.areas / frontal_area
-    return {"forward": drag[nx < 0].sum(), "rearward": drag[nx >= 0].sum()}
+    return float((-np.asarray(cp, dtype=np.float64) * nx * surface.areas).sum() / frontal_area)
 
 
-def _assert_drag_by_facing(forces: dict, expected: dict[str, float]) -> None:
+def _assert_drag(forces: dict, expected: float) -> None:
     # Exact against exact: the engine's Cp at each polygon is within about 2e-6 of Python's.
-    assert forces["byFacing"]["forward"] == pytest.approx(expected["forward"], abs=2e-5)
-    assert forces["byFacing"]["rearward"] == pytest.approx(expected["rearward"], abs=2e-5)
-    assert forces["byFacing"]["forward"] + forces["byFacing"]["rearward"] == pytest.approx(forces["cdP"], abs=1e-12)
+    assert forces["cdP"] == pytest.approx(expected, abs=2e-5)
 
 
 def _assert_totals(numbers: dict, surface: SurfaceMesh, cp: np.ndarray, frontal_area: float) -> None:
@@ -327,15 +324,14 @@ def _assert_reference_totals(numbers: dict, surface: SurfaceMesh, cfd: np.ndarra
 
 
 @requires_runtime
-def test_drag_split_and_totals_follow_their_definitions(car: pv.PolyData, tmp_path: Path) -> None:
-    """Catches a drag split or whole-car totals that sum the wrong polygons, weights, normals or field,
-    or extremes placed at another polygon than the one where Cp is lowest or highest."""
+def test_drag_and_totals_follow_their_definitions(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches drag or whole-car totals that sum the wrong polygons, weights, normals or field, or
+    extremes placed at another polygon than the one where Cp is lowest or highest."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     outcome = _run_engine("analysis", path, tmp_path / "out")
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
     surface = read_vtp_surface(path)
-    expected = _drag_by_facing(surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
-    _assert_drag_by_facing(outcome["exact"]["forces"], expected)
+    _assert_drag(outcome["exact"]["forces"], _drag(surface, reference.cp_mean, outcome["geometry"]["frontalArea"]))
     _assert_totals(outcome["exact"], surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
 
 
@@ -376,52 +372,21 @@ def test_polygons_asked_on_demand_match_the_reference(car: pv.PolyData, model_di
         _assert_polygon(pick["polygon"], pick["target"], mesh, surface, reference.cp_mean, reference.cp_std)
 
 
-STRETCH = 1.1
-
-
-def _stretched(car: pv.PolyData, factor: float) -> pv.PolyData:
-    """The car stretched lengthwise as the runner's `stretch` mode does it: each float32 x times the
-    factor in float64, stored as float32."""
-    stretched = car.copy()
-    points = np.array(stretched.points)
-    points[:, 0] = (points[:, 0].astype(np.float64) * factor).astype(np.float32)
-    stretched.points = points
-    return stretched
-
-
 @requires_runtime
-def test_a_surface_given_as_arrays_is_analysed_as_its_file(car: pv.PolyData, tmp_path: Path) -> None:
-    """Catches `analyzeSurface` analysing a car made on the page otherwise than `analyze` analyses the
-    same car written to a file; its export, `fileCells` or `workingCells` going wrong for such a car;
-    or arrays it must refuse getting through."""
-    stretched = _write_vtp(_stretched(car, STRETCH), tmp_path / "stretched_car.vtp")
-    from_arrays = _run_engine("stretch", _write_vtp(car, tmp_path / "car.vtp"), tmp_path / "arrays", str(STRETCH))
-    from_file = _run_engine("analysis", stretched, tmp_path / "file")
-    assert from_arrays["form"] == "full"
-    for part in ("geometry", "sampled", "exact"):
-        assert from_arrays[part] == from_file[part], part
-    assert from_arrays["moved"], "the arrays were copied to the engine instead of moved"
-    refusals = from_arrays["refusals"]
-    assert "whole buffer of its own" in refusals["viewOfLargerBuffer"]
-    assert "offsets end at" in refusals["offsetsShort"]
-    assert "refers to point" in refusals["pointMissing"]
-
-    out = tmp_path / "arrays"
-    reference = run_vtp_inference(stretched, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
-    surface = read_vtp_surface(stretched)
+def test_file_and_working_cells_follow_their_definitions(car: pv.PolyData, tmp_path: Path) -> None:
+    """Catches `fileCells` giving other polygons or values than the file and the prediction at each,
+    or `workingCells` measuring the working mesh's triangles otherwise than VTK, or giving a triangle
+    another Cp than the mean of its corners' as drawn."""
+    path = _write_vtp(car, tmp_path / "car.vtp")
+    out = tmp_path / "out"
+    _run_engine("analysis", path, out)
+    reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
+    surface = read_vtp_surface(path)
     np.testing.assert_allclose(_array(out, "file_cp.f32"), reference.cp_mean, atol=1e-4)
     np.testing.assert_allclose(_array(out, "file_sigma.f32"), reference.cp_std, atol=1e-4)
     np.testing.assert_allclose(_array(out, "file_centers.f32").reshape(-1, 3), surface.centers, atol=1e-6)
     np.testing.assert_allclose(_array(out, "file_normals.f32").reshape(-1, 3), surface.normals, atol=1e-5)
     np.testing.assert_allclose(_array(out, "file_areas.f64"), surface.areas, rtol=1e-5)
-
-    assert from_arrays["exportName"] == "stretched_car_prediction.vtp"
-    expected, exported = pv.read(stretched), _read_without_complaint(out / "exported.vtp")
-    np.testing.assert_array_equal(exported.points, expected.points)
-    np.testing.assert_array_equal(exported.faces, expected.faces)
-    np.testing.assert_array_equal(exported.cell_data["CpPredicted"], _array(out, "file_cp.f32"))
-    np.testing.assert_array_equal(exported.cell_data["CpSpread"], _array(out, "file_sigma.f32"))
-    np.testing.assert_array_equal(exported.cell_data["CpMeanTrim"], expected.cell_data["CpMeanTrim"])
 
     # The working mesh's triangles as VTK measures them, each with the mean Cp of its corners.
     triangles = _array(out, "working_indices.u32").reshape(-1, 3).astype(np.int64)
@@ -437,29 +402,35 @@ def test_a_surface_given_as_arrays_is_analysed_as_its_file(car: pv.PolyData, tmp
 def test_quick_prediction_matches_the_reference_at_every_polygon(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches `predictQuick` giving other values than the reference at the polygons it is given,
     summing its forces or totals over other polygons, weights or field, drawing other than the whole
-    surface, or leaving the car held as if it were an analysis."""
+    surface, leaving the car held as if it were an analysis, copying the arrays it is given instead
+    of moving them, or letting through arrays it must refuse."""
     path = _write_vtp(car, tmp_path / "car.vtp")
     outcome = _run_engine("quick", path, tmp_path / "out")
     reference = run_vtp_inference(path, SurrogateEnsemble.load(CHECKPOINT, device=torch.device("cpu")))
     out, surface = tmp_path / "out", read_vtp_surface(path)
     np.testing.assert_allclose(_array(out, "cp.f32"), reference.cp_mean, atol=1e-4)
     np.testing.assert_allclose(_array(out, "sigma.f32"), reference.cp_std, atol=1e-4)
-    _assert_drag_by_facing(outcome["forces"], _drag_by_facing(surface, reference.cp_mean, outcome["geometry"]["frontalArea"]))
+    _assert_drag(outcome["forces"], _drag(surface, reference.cp_mean, outcome["geometry"]["frontalArea"]))
     _assert_totals(outcome, surface, reference.cp_mean, outcome["geometry"]["frontalArea"])
     corners = np.diff(vtk_to_numpy(car.GetPolys().GetOffsetsArray()))
     assert outcome["form"] == "quick"
     assert outcome["reference"] == {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "own"}
     assert (outcome["triangles"], outcome["vertices"]) == (int((corners - 2).sum()), car.n_points)
     assert not outcome["exportable"] and outcome["sameCells"]
+    assert outcome["moved"], "the arrays were copied to the engine instead of moved"
+    refusals = outcome["refusals"]
+    assert "whole buffer of its own" in refusals["viewOfLargerBuffer"]
+    assert "offsets end at" in refusals["offsetsShort"]
+    assert "refers to point" in refusals["pointMissing"]
 
 
 @requires_runtime
 def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp_path: Path) -> None:
     """Catches a CFD field attached from a second file giving other numbers or fields than the same
-    field read with the car's own file (agreement, the CFD's whole-car mean Cp and coefficients,
+    field read with the car's own file (accuracy, the CFD's whole-car mean Cp and coefficients,
     working-mesh field, file polygons, export), mapping a file of other polygons onto the wrong
-    polygons or onto the far side of a thin panel, taking another car's field, a refusal that does not
-    say why, or a detach that leaves the field behind."""
+    polygons or onto the far side of a thin panel, taking another car's field, or a refusal that does
+    not say why."""
     case = car.copy()
     case.cell_data.clear()
     bare = case.copy()
@@ -486,11 +457,9 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     assert alone["reference"] == {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "own"}
     _assert_reference_totals(alone, read_vtp_surface(files[0]), cfd, outcome["geometry"]["frontalArea"])
     assert outcome["before"] == {"reference": None, "referenceTotals": None, "accuracy": None, "meshHasCfd": False}
-    assert outcome["names"] == {"withCfd": ["CpMeanTrim", "pMeanTrim"], "bare": []}
     assert "no cell array of one number per polygon" in outcome["refusals"]["bare"]
     assert "other.vtp is not this car's surface: its polygons lie a median" in outcome["refusals"]["otherCar"]
     assert "CpMissing" in outcome["refusals"]["missing"] and "CpMeanTrim, pMeanTrim" in outcome["refusals"]["missing"]
-    assert outcome["progressed"]
 
     same = outcome["same"]
     assert same == {**alone, "reference": {"file": "car.vtp", "array": "CpMeanTrim", "mapping": "polygons"}}
@@ -508,9 +477,6 @@ def test_an_attached_reference_answers_as_the_file_own_cfd(car: pv.PolyData, tmp
     nearest = outcome["nearest"]
     assert nearest["reference"] == {"file": "remeshed.vtp", "array": "CpMeanTrim", "mapping": "nearest"}
     _assert_reference_totals(nearest, polygons, expected, outcome["geometry"]["frontalArea"])
-
-    assert outcome["detached"] == outcome["before"]
-    assert outcome["fileCellsAfterDetach"] is None
 
 
 @requires_runtime
@@ -538,13 +504,13 @@ def test_a_pick_on_run_1_takes_a_few_milliseconds(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not RUN_1.is_file(), reason="needs DrivAerML run 1 in data/raw")
-def test_bundled_run_1_drag_split_matches_the_reference() -> None:
-    """Catches the bundled run 1 example's drag split drifting from the Python reference prediction
-    on every polygon of the real file."""
+def test_bundled_run_1_drag_matches_the_reference() -> None:
+    """Catches the bundled run 1 example's drag drifting from the Python reference prediction on every
+    polygon of the real file."""
     summary = json.loads((REPO / "web/examples/run_1.json").read_text())
     reference = run_vtp_inference(RUN_1, SurrogateEnsemble.load(CHECKPOINT))
-    expected = _drag_by_facing(read_vtp_surface(RUN_1), reference.cp_mean, summary["geometry"]["frontalArea"])
-    _assert_drag_by_facing(summary["forces"], expected)
+    expected = _drag(read_vtp_surface(RUN_1), reference.cp_mean, summary["geometry"]["frontalArea"])
+    _assert_drag(summary["forces"], expected)
 
 
 def _read_without_complaint(path: Path) -> pv.PolyData:

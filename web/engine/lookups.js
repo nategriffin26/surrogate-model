@@ -1,16 +1,17 @@
 /**
  * A car's lookups: what the features read, built once from all of its polygons as `SurfaceContext`
- * in `features.py` builds them. The raster is a 2 cm picture of the car in its own frame (x from the
- * nose, y from the centre plane, z from the ground) that the slices across it are read from: how far
- * the body reaches from the centre plane at each x and height (on 2 mm height bins, within a
- * centimetre of the height), the body's top and bottom over each (x, y) column, and each slice's area
- * S(x). Each surface scale is the area and area-weighted normal spread on a grid
+ * in `features.py` builds them. The raster is a picture of the car in its own frame (x from the nose,
+ * y from the centre plane, z from the ground) on `rasterStep` bins that the slices across it are read
+ * from: how far the body reaches from the centre plane at each x and height (on `heightStep` height
+ * bins, within `heightWindow` of the height), the body's top and bottom over each (x, y) column, and
+ * each slice's area S(x). Each surface scale is the area and area-weighted normal spread on a grid
  * by quadratic B-spline weights and blurred, whole and cut to its upstream half; its grids are built
  * on the GPU when there is one (`grid-gpu.js`), else on the CPU (`grid.js`), and the same lookups
  * come out of both.
  *
- * Both take the surface from samples of it (`surfaceSamples`): a polygon's centre, or the pieces of a
- * polygon wider than half a raster step, so a mesh coarser than the raster fills every bin it covers.
+ * Both take the surface from samples of it, as `features.py` `surface_samples` does: a polygon's
+ * centre, or the pieces of a polygon wider than half a raster step (`widePieces`), so a mesh coarser
+ * than the raster fills every bin it covers.
  *
  * A surface scale's fields are kept only at the nodes around the polygon centres and the file's
  * points (a few percent of its grid): every read at a polygon, and at a working-mesh vertex, which
@@ -28,7 +29,7 @@ const KEPT_REACH = 5e-5;
 
 /**
  * The nodes one block of a GPU spread's fixed-point sums holds, at 8 bytes a node: WebGPU's
- * guaranteed binding size of 128 MiB. A 1 cm grid around a DrivAerML car (17M nodes) is spread in
+ * guaranteed binding size of 128 MiB. The finest grid around a DrivAerML car (17M nodes) is spread in
  * two; blocks of this size on every device keep every GPU on the same path.
  */
 const SUMS_BLOCK_NODES = (128 * 1024 * 1024) / 8;
@@ -57,7 +58,7 @@ const SUMS_BLOCK_NODES = (128 * 1024 * 1024) / 8;
  *   (x bins are counted from the nose, height bins from the ground; heights themselves are absolute z)
  * @property {ScaleLookup[]} scales  in `FeatureLayout.scales` order
  *
- * @typedef {Object} SurfaceSamples  The pieces the wide polygons are taken in.
+ * @typedef {Object} WidePieces  The pieces the wide polygons are taken in.
  * @property {Uint8Array} wide         (C) 1 for a polygon with an edge longer than half a raster step
  * @property {Float32Array} positions  (S, 3) each piece's centroid
  * @property {Float64Array} areas      (S) each piece's area
@@ -68,36 +69,37 @@ const SUMS_BLOCK_NODES = (128 * 1024 * 1024) / 8;
  * @param {import('./result.js').ParsedSurface} surface  its points are the file's points (P, 3)
  * @param {import('./geometry.js').CellGeometry} cells   the surface's polygons, measured
  * @param {import('./features.js').FeatureLayout} layout
- * @param {ReturnType<import('./grid-gpu.js').createGridOperations> | null} gpu  the GPU's grid operations, or none
+ * @param {ReturnType<import('./grid-gpu.js').createGridOperations> | null} grids  the GPU's grid operations, or none
  * @returns {Promise<SurfaceLookups>}
  */
-export async function buildLookups(surface, cells, layout, gpu) {
+export async function buildLookups(surface, cells, layout, grids) {
   const { bounds } = cells;
   const yCenter = 0.5 * (bounds[2] + bounds[3]);
-  const samples = surfaceSamples(surface, layout.rasterStep / 2);
+  const pieces = widePieces(surface, layout.rasterStep / 2);
   const scaleGrids = layout.scales.map((scale) => scaleGrid(scale, bounds));
-  const scales = gpu
-    ? await scalesOnGpu(gpu, cells, samples, surface.points, layout, scaleGrids)
-    : scalesOnCpu(cells, samples, surface.points, layout, scaleGrids);
+  const scales = grids
+    ? await scalesOnGpu(grids, cells, pieces, surface.points, layout, scaleGrids)
+    : scalesOnCpu(cells, pieces, surface.points, layout, scaleGrids);
   return {
     bounds,
     yCenter,
-    ...carRaster(cells, samples, layout, bounds, yCenter),
+    ...carRaster(cells, pieces, layout, bounds, yCenter),
     scales: scaleGrids.map(({ origin, nodes }, s) => ({ origin, nodes, ...scales[s] })),
   };
 }
 
 /**
- * Where the lookups take the surface from, as `features.py` takes it. A polygon whose edges are all
- * at most `half` (half a raster step) is one sample: its centre, carrying its area. A wider polygon
+ * The wide polygons' pieces, which with the other polygons' centres are where the lookups take the
+ * surface from, as `features.py` takes it. A polygon whose edges are all at most `half` (half a raster
+ * step) is one sample: its centre, carrying its area. A wider polygon
  * is taken in pieces, so a mesh coarser than the raster still fills every bin it covers and lays its
  * area where it lies: each triangle of its fan from the first corner is cut into n² congruent pieces,
  * n = ⌈longest edge / half⌉, each a sample at its centroid carrying its area and the polygon's
  * normal. Lengths and positions are worked in float64 from the float32 points, and the positions
  * rounded to float32.
- * @returns {SurfaceSamples}
+ * @returns {WidePieces}
  */
-function surfaceSamples({ points, connectivity, offsets }, half) {
+function widePieces({ points, connectivity, offsets }, half) {
   const count = offsets.length - 1;
   const wide = new Uint8Array(count);
   const limit = half * half;
@@ -178,10 +180,10 @@ function carRaster({ centers }, { wide, positions }, { h, x0, yHalf, z0, heightB
   const reachInBin = new Float32Array(2 * nx * nh);
   const zTop = new Float32Array(nx * ny).fill(-Infinity);
   const zBottom = new Float32Array(nx * ny).fill(Infinity);
-  const place = (samples, i) => {
-    const z = samples[i + 2];
-    const yRelative = f32(samples[i + 1] - yCenter32);
-    const ix = clamp(Math.trunc(f32(f32(f32(samples[i] - nose) - x0) / h)), nx);
+  const place = (xyz, i) => {
+    const z = xyz[i + 2];
+    const yRelative = f32(xyz[i + 1] - yCenter32);
+    const ix = clamp(Math.trunc(f32(f32(f32(xyz[i] - nose) - x0) / h)), nx);
     const iy = clamp(Math.trunc(f32(f32(yRelative + yHalf) / h)), ny);
     const ih = clamp(Math.trunc(f32(f32(f32(z - ground) - z0) / heightBin)), nh);
     const bin = ((yRelative >= 0 ? nx : 0) + ix) * nh + ih;
@@ -261,9 +263,9 @@ function carriedByPieces({ normals }, { areas, polygons }, quantity, out) {
   return out;
 }
 
-function scalesOnCpu(cells, samples, points, layout, scaleGrids) {
+function scalesOnCpu(cells, pieces, points, layout, scaleGrids) {
   const atCentres = new Float64Array(cells.areas.length);
-  const byPieces = new Float64Array(samples.areas.length);
+  const byPieces = new Float64Array(pieces.areas.length);
   return layout.scales.map((scale, s) => {
     const grid = scaleGrids[s];
     const kept = keptNodes(grid, cells.centers, points);
@@ -276,8 +278,8 @@ function scalesOnCpu(cells, samples, points, layout, scaleGrids) {
     const [spread, blurred, yz] = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
     for (let q = 0; q < 4; q++) {
       sums.fill(0);
-      spreadOnGrid(grid, cells.centers, carriedAtCentres(cells, samples, q, atCentres), sums);
-      spreadOnGrid(grid, samples.positions, carriedByPieces(cells, samples, q, byPieces), sums);
+      spreadOnGrid(grid, cells.centers, carriedAtCentres(cells, pieces, q, atCentres), sums);
+      spreadOnGrid(grid, pieces.positions, carriedByPieces(cells, pieces, q, byPieces), sums);
       spread.set(sums);
       correlateAlong(correlateAlong(spread, grid.nodes, 1, scale.weights, blurred), grid.nodes, 2, scale.weights, yz);
       gather(correlateAlong(yz, grid.nodes, 0, scale.weights, blurred), kept, whole, q);
@@ -323,12 +325,12 @@ function gather(field, kept, out, lane) {
   for (let i = 0; i < kept.length; i++) out[4 * i + lane] = field[kept[i]];
 }
 
-async function scalesOnGpu(gpu, cells, samples, points, layout, scaleGrids) {
-  const { device } = gpu;
+async function scalesOnGpu(grids, cells, pieces, points, layout, scaleGrids) {
+  const { device } = grids;
   const { centers, areas } = cells;
   const count = areas.length;
   // The polygon centres, then the wide polygons' pieces.
-  const sampleCount = count + samples.areas.length;
+  const sampleCount = count + pieces.areas.length;
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const created = [];
   const buffer = (bytes) => {
@@ -358,15 +360,15 @@ async function scalesOnGpu(gpu, cells, samples, points, layout, scaleGrids) {
   const build = async () => {
     const positions = buffer(12 * sampleCount);
     device.queue.writeBuffer(positions, 0, centers);
-    if (samples.areas.length) device.queue.writeBuffer(positions, centers.byteLength, samples.positions);
+    if (pieces.areas.length) device.queue.writeBuffer(positions, centers.byteLength, pieces.positions);
     const nodeCount = ({ nodes }) => nodes[0] * nodes[1] * nodes[2];
 
     // Which nodes each scale keeps.
     const filePoints = upload(points);
     const bits = scaleGrids.map((grid) => buffer(4 * Math.ceil(nodeCount(grid) / 32)));
     submit((encoder) => scaleGrids.forEach((grid, s) => {
-      gpu.mark(encoder, grid, { positions, count, reach: KEPT_REACH, bits: bits[s] });
-      gpu.mark(encoder, grid, { positions: filePoints, count: points.length / 3, reach: KEPT_REACH, bits: bits[s] });
+      grids.mark(encoder, grid, { positions, count, reach: KEPT_REACH, bits: bits[s] });
+      grids.mark(encoder, grid, { positions: filePoints, count: points.length / 3, reach: KEPT_REACH, bits: bits[s] });
     }));
     filePoints.destroy();
     const kept = await Promise.all(bits.map(async (set, s) => nodesOf(new Uint32Array(await download(set, set.size)), nodeCount(scaleGrids[s]))));
@@ -386,22 +388,22 @@ async function scalesOnGpu(gpu, cells, samples, points, layout, scaleGrids) {
       const gaussian = upload(Float32Array.from(layout.scales[s].weights));
       const upstreamHalf = upload(Float32Array.from(layout.scales[s].upstream));
       for (let q = 0; q < 4; q++) {
-        carriedAtCentres(cells, samples, q, quantity.subarray(0, count));
-        carriedByPieces(cells, samples, q, quantity.subarray(count));
+        carriedAtCentres(cells, pieces, q, quantity.subarray(0, count));
+        carriedByPieces(cells, pieces, q, quantity.subarray(count));
         device.queue.writeBuffer(weights, 0, quantity);
         submit((encoder) => {
           for (let first = 0; first < n; first += SUMS_BLOCK_NODES) {
             const length = Math.min(SUMS_BLOCK_NODES, n - first);
             encoder.clearBuffer(sums);
-            gpu.spread(encoder, grid, { positions, weights, count: sampleCount, sums, first, length });
-            gpu.sumsToField(encoder, { sums, field: spread, first, length });
+            grids.spread(encoder, grid, { positions, weights, count: sampleCount, sums, first, length });
+            grids.sumsToField(encoder, { sums, field: spread, first, length });
           }
-          gpu.correlate(encoder, grid.nodes, 1, { weights: gaussian, radius, field: spread, out: blurred });
-          gpu.correlate(encoder, grid.nodes, 2, { weights: gaussian, radius, field: blurred, out: yz });
-          gpu.correlate(encoder, grid.nodes, 0, { weights: gaussian, radius, field: yz, out: blurred });
-          gpu.gather(encoder, { field: blurred, nodes: keptBuffer, count: kept[s].length, out: whole, lane: q, lanes: 4 });
-          gpu.correlate(encoder, grid.nodes, 0, { weights: upstreamHalf, radius, field: yz, out: blurred });
-          gpu.gather(encoder, { field: blurred, nodes: keptBuffer, count: kept[s].length, out: ahead, lane: q, lanes: 4 });
+          grids.correlate(encoder, grid.nodes, 1, { weights: gaussian, radius, field: spread, out: blurred });
+          grids.correlate(encoder, grid.nodes, 2, { weights: gaussian, radius, field: blurred, out: yz });
+          grids.correlate(encoder, grid.nodes, 0, { weights: gaussian, radius, field: yz, out: blurred });
+          grids.gather(encoder, { field: blurred, nodes: keptBuffer, count: kept[s].length, out: whole, lane: q, lanes: 4 });
+          grids.correlate(encoder, grid.nodes, 0, { weights: upstreamHalf, radius, field: yz, out: blurred });
+          grids.gather(encoder, { field: blurred, nodes: keptBuffer, count: kept[s].length, out: ahead, lane: q, lanes: 4 });
         });
       }
       scales.push({

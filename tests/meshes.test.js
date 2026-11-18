@@ -134,7 +134,7 @@ const triangleCount = surface.connectivity.length - 2 * (surface.offsets.length 
 
 Deno.test('the full mesh is every polygon, wound outward, with unit normals', async () => {
   const { full, preview } = await build(surface);
-  assert(full.length === 1 && preview[0] === full[0], 'the full mesh is delivered once and is the preview');
+  assert(full.length === 1 && preview.length === 0, 'the full mesh is delivered once, with no separate preview');
   const { positions, normals, indices } = full[0];
   assert(indices.length === 3 * triangleCount, `expected ${triangleCount} triangles, got ${indices.length / 3}`);
   assert(positions === surface.points, 'the full mesh shares the parsed points');
@@ -248,12 +248,6 @@ Deno.test('polygon values reach points as the area-weighted mean of the polygons
     assert(Math.abs(atVertices[v] - cfd[sourcePoint[v]]) < 1e-6, `around() and all() disagree at vertex ${v}`);
     assert(working[0].cfd[v] === cfd[sourcePoint[v]], `working cfd at vertex ${v} is not the full mesh's`);
   }
-  const done = new Uint8Array(surface.offsets.length - 1);
-  done[0] = 1;
-  const partial = average.all(surface.cfd, done);
-  const firstQuad = surface.connectivity.subarray(0, 4);
-  for (const p of firstQuad) assert(Math.abs(partial[p] - surface.cfd[0]) < 1e-6, 'a point with one done polygon takes its value');
-  assert(Number.isNaN(partial[surface.points.length / 3 - 1]), 'a point with no done polygon is NaN');
 });
 
 Deno.test('aborting stops the build at once: it rejects with the reason and reports nothing more', async () => {

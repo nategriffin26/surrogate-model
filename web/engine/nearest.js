@@ -1,19 +1,16 @@
 /** Nearest-point queries over a point set, through a uniform grid of buckets, and sampling one mesh's fields at another's vertices. */
 
+import { boundsOf } from './geometry.js';
+
 /**
  * @param {Float32Array} positions (N, 3)
  * @returns {{ positions: Float32Array, origin: number[], cell: number, shape: number[], starts: Uint32Array, order: Uint32Array }}
  */
 export function buildPointGrid(positions) {
   const count = positions.length / 3;
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < positions.length; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      if (positions[i + k] < min[k]) min[k] = positions[i + k];
-      if (positions[i + k] > max[k]) max[k] = positions[i + k];
-    }
-  }
+  const bounds = boundsOf(positions);
+  const min = [bounds[0], bounds[2], bounds[4]];
+  const max = [bounds[1], bounds[3], bounds[5]];
   // About one point per bucket of the bounding box; a surface fills few buckets, each with several.
   const volume = Math.max((max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]), 1e-12);
   const cell = Math.max(Math.cbrt(volume / Math.max(count, 1)), 1e-6);

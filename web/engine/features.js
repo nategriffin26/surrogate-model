@@ -1,11 +1,11 @@
 /**
  * The numbers the networks are told about a surface point, as `features.py` defines them, read from
  * a car's lookups (`lookups.js`): where the point is on the car and which way it faces; the surface
- * around the point at four scales, whole and split into the part ahead and the part behind; and
- * slices across the car at the point's station and ahead and behind it, each read for its area,
- * how far it reaches outboard of the point within a centimetre of the point's height, and how far it
- * reaches above and below the point at the point's distance from the centre plane. Nothing is folded
- * across the centre plane: a point is read on its own side.
+ * around the point at each of the definition's surface scales, whole and split into the part ahead
+ * and the part behind; and slices across the car at the point's station and ahead and behind it, each
+ * read for its area, how far it reaches outboard of the point within `heightWindow` of the point's
+ * height, and how far it reaches above and below the point at the point's distance from the centre
+ * plane. Nothing is folded across the centre plane: a point is read on its own side.
  *
  * Axes are the file's: x downstream, z up, and so (right-handed) +y toward the car's right as seen
  * from the driver's seat.
@@ -21,18 +21,17 @@ import { gaussianWeights, splineAround, upstreamHalf } from './grid.js';
 const f32 = Math.fround;
 
 /**
- * The reads of a surface scale a model can be given, in the reference's column order, each with its
- * columns' names and the part of the surface they read. A model file names the reads it was trained
- * with (`surfaceReads`), the same for every scale.
+ * The reads of a surface scale a model can be given, in the reference's column order, each with the
+ * part of the surface each of its columns reads. A model file names the reads it was trained with
+ * (`surfaceReads`), the same for every scale.
  */
 const SURFACE_READS = {
-  meanNormal: [['Mean facing rearward', 'whole'], ['Mean facing sideways', 'whole'], ['Mean facing up', 'whole']],
-  amount: [['Surface density', 'whole']],
-  ownMinusMean: [['Bend, rearward', 'whole'], ['Bend, sideways', 'whole'], ['Bend, up', 'whole']],
-  aheadNormal: [['Mean facing rearward, ahead', 'ahead'], ['Mean facing sideways, ahead', 'ahead'], ['Mean facing up, ahead', 'ahead']],
-  aheadAmount: [['Surface density, ahead', 'ahead']],
-  behindNormal: [['Mean facing rearward, behind', 'behind'], ['Mean facing sideways, behind', 'behind'], ['Mean facing up, behind', 'behind']],
-  behindAmount: [['Surface density, behind', 'behind']],
+  meanNormal: ['whole', 'whole', 'whole'],
+  amount: ['whole'],
+  aheadNormal: ['ahead', 'ahead', 'ahead'],
+  aheadAmount: ['ahead'],
+  behindNormal: ['behind', 'behind', 'behind'],
+  behindAmount: ['behind'],
 };
 
 /**
@@ -68,7 +67,7 @@ const SURFACE_READS = {
  *   The raster's origin in the car's frame (x0 from the nose, −yHalf from the centre plane, z0 from the
  *   ground), step h and the side view's height bin in float32, as the raster is built; its size
  *   (nx, ny) and the side view's height bins nh; `heightWindow` in height bins; each scale's grid; and
- *   which of a scale's fifteen values go to the model, in order.
+ *   which of a scale's `SURFACE_READS` values go to the model, in order.
  */
 
 /**
@@ -109,7 +108,7 @@ export function featureLayout(definition) {
   return layout;
 }
 
-/** Where each read's columns sit among a scale's fifteen values, in the order `reads` lists them. */
+/** Where each read's columns sit among a scale's `SURFACE_READS` values, in the order `reads` lists them. */
 function surfaceColumns(reads) {
   if (!Array.isArray(reads)) {
     throw new Error("The model file's feature definition does not say which surface reads its model was given (surfaceReads).");
@@ -126,79 +125,38 @@ function surfaceColumns(reads) {
 }
 
 /**
- * For each column, in the networks' order: `kind`, a stable id of its family; `group`, the family's
- * display label; a short plain name; its unit; `offset`, the place it reads relative to the point,
- * [dx, dy, dz] in metres along the file's axes (dx downstream, dy toward +y, dz up); and `along`, for
- * a distance in metres, the unit direction it runs from that place, so place + value × along is where
- * it measured to (a body surface, or for the distances from nose, tail, centre plane and lowest point
- * that plane), null for every other column. A slice's reach outboard is measured away from the
- * centre plane on the point's own side: its `along` is [0, 1, 0] for a point on the +y side and is
- * turned to [0, −1, 0] for a point on the −y side. A surface column also has `scale`, the size it is
- * named by, `sigma`, its Gaussian's standard deviation (both in metres), and `part`: the whole surface
- * about the point, the part ahead of it, or the part behind. A slice column also has `station`, its
- * dx, and `read`: 'area', 'outboard', 'above' or 'below'.
+ * The model's columns in the networks' order, each as `ModelColumn` in `result.js` describes it.
+ * Kinds are `features.py`'s blocks: `local` is 'position', `surface` is 'surface', `slices` is 'slice'.
  * @param {FeatureDefinition} definition
  * @returns {import('./result.js').ModelColumn[]}
  */
 export function describeColumns({ surfaceScales, surfaceSigma, surfaceReads, sliceDx }) {
   const columns = [];
-  const add = (kind, group, name, { offset = [0, 0, 0], along = null, ...more } = {}) => {
-    columns.push({ kind, group, name, unit: along ? 'm' : '', offset, along, ...more });
-  };
-  const where = ([dx, dy, dz]) => {
-    const parts = [];
-    const say = (value, negative, positive) => {
-      if (value) parts.push(`${Math.round(Math.abs(value) * 100)} cm ${value < 0 ? negative : positive}`);
-    };
-    say(dx, 'forward', 'rearward');
-    say(dy, 'toward −y', 'toward +y');
-    say(dz, 'down', 'up');
-    return parts.length ? `, ${parts.join(', ')}` : '';
+  const add = (kind, { offset = [0, 0, 0], along = null, ...more } = {}) => {
+    columns.push({ kind, unit: along ? 'm' : '', offset, along, ...more });
   };
   const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], up = [0, 0, 1], down = [0, 0, -1];
 
-  const position = 'Position and facing';
-  add('position', position, 'Distance from nose', { along: forward });
-  add('position', position, 'Distance to tail', { along: rearward });
-  // Signed, so a point at y below the centre plane reads a negative value and still reaches the plane.
-  add('position', position, 'Distance from the centre plane', { along: towardMinusY });
-  add('position', position, 'Height above lowest point', { along: down });
-  add('position', position, 'Facing rearward');
-  add('position', position, 'Facing sideways');
-  add('position', position, 'Facing up');
+  // Distances from the nose, to the tail, from the centre plane and above the lowest point, then the
+  // normal. The distance from the centre plane is signed, so a point at y below the plane reads a
+  // negative value and still reaches the plane.
+  for (const along of [forward, rearward, towardMinusY, down]) add('position', { along });
+  for (let axis = 0; axis < 3; axis++) add('position');
 
   for (const scale of surfaceScales) {
-    const group = `Surface at ${Math.round(scale * 100)} cm`;
     for (const read of surfaceReads) {
-      for (const [name, part] of SURFACE_READS[read]) add('surface', group, name, { scale, sigma: surfaceSigma * scale, part });
+      for (const part of SURFACE_READS[read]) add('surface', { scale, sigma: surfaceSigma * scale, part });
     }
   }
 
-  const slices = 'Slices across the car';
   for (const station of [0, ...sliceDx]) {
-    const place = where([station, 0, 0]);
     const at = { offset: [station, 0, 0], station };
-    add('slice', slices, `Slice area${place}`, { ...at, read: 'area', unit: 'm²' });
-    add('slice', slices, `Reach outboard${place}`, { ...at, read: 'outboard', along: outboard });
-    add('slice', slices, `Reach above${place}`, { ...at, read: 'above', along: up });
-    add('slice', slices, `Reach below${place}`, { ...at, read: 'below', along: down });
+    add('slice', { ...at, read: 'area', unit: 'm²' });
+    add('slice', { ...at, read: 'outboard', along: outboard });
+    add('slice', { ...at, read: 'above', along: up });
+    add('slice', { ...at, read: 'below', along: down });
   }
   return columns;
-}
-
-/** Column kinds in the order the model view lists them. */
-const COLUMN_KINDS = ['position', 'surface', 'slice'];
-
-/**
- * The kinds of the columns inside [start, stop) ranges, in `COLUMN_KINDS` order: what a model given
- * those columns was told about each point.
- * @param {{ kind: string }[]} columns  from `describeColumns`
- * @param {number[][]} ranges
- * @returns {string[]}
- */
-export function kindsWithin(columns, ranges) {
-  const present = new Set(ranges.flatMap(([start, stop]) => columns.slice(start, stop).map((column) => column.kind)));
-  return COLUMN_KINDS.filter((kind) => present.has(kind));
 }
 
 /**
@@ -213,12 +171,13 @@ const HEIGHT = new Float64Array(2);
 const ROW = new Float64Array(2);
 const WHOLE = new Float64Array(4);
 const AHEAD = new Float64Array(4);
-/** A scale's fifteen values at a point, in `SURFACE_READS` order. */
-const SURFACE = new Float64Array(15);
+/** A scale's twelve values at a point, in `SURFACE_READS` order. */
+const SURFACE = new Float64Array(12);
 
 /**
  * Write the features of points [first, first + count) into `out`, one row of `stride` floats per
- * point (`stride` at least the feature count; the rest of a row is left as it is).
+ * point (`stride` at least the feature count; the rest of a row is left as it is), as
+ * `extract_query_features` in `features.py` computes them.
  * @param {SurfaceContext} context
  * @param {Float32Array} positions (P, 3)
  * @param {Float32Array} normals   (P, 3) unit, outward
@@ -248,8 +207,8 @@ export function computeFeatures(context, positions, normals, first, count, out, 
     out[k++] = n1;
     out[k++] = n2;
 
-    // The surface around the point at each scale: its mean facing and density, the point's own facing
-    // against that mean, then the same for the part ahead and the part behind; the model's share of them.
+    // The surface around the point at each scale: its mean facing and density, then the same for the
+    // part ahead and the part behind; the model's share of them.
     for (let s = 0; s < scales.length; s++) {
       readScale(scaleGrids[s], scales[s], sx, positions[q + 1], sz);
       const flat = layout.scales[s].flatPanel;
@@ -262,17 +221,14 @@ export function computeFeatures(context, positions, normals, first, count, out, 
       SURFACE[1] = my;
       SURFACE[2] = mz;
       SURFACE[3] = WHOLE[0] / flat;
-      SURFACE[4] = n0 - mx;
-      SURFACE[5] = n1 - my;
-      SURFACE[6] = n2 - mz;
-      SURFACE[7] = AHEAD[1] / ahead;
-      SURFACE[8] = AHEAD[2] / ahead;
-      SURFACE[9] = AHEAD[3] / ahead;
-      SURFACE[10] = AHEAD[0] / (0.5 * flat);
-      SURFACE[11] = (WHOLE[1] - AHEAD[1]) / behind;
-      SURFACE[12] = (WHOLE[2] - AHEAD[2]) / behind;
-      SURFACE[13] = (WHOLE[3] - AHEAD[3]) / behind;
-      SURFACE[14] = behindArea / (0.5 * flat);
+      SURFACE[4] = AHEAD[1] / ahead;
+      SURFACE[5] = AHEAD[2] / ahead;
+      SURFACE[6] = AHEAD[3] / ahead;
+      SURFACE[7] = AHEAD[0] / (0.5 * flat);
+      SURFACE[8] = (WHOLE[1] - AHEAD[1]) / behind;
+      SURFACE[9] = (WHOLE[2] - AHEAD[2]) / behind;
+      SURFACE[10] = (WHOLE[3] - AHEAD[3]) / behind;
+      SURFACE[11] = behindArea / (0.5 * flat);
       for (const column of chosen) out[k++] = SURFACE[column];
     }
 

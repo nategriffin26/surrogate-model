@@ -9,7 +9,6 @@
 //   bun tests/web_engine_outputs.mjs export   <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs analysis <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs pick     <surface.vtp> <out dir> <model dir>
-//   bun tests/web_engine_outputs.mjs stretch  <surface.vtp> <out dir> <factor>
 //   bun tests/web_engine_outputs.mjs quick    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs write    <surface.vtp> <out dir>
 //   bun tests/web_engine_outputs.mjs reference <surface.vtp> <out dir> <cfd.vtp>,<remeshed cfd.vtp>,<bare.vtp>,<other car.vtp>
@@ -28,20 +27,19 @@
 // the second analysis as soon as the first one starts, and writes each one's events in arrival order.
 // `export` runs the whole engine on the file and writes what `exportVtp` gives once every polygon is
 // predicted, as exported.vtp. `analysis` runs it and writes the Result's geometry, its sampled
-// forces, the `exact` numbers, and what `polygonAt` and `explain` give at points just outside two
-// dozen polygons. `pick` times `polygonAt`'s lookup at points outside two hundred polygons, the
-// networks asked at each on demand, without the rest of the engine. `stretch` stretches the car
-// lengthwise by `factor` and analyses it from arrays (`analyzeSurface`), writing what `analysis` does
-// and the export, `fileCells` and `workingCells`, with the messages of the arrays it must refuse.
-// `quick` writes `predictQuick`'s result for the file's surface. `write` writes the file's surface
-// anew with `writeVtp`, with cell and point arrays of several types and widths. `reference` analyses
-// `cfd.vtp` alone, then the surface, attaches a reference to it from each of the four other files in
-// turn, and detaches it, writing what each step gives. `example` asks a fresh engine, which has
-// analysed nothing, `explain` and `polygonAt` at a vertex of a bundled example. `grid-cpu` and
-// `grid-gpu` run the grid operations (`grid.js`, `grid-gpu.js`) on synthetic inputs (spec.json with
-// points, weights and field as float32) and write each result; `grid-gpu` spreads in blocks of
-// spec.sumsBlock nodes, as a car's finest grid is spread, and needs a runtime with WebGPU (Deno); it
-// writes outcome.json { "gpu": false } where there is no adapter.
+// forces, the `exact` numbers, what `polygonAt` and `explain` give at points just outside two dozen
+// polygons, and the polygons `fileCells` and `workingCells` give. `pick` times `polygonAt`'s lookup
+// at points outside two hundred polygons, the networks asked at each on demand, without the rest of
+// the engine. `quick` writes `predictQuick`'s result for the file's surface, with the messages of the
+// arrays it must refuse. `write` writes the file's surface anew with `writeVtp`, with cell and point
+// arrays of several types and widths. `reference` analyses `cfd.vtp` alone, then the surface, and
+// attaches a reference to it from each of the four other files in turn, writing what each step
+// gives. `example` asks a fresh engine, which has analysed nothing, `explain` and `polygonAt` at a
+// vertex of a bundled example. `grid-cpu` and `grid-gpu` run the grid operations (`grid.js`,
+// `grid-gpu.js`) on synthetic inputs (spec.json with points, weights and field as float32) and write
+// each result; `grid-gpu` spreads in blocks of spec.sumsBlock nodes, as a car's finest grid is
+// spread, and needs a runtime with WebGPU (Deno); it writes outcome.json { "gpu": false } where there
+// is no adapter.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -58,7 +56,7 @@ import { describePolygon, indexPolygons, polygonAt } from '../web/engine/polygon
 import { correlateAlong, gaussianWeights, spreadOnGrid, upstreamHalf } from '../web/engine/grid.js';
 import { createGridOperations } from '../web/engine/grid-gpu.js';
 
-const [mode, path, outDir, modelSource] = process.argv.slice(2);
+const [mode, path, outDir, argument] = process.argv.slice(2);
 const write = (name, array) => writeFileSync(join(outDir, name), new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
 
 /**
@@ -149,6 +147,15 @@ if (mode === 'analysis') {
   const numbers = await everyPolygon;
   const late = await ask(engine.polygonAt);
   const explained = await ask(engine.explain);
+  const cells = await engine.fileCells(result);
+  const working = engine.workingCells(result);
+  for (const name of ['centers', 'normals', 'areas', 'cp', 'sigma']) {
+    write(`file_${name}.${name === 'areas' ? 'f64' : 'f32'}`, cells[name]);
+    write(`working_${name}.${name === 'areas' ? 'f64' : 'f32'}`, working[name]);
+  }
+  write('working_positions.f32', result.mesh.positions);
+  write('working_indices.u32', result.mesh.indices);
+  write('working_vertex_cp.f32', result.mesh.cp);
   writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
     geometry: result.geometry,
     sampled: { forces: result.forces },
@@ -161,7 +168,7 @@ if (mode === 'analysis') {
 }
 
 if (mode === 'pick') {
-  const ensemble = await loadEnsemble(pathToFileURL(`${modelSource}/`));
+  const ensemble = await loadEnsemble(pathToFileURL(`${argument}/`));
   const surface = await readSurface(new File([readFileSync(path)], basename(path)));
   const cells = measureCells(surface);
   const layout = featureLayout(ensemble.features);
@@ -184,59 +191,26 @@ if (mode === 'pick') {
   process.exit(0);
 }
 
-/** The surface with arrays of its own, as `analyzeSurface` and `predictQuick` take them. */
+/** The surface with arrays of its own, as `predictQuick` takes them. */
 const ownArrays = ({ name, points, connectivity, offsets, cfd }) => ({
   name, points: points.slice(), connectivity: connectivity.slice(), offsets: offsets.slice(), cfd: cfd && cfd.slice(),
 });
 
-if (mode === 'stretch') {
-  const file = new File([readFileSync(path)], basename(path));
-  const read = await readSurface(file);
-  // Lengthwise in float64, stored as float32: what numpy gives for float32 points times a float.
-  const points = read.points.map((value, i) => (i % 3 === 0 ? value * Number(modelSource) : value));
-  const engine = createEngine();
-
-  const shared = new Float32Array(points.length + 3);
-  shared.set(points);
-  const refuse = (surface) => engine.analyzeSurface(surface).then(() => null, (error) => error.message);
-  const refusals = {
-    viewOfLargerBuffer: await refuse({ ...ownArrays(read), points: shared.subarray(0, points.length) }),
-    offsetsShort: await refuse({ ...ownArrays(read), offsets: read.offsets.slice(0, -1) }),
-    pointMissing: await refuse({ ...ownArrays(read), points: points.slice(0, -3) }),
-  };
-
-  let exact;
-  const everyPolygon = new Promise((resolve) => { exact = resolve; });
-  const surface = { ...ownArrays(read), name: `stretched_${read.name}`, points };
-  const result = await engine.analyzeSurface(surface, { exact });
-  const numbers = await everyPolygon;
-  const cells = await engine.fileCells(result);
-  const working = engine.workingCells(result);
-  const vtp = await engine.exportVtp(result);
-  writeFileSync(join(outDir, 'exported.vtp'), new Uint8Array(await vtp.arrayBuffer()));
-  for (const name of ['centers', 'normals', 'areas', 'cp', 'sigma']) {
-    write(`file_${name}.${name === 'areas' ? 'f64' : 'f32'}`, cells[name]);
-    write(`working_${name}.${name === 'areas' ? 'f64' : 'f32'}`, working[name]);
-  }
-  write('working_positions.f32', result.mesh.positions);
-  write('working_indices.u32', result.mesh.indices);
-  write('working_vertex_cp.f32', result.mesh.cp);
-  writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
-    form: result.form,
-    geometry: result.geometry,
-    sampled: { forces: result.forces },
-    exact: numbers,
-    moved: surface.points.length === 0,
-    refusals,
-    exportName: vtp.name,
-  }));
-  process.exit(0);
-}
-
 if (mode === 'quick') {
   const read = await readSurface(new File([readFileSync(path)], basename(path)));
   const engine = createEngine();
-  const result = await engine.predictQuick(ownArrays(read));
+
+  const shared = new Float32Array(read.points.length + 3);
+  shared.set(read.points);
+  const refuse = (surface) => engine.predictQuick(surface).then(() => null, (error) => error.message);
+  const refusals = {
+    viewOfLargerBuffer: await refuse({ ...ownArrays(read), points: shared.subarray(0, read.points.length) }),
+    offsetsShort: await refuse({ ...ownArrays(read), offsets: read.offsets.slice(0, -1) }),
+    pointMissing: await refuse({ ...ownArrays(read), points: read.points.slice(0, -3) }),
+  };
+
+  const surface = ownArrays(read);
+  const result = await engine.predictQuick(surface);
   write('cp.f32', result.cells.cp);
   write('sigma.f32', result.cells.sigma);
   write('vertex_cp.f32', result.mesh.cp);
@@ -251,12 +225,14 @@ if (mode === 'quick') {
     vertices: result.mesh.positions.length / 3,
     exportable: engine.canExportVtp(result),
     sameCells: engine.workingCells(result) === result.cells,
+    moved: surface.points.length === 0,
+    refusals,
   }));
   process.exit(0);
 }
 
 if (mode === 'reference') {
-  const [withCfd, remeshed, bare, otherCar] = modelSource.split(',').map((source) => new File([readFileSync(source)], basename(source)));
+  const [withCfd, remeshed, bare, otherCar] = argument.split(',').map((source) => new File([readFileSync(source)], basename(source)));
   const engine = createEngine();
   const analyse = async (file) => {
     let exact;
@@ -271,15 +247,13 @@ if (mode === 'reference') {
   write('alone_mesh_cfd.f32', alone.mesh.cfd);
   const result = await analyse(new File([readFileSync(path)], basename(path)));
   const before = numbers(result);
-  const names = { withCfd: await engine.cellArrayNames(withCfd), bare: await engine.cellArrayNames(bare) };
   const refusals = {
     bare: await refusal(engine.attachReference(result, bare)),
     otherCar: await refusal(engine.attachReference(result, otherCar)),
     missing: await refusal(engine.attachReference(result, withCfd, { array: 'CpMissing' })),
   };
 
-  const fractions = [];
-  const attached = await engine.attachReference(result, withCfd, { onProgress: (fraction) => fractions.push(fraction) });
+  const attached = await engine.attachReference(result, withCfd);
   const same = numbers(result);
   write('same_mesh_cfd.f32', result.mesh.cfd);
   write('same_returned_cfd.f32', attached.cfd);
@@ -291,12 +265,8 @@ if (mode === 'reference') {
   const nearest = numbers(result);
   write('nearest_file_cfd.f32', (await engine.fileCells(result)).cfd);
 
-  await engine.detachReference(result);
-  const detached = numbers(result);
   writeFileSync(join(outDir, 'outcome.json'), JSON.stringify({
-    geometry: result.geometry, alone: numbers(alone), before, names, refusals, same, nearest, detached,
-    progressed: fractions.length > 0 && fractions.every((fraction, i) => fraction >= (fractions[i - 1] ?? 0) && fraction <= 1),
-    fileCellsAfterDetach: (await engine.fileCells(result)).cfd,
+    geometry: result.geometry, alone: numbers(alone), before, refusals, same, nearest,
   }));
   process.exit(0);
 }
@@ -404,8 +374,8 @@ if (surface.cfd) write('cfd.f32', surface.cfd);
 
 let outcome = { cells: surface.offsets.length - 1, hasCfd: Boolean(surface.cfd), frontalArea: frontalArea(surface) };
 if (mode === 'engine' || mode === 'features' || mode === 'features-gpu') {
-  const ensemble = mode === 'engine' ? await loadEnsemble(pathToFileURL(`${modelSource}/`)) : null;
-  const layout = featureLayout(ensemble ? ensemble.features : JSON.parse(readFileSync(modelSource, 'utf8')));
+  const ensemble = mode === 'engine' ? await loadEnsemble(pathToFileURL(`${argument}/`)) : null;
+  const layout = featureLayout(ensemble ? ensemble.features : JSON.parse(readFileSync(argument, 'utf8')));
   const cells = measureCells(surface);
   let grids = null;
   if (mode === 'features-gpu') {

@@ -38,7 +38,7 @@ function wavySheet(withCfd) {
 function lookups() {
   const values = (length, seed) => Float32Array.from({ length }, (_, i) => Math.sin(seed + 0.37 * i) * 10 ** (i % 5));
   return {
-    definition: { count: 122 },
+    definition: {},
     bounds: [-0.7, 2.3, -0.5, 0.5, -0.1, 0.1],
     yCenter: 0,
     yOut: values(60, 1),
@@ -130,7 +130,7 @@ Deno.test('a scale kept at more nodes than the mesh has vertices comes back as i
   const field = (seed) => Float32Array.from({ length: 4 * count }, (_, i) => Math.sin(seed + 0.001 * i) + 0.1 * Math.cos(0.37 * i));
   const scale = { origin: [-0.76, -0.56, -0.16], nodes, kept: Int32Array.from({ length: count }, (_, i) => i), whole: field(1), ahead: field(2) };
   const result = wavySheet(true);
-  result.lookups = { ...result.lookups, definition: { count: 122, surfaceSteps: [0.02] }, scales: [scale] };
+  result.lookups = { ...result.lookups, definition: { surfaceSteps: [0.02] }, scales: [scale] };
   const { back, match } = await roundTrip(result);
   const stored = back.lookups.scales[0];
   assert(stored.readsAtVertices && !stored.kept, 'the scale came back as its nodes');

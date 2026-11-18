@@ -44,10 +44,10 @@ export function polygonAt({ surface, cells, index }, point, normal) {
   let best = nearestPoint(index.grid, x, y, z, facing);
   if (best < 0) return -1;
   // That polygon's surface is no farther from the point than its centre is.
-  let bestDistance = Math.sqrt(squaredDistanceToPolygon(surface, best, x, y, z));
+  let bestDistance = distanceToPolygon(surface, best, x, y, z);
   pointsWithin(index.grid, x, y, z, centreDistance(best) + index.reach, (c) => {
     if (c === best || centreDistance(c) - index.reach > bestDistance || !facing(c)) return;
-    const distance = Math.sqrt(squaredDistanceToPolygon(surface, c, x, y, z));
+    const distance = distanceToPolygon(surface, c, x, y, z);
     if (distance < bestDistance) {
       bestDistance = distance;
       best = c;

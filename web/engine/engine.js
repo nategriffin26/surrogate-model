@@ -13,21 +13,22 @@ export function createEngine() {
   /**
    * Analyses and quick predictions the page has not let go, by id: those waiting their turn in the
    * worker, the one it runs, and the last analysis, whose car the worker holds (for `explain` and
-   * `polygonAt`, and once `complete`, `exportVtp` and `fileCells`).
+   * `polygonAt`, and once `complete`, `exportVtp`, `fileCells` and `attachReference`).
+   * @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, complete: boolean, release: () => void }>}
    */
-  /** @type {Map<number, { id: number, on: import('./result.js').AnalyzeEvents, resolve: Function, reject: Function, settled: boolean, complete: boolean, release: () => void }>} */
   const analyses = new Map();
-  /** `explain`, `polygonAt`, `fileCells` and reference requests awaiting the worker's answer, by id. */
-  /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
-  const questions = new Map();
-  /** @type {Map<number, { resolve: Function, reject: Function, onProgress: (fraction: number) => void }>} */
-  const exports = new Map();
+  /**
+   * Requests awaiting the worker's answer (`explain`, `polygonAt`, `fileCells`, `exportVtp`,
+   * `attachReference`), by id.
+   * @type {Map<number, { resolve: Function, reject: Function }>}
+   */
+  const requests = new Map();
   /** Set when the worker cannot run at all: every analysis fails with it. */
   let unavailable = null;
   const device = deferred();
   const model = deferred();
   /** Analysis ids of the results this engine made, by their lookups, which survive the page copying a result. */
-  const analysed = new WeakMap();
+  const analysisOfLookups = new WeakMap();
   /** The lookups the worker was last sent for `explain`. */
   let lookupsSent = null;
 
@@ -47,23 +48,9 @@ export function createEngine() {
         return;
       case 'answer':
       case 'answerFailed': {
-        const request = questions.get(data.id);
-        questions.delete(data.id);
+        const request = requests.get(data.id);
+        requests.delete(data.id);
         if (data.type === 'answer') request.resolve(data.answer);
-        else request.reject(new Error(data.message));
-        return;
-      }
-      case 'answerProgress':
-        questions.get(data.id).onProgress(data.fraction);
-        return;
-      case 'exportProgress':
-        exports.get(data.id).onProgress(data.fraction);
-        return;
-      case 'exported':
-      case 'exportFailed': {
-        const request = exports.get(data.id);
-        exports.delete(data.id);
-        if (data.type === 'exported') request.resolve(data.file);
         else request.reject(new Error(data.message));
         return;
       }
@@ -81,12 +68,12 @@ export function createEngine() {
         break;
       case 'fullMesh':
         // The full mesh is also the first drawable mesh: one copy serves both events.
-        if (data.preview) current.on.geometry?.(data.mesh);
+        current.on.geometry?.(data.mesh);
         current.on.fullMesh?.(data.mesh);
         break;
       case 'result':
         current.settled = true;
-        analysed.set(data.result.lookups, current.id);
+        analysisOfLookups.set(data.result.lookups, current.id);
         current.resolve(data.result);
         // A quick prediction ends with its result: the worker keeps nothing of it.
         if (data.result.form === 'quick') finish(current);
@@ -117,9 +104,8 @@ export function createEngine() {
     device.reject(error);
     model.reject(error);
     for (const current of analyses.values()) finish(current, error);
-    for (const request of [...questions.values(), ...exports.values()]) request.reject(error);
-    questions.clear();
-    exports.clear();
+    for (const request of requests.values()) request.reject(error);
+    requests.clear();
   };
 
   /** Let go of an analysis: reject it if still pending, stop its events and detach its abort listener. */
@@ -138,24 +124,20 @@ export function createEngine() {
     return start({ type: 'analyze', file }, on, options);
   }
 
-  function analyzeSurface(surface, on = {}, options = {}) {
-    return start({ type: 'analyze', surface }, on, options);
-  }
-
   function predictQuick(surface, options = {}) {
-    return start({ type: 'predictQuick', surface }, {}, options);
-  }
-
-  /** Queue a request the worker answers with a `Result`; a surface's arrays move to the worker. */
-  function start(request, on, { signal } = {}) {
-    if (unavailable) return Promise.reject(unavailable);
-    if (signal?.aborted) return Promise.reject(abortError());
     let transfer;
     try {
-      transfer = request.surface ? surfaceBuffers(request.surface) : [];
+      transfer = surfaceBuffers(surface);
     } catch (error) {
       return Promise.reject(error);
     }
+    return start({ type: 'predictQuick', surface }, {}, options, transfer);
+  }
+
+  /** Queue a request the worker answers with a `Result`; `transfer` moves to the worker. */
+  function start(request, on, { signal } = {}, transfer = []) {
+    if (unavailable) return Promise.reject(unavailable);
+    if (signal?.aborted) return Promise.reject(abortError());
     const id = nextId++;
     return new Promise((resolve, reject) => {
       const onAbort = () => {
@@ -171,7 +153,7 @@ export function createEngine() {
 
   function explain(result, point, normal) {
     const vertex = nearestVertex(result.mesh, point, normal);
-    const message = { type: 'explain', point, normal, analysis: analysed.get(result.lookups), model: result.model, vertex };
+    const message = { type: 'explain', point, normal, analysisId: analysisOfLookups.get(result.lookups), model: result.model, vertex };
     if (result.lookups !== lookupsSent) {
       message.lookups = result.lookups;
       lookupsSent = result.lookups;
@@ -180,73 +162,56 @@ export function createEngine() {
   }
 
   function polygonAt(result, point, normal) {
-    const analysis = analysed.get(result.lookups);
+    const analysisId = analysisOfLookups.get(result.lookups);
     // The worker holds the polygons of the last analysis from its result until the next one starts.
-    if (!analyses.get(analysis)?.settled) return Promise.resolve(null);
-    return ask({ type: 'polygonAt', analysis, point, normal });
+    if (!analyses.get(analysisId)?.settled) return Promise.resolve(null);
+    return ask({ type: 'polygonAt', analysisId, point, normal });
   }
 
-  function ask(message, onProgress = () => {}) {
+  function ask(message) {
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      questions.set(id, { resolve, reject, onProgress });
+      requests.set(id, { resolve, reject });
       worker.postMessage({ ...message, id });
     });
   }
 
   /** The analysis behind a result, while the worker still holds its car with every polygon predicted. */
   function completeAnalysis(result) {
-    const current = analyses.get(analysed.get(result.lookups));
+    const current = analyses.get(analysisOfLookups.get(result.lookups));
     return current?.complete ? current : null;
   }
 
   function fileCells(result) {
     const current = completeAnalysis(result);
-    return current ? ask({ type: 'fileCells', analysis: current.id }) : Promise.resolve(null);
+    return current ? ask({ type: 'fileCells', analysisId: current.id }) : Promise.resolve(null);
   }
 
   function canExportVtp(result) {
     return completeAnalysis(result) !== null;
   }
 
-  function exportVtp(result, onProgress = () => {}) {
+  function exportVtp(result) {
     const current = completeAnalysis(result);
     if (!current) return Promise.reject(new Error('This result cannot be exported: only the car analysed last can be, once every polygon is predicted.'));
-    const id = nextId++;
-    return new Promise((resolve, reject) => {
-      exports.set(id, { resolve, reject, onProgress });
-      worker.postMessage({ type: 'export', id, analysis: current.id });
-    });
+    return ask({ type: 'export', analysisId: current.id });
   }
 
-  function cellArrayNames(file) {
-    return ask({ type: 'cellArrayNames', file });
-  }
-
-  function attachReference(result, file, { array, onProgress } = {}) {
-    return changeReference(result, { type: 'attachReference', file, array }, onProgress);
-  }
-
-  function detachReference(result) {
-    return changeReference(result, { type: 'detachReference' });
-  }
-
-  /** Ask the worker to change a car's reference, then write what that changes into `result` itself. */
-  async function changeReference(result, message, onProgress) {
+  /** Ask the worker to give the car a reference field, then write what that changes into `result` itself. */
+  async function attachReference(result, file, { array } = {}) {
     const current = completeAnalysis(result);
     if (!current) throw new Error('A reference can be attached to the car analysed last only, once every polygon is predicted. Analyse it again.');
-    const { reference, referenceTotals, accuracy, cfd, fullCfd } = await ask({ ...message, analysis: current.id }, onProgress);
+    const { reference, referenceTotals, accuracy, cfd, fullCfd } = await ask({ type: 'attachReference', analysisId: current.id, file, array });
     result.reference = reference;
     result.referenceTotals = referenceTotals;
     result.accuracy = accuracy;
-    if (cfd) result.mesh.cfd = cfd;
-    else delete result.mesh.cfd;
-    return { reference, referenceTotals, accuracy, cfd, fullCfd };
+    result.mesh.cfd = cfd;
+    return { cfd, fullCfd };
   }
 
   return {
-    analyze, analyzeSurface, predictQuick, workingCells, fileCells, explain, polygonAt, canExportVtp, exportVtp,
-    cellArrayNames, attachReference, detachReference, device: device.promise, model: model.promise,
+    analyze, predictQuick, workingCells, fileCells, explain, polygonAt, canExportVtp, exportVtp, attachReference,
+    device: device.promise, model: model.promise,
   };
 }
 
