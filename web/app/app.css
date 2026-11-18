@@ -40,30 +40,25 @@ body.resizing * { cursor: inherit !important; }
 .model-toggle[aria-pressed="true"] { background: var(--tint); color: var(--link); }
 
 /* ---- work area ---- */
-/* The file panel, the stage (toolbar, view and dock) and the assistant are columns of one grid, so a panel that
-   opens narrows the stage rather than covering it, and every part of the stage keeps one content box. Each side
-   panel keeps its own width and slides in as its column opens, from its own edge. */
-.work {
-	display: grid; grid-template-columns: var(--files-column, 0px) minmax(0, 1fr) var(--side-column, 0px) var(--assist-column, 0px);
-	grid-template-areas: "files stage side assist"; min-height: 0; transition: grid-template-columns 0.24s var(--ease);
-}
+/* The stage (toolbar, view and dock) keeps the whole width. The file panel and the assistant open over its edges at
+   once and close the same way, so opening one never resizes, reflows or redraws what is under it. */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-column, 0px); grid-template-areas: "stage side"; position: relative; min-height: 0; }
 .stage { grid-area: stage; display: grid; grid-template-rows: 44px minmax(0, 1fr) 0 var(--dock); grid-template-areas: "toolbar" "view" "resizer" "dock"; min-width: 0; min-height: 0; }
 .toolbar-host { grid-area: toolbar; }
 .viewport { grid-area: view; }
 .dock-resizer { grid-area: resizer; }
 .dock-host { grid-area: dock; }
 .model-host { grid-area: side; min-width: 0; min-height: 0; overflow: auto; }
-.files, .assistant-host { min-height: 0; background: #fff; visibility: hidden; transition: visibility 0s 0.24s; }
-.files { grid-area: files; justify-self: end; border-right: 1px solid var(--hair); }
-.assistant-host { grid-area: assist; justify-self: start; width: var(--assistant); border-left: 1px solid var(--hair); }
-body.files-open { --files-column: var(--files); }
-body.assistant-open { --assist-column: var(--assistant); }
-body.files-open .files, body.assistant-open .assistant-host { visibility: visible; transition: none; }
+.files, .assistant-host { position: absolute; top: 0; bottom: 0; z-index: 15; display: none; background: #fff; }
+.files { left: 0; width: var(--files); border-right: 1px solid var(--rule); box-shadow: 12px 0 28px -8px rgba(13, 34, 51, 0.14); }
+.assistant-host { right: 0; width: var(--assistant); border-left: 1px solid var(--rule); box-shadow: -12px 0 28px -8px rgba(13, 34, 51, 0.14); }
+body.files-open .files { display: flex; }
+body.assistant-open .assistant-host { display: block; }
 body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 37px; }
 body:is([data-screen="start"], [data-screen="notice"]) .stage { grid-template-rows: 0 minmax(0, 1fr) 0 0; }
 body:is([data-screen="start"], [data-screen="notice"]) :is(.toolbar-host, .dock-host, .dock-resizer, .legend-host, .card-host, .triad) { display: none; }
 /* The model's page takes the whole area under the top bar; the tool waits, as it was, until it comes back. */
-body[data-mode="model"] .work { grid-template-columns: 0px 0px minmax(0, 1fr) 0px; transition: none; }
+body[data-mode="model"] .work { grid-template-columns: 0px minmax(0, 1fr); }
 body[data-mode="model"] :is(.stage, .files, .assistant-host, .files-button, .cases, [data-export], .assistant-button) { display: none !important; }
 :is(.assistant-button, .files-button)[aria-pressed="true"] { border-color: var(--link); color: var(--link); background: var(--tint); }
 .files-button { align-self: center; margin-left: -4px; }
@@ -244,8 +239,10 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 .notice-actions { display: flex; gap: 8px; }
 
 /* ---- analysing ---- */
-.progress { display: flex; flex-direction: column; gap: 12px; }
-.center > .progress { position: relative; width: min(420px, calc(100vw - 32px)); padding: 18px 20px; background: rgba(255, 255, 255, 0.86); border: 1px solid var(--hair); border-radius: 10px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.progress { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; }
+.progress-panel { position: absolute; inset: 0; z-index: -1; border-radius: 10px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.center > .progress { width: min(420px, calc(100vw - 32px)); padding: 18px 20px; }
+.center .progress-panel { background: rgba(255, 255, 255, 0.86); border: 1px solid var(--hair); }
 .progress-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .progress-file { font-family: var(--head); font-size: 17px; font-weight: 600; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .progress-size { color: var(--muted); font-size: 13px; }
@@ -264,15 +261,29 @@ body.dragging:not([data-screen="start"]) .drop-veil { display: grid; }
 
 .strip { position: absolute; left: 50%; bottom: 14px; z-index: 6; transform: translateX(-50%); width: min(760px, calc(100% - 200px)); }
 .strip:empty { display: none; }
-.strip .progress {
-	flex-direction: row; align-items: center; gap: 18px; padding: 10px 12px 10px 16px;
-	background: rgba(255, 255, 255, 0.92); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 8px 26px rgba(13, 34, 51, 0.08);
-	backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); animation: rise 0.35s var(--ease) both;
-}
+.strip .progress { flex-direction: row; align-items: center; gap: 18px; padding: 10px 12px 10px 16px; }
+.strip .progress-panel { background: rgba(255, 255, 255, 0.92); border: 1px solid var(--rule); box-shadow: 0 8px 26px rgba(13, 34, 51, 0.08); }
 .strip .progress-head { display: none; }
 .strip .progress-stages { flex-direction: row; flex: 1; gap: 12px; }
 .strip .progress-row { flex: 1; min-width: 0; }
 .strip .progress-foot { gap: 12px; }
+
+/* When the car appears, the steps travel from the card to the strip (main.js starts a view transition). Only the
+   progress takes part: the card's box stretches into the strip's, and each step, the file name and the footer move
+   on their own at their own size, so no text is stretched. */
+:root { view-transition-name: none; }
+.progress-panel { view-transition-name: progress-panel; }
+.progress-head { view-transition-name: progress-head; view-transition-class: progress-part; }
+.progress-row[data-stage="reading"] { view-transition-name: progress-reading; }
+.progress-row[data-stage="measuring"] { view-transition-name: progress-measuring; }
+.progress-row[data-stage="meshing"] { view-transition-name: progress-meshing; }
+.progress-row[data-stage="predicting"] { view-transition-name: progress-predicting; }
+.progress-row, .progress-foot { view-transition-class: progress-part; }
+.progress-foot { view-transition-name: progress-foot; }
+::view-transition-group(*) { animation-duration: 0.55s; animation-timing-function: var(--ease); }
+::view-transition-old(progress-panel), ::view-transition-new(progress-panel) { height: 100%; }
+::view-transition-old(*.progress-part), ::view-transition-new(*.progress-part) { width: auto; height: auto; }
+::view-transition-old(*.progress-part) { animation-duration: 0.3s; }
 
 /* ---- plot dock ---- */
 .dock-host { min-width: 0; min-height: 0; border-top: 1px solid var(--hair); background: #fff; }
@@ -393,8 +404,8 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 
-/* ---- files: the workspace, in the column at the left ---- */
-.files { width: var(--files); display: flex; flex-direction: column; }
+/* ---- files: the workspace, over the left edge of the stage ---- */
+.files { flex-direction: column; }
 .files-head { display: flex; align-items: center; gap: 6px; flex: none; height: 52px; padding: 0 8px 0 18px; border-bottom: 1px solid var(--hair); }
 .files-title { margin-right: auto; font-family: var(--head); font-weight: 600; font-size: 15px; color: var(--heading); }
 .files-upload { height: 28px; padding: 0 11px; }
@@ -464,7 +475,7 @@ svg .cursor circle.b1 { stroke: var(--teal); }
 	.app-name { display: none; }
 	.stage, body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
 	:is(.dock-host, .dock-resizer, .topbar-end, .tool-group, .legend-tools) { display: none !important; }
-	.work { grid-template-columns: 0px minmax(0, 1fr) 0px 0px !important; }
+	.work { grid-template-columns: minmax(0, 1fr) 0px !important; }
 	.card-host { top: auto; }
 	.toolbar { gap: 8px; padding: 0 8px; overflow-x: auto; }
 	.legend { width: 220px; }

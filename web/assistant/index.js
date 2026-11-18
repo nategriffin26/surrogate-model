@@ -98,7 +98,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		if (next === 'unavailable') {
 			put(log, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant is not available in this copy.'),
-				h('p', {}, 'To use it here, put OPENROUTER_API_KEY in local/secrets/assistant.env and restart ', h('code', {}, 'uv run surrogate-app'), '.')));
+				h('p', {}, 'To use it here, set ', h('code', {}, 'OPENROUTER_API_KEY'), ' in ', h('code', {}, 'local/secrets/assistant.env'), ' and restart ', h('code', {}, 'uv run surrogate-app'), '.')));
 		} else if (next === 'unreachable') {
 			put(log, h('div', { class: 'assistant-note' },
 				h('p', { class: 'assistant-note-title' }, 'The assistant could not be reached.'),
@@ -124,7 +124,9 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		}
 		input.value = '';
 		fitInput();
-		messages.push({ role: 'user', content: `${describeState({ session, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
+		// The cases as list_cases reports them, so the model starts from the numbers the engineer sees.
+		const { cases } = await runOperation('list_cases', {});
+		messages.push({ role: 'user', content: `${describeState({ cases, workspace, actions: [...actions].map(([name, args]) => ({ name, args })) })}\n\n${text}` });
 		actions.clear();
 		turn = createTurn(text);
 		setStatus('running');
@@ -151,7 +153,6 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 	/** End the run now: the request, the code computing and any question waiting on the engineer. */
 	function stop() {
 		controller?.abort();
-		kernel.stop();
 		for (const settle of waiting) settle(false);
 	}
 
@@ -186,7 +187,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 				const outcome = await kernel.run(String(args.code ?? ''), (item) => {
 					items.push(item);
 					step.output(item);
-				});
+				}, controller.signal);
 				step.finish(outcome.status === 'finished' ? null : outcome.error);
 				return JSON.stringify(report(outcome, items));
 			} catch (error) {
@@ -196,7 +197,8 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 				current.python = null;
 			}
 		}
-		const { result, error } = await operate(name, args);
+		// An operation cannot be called back once started; a stop ends the run without waiting for it.
+		const { result, error } = await Promise.race([operate(name, args), whenStopped(controller.signal)]);
 		step.finish(error ?? null, result);
 		return clip(JSON.stringify(error ? { error } : result));
 	}
@@ -235,6 +237,8 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 			no.addEventListener('click', () => settle(false));
 			waiting.add(settle);
 			(turn ?? createTurn(null)).append(row);
+			// The run waits on this answer, so it is brought into view wherever the engineer has scrolled.
+			row.scrollIntoView({ block: 'nearest' });
 			yes.focus({ preventScroll: true });
 		});
 	}
@@ -244,6 +248,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		const reply = h('div', { class: 'reply' });
 		const pending = h('div', { class: 'pending', hidden: true }, h('span', { class: 'spinner' }), 'Thinking');
 		log.append(h('section', { class: 'exchange' }, text ? h('p', { class: 'question' }, text) : null, reply, pending));
+		log.scrollTop = log.scrollHeight;
 		let answer = null;
 		let answerText = '';
 		let frame = 0;
@@ -301,7 +306,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 		const toggle = h('button', { type: 'button', class: 'step-row', 'aria-expanded': 'false' },
 			h('span', { class: 'step-state' }),
 			h('span', { class: 'step-name' }, python ? 'Python' : sentence(name)),
-			h('span', { class: 'step-detail' }, python ? firstLine(args.code) : summary(args)),
+			h('span', { class: 'step-detail' }, python ? firstLine(args.code) : summary(args, operations.get(name)?.parameters.properties)),
 			h('span', { class: 'step-chevron' }, icon('chevron')));
 		const subs = h('div', { class: 'step-subs' });
 		const outputs = h('div', { class: 'step-outputs' });
@@ -325,7 +330,7 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 				}
 			},
 			sub(subName, subArgs) {
-				const row = h('div', { class: 'step-sub running' }, h('span', { class: 'step-state' }), h('span', { class: 'step-name' }, sentence(subName)), h('span', { class: 'step-detail' }, summary(subArgs)));
+				const row = h('div', { class: 'step-sub running' }, h('span', { class: 'step-state' }), h('span', { class: 'step-name' }, sentence(subName)), h('span', { class: 'step-detail' }, summary(subArgs, operations.get(subName)?.parameters.properties)));
 				subs.append(row);
 				return { finish: (error) => row.classList.replace('running', error ? 'failed' : 'done') };
 			},
@@ -338,6 +343,15 @@ export async function mountAssistant(host, { session, engine, operations, runOpe
 	}
 
 	await check();
+}
+
+/** Settles with an error when `signal` aborts: what an operation still running is reported as after a stop. */
+function whenStopped(signal) {
+	return new Promise((resolve) => {
+		const stopped = () => resolve({ error: 'The engineer stopped the run while this operation ran; it may still finish on screen.' });
+		if (signal.aborted) stopped();
+		else signal.addEventListener('abort', stopped, { once: true });
+	});
 }
 
 /** What the model is told of a Python run: its printed output and tables, the figures shown, the files and decisions. */
@@ -382,17 +396,30 @@ function subject(args) {
 	return value != null ? ` ${value}` : '';
 }
 
+/** Units by the suffix of an argument's name, as the operations name them, or by its schema's "in metres". */
 const UNITS = { m: 'm', m2: 'm²', mm: 'mm', deg: '°', s: 's', pct: '%' };
+const UNIT_WORDS = { metres: 'm', millimetres: 'mm', degrees: '°', seconds: 's' };
 
-/** Arguments in a line: `case 1 · axis y · position 0 m`. */
-function summary(args) {
+/**
+ * Arguments in a line, numbers to three decimals: `case 1 · point [-0.031, 0.679, -0.313] m`. The opened step shows
+ * them exactly.
+ */
+function summary(args, schema = {}) {
 	return Object.entries(args ?? {}).map(([key, value]) => {
 		if (key === 'case_id') return `case ${value}`;
-		const unit = key.match(/_(m|m2|mm|deg|s|pct)$/);
-		const label = (unit ? key.slice(0, -unit[0].length) : key).replaceAll('_', ' ');
-		const shown = typeof value === 'object' ? JSON.stringify(value) : String(value);
-		return `${label} ${shown}${unit ? ` ${UNITS[unit[1]]}` : ''}`;
+		const suffix = key.match(/_(m|m2|mm|deg|s|pct)$/);
+		const word = schema[key]?.description?.match(/\bin (metres|millimetres|degrees|seconds)\b/);
+		const unit = suffix ? UNITS[suffix[1]] : word ? UNIT_WORDS[word[1]] : null;
+		const label = (suffix ? key.slice(0, -suffix[0].length) : key).replaceAll('_', ' ');
+		return `${label} ${rounded(value)}${unit ? ` ${unit}` : ''}`;
 	}).join(' · ');
+}
+
+function rounded(value) {
+	if (typeof value === 'number') return String(Math.round(value * 1000) / 1000);
+	if (Array.isArray(value)) return `[${value.map(rounded).join(', ')}]`;
+	if (value !== null && typeof value === 'object') return `{${Object.entries(value).map(([key, part]) => `${key} ${rounded(part)}`).join(', ')}}`;
+	return String(value);
 }
 
 function firstLine(code = '') {

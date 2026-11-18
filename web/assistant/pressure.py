@@ -15,7 +15,7 @@ coroutines; await them.
     points = w.points.copy()
     points[:, 0] = points[:, 0].min() + 1.05 * (points[:, 0] - points[:, 0].min())
     longer = await pressure.predict(w.with_points(points), name="5 % longer")
-    print(longer.cd_p, longer.length_m)
+    print(longer.cx, longer.length_m)
 
     await pressure.run("list_cases")         # any operation of the tool, with the arguments the assistant gives it
     await pressure.write_vtp("longer.vtp", longer.cells)
@@ -175,27 +175,28 @@ class Case:
 
 
 class Prediction:
-    """The model's prediction on a surface: `cells` (the surface with `cp` and `spread` per cell), the pressure drag
-    coefficient `cd_p` with the networks' spread `cd_p_spread`, its split between cells facing forward and the rest
-    (`cd_p_forward`, `cd_p_rearward`), the reference `frontal_area_m2`, the dimensions, which of them lie outside the
-    training cars' range (`outside_training`), and `seconds` taken."""
+    """The model's prediction on a surface: `cells`, the surface with `cp` and `spread` per cell, and the numbers the
+    tool reports for an open case (`list_cases`), under the same names: `cx`, `cy` and `cz`, the pressure force
+    coefficients on `reference_area_m2` (`cx` is pressure drag); `cx_by_network`; `area_m2` and `mean_cp`; `cp_min` and
+    `cp_max`, each `{"value", "center_m", "normal"}`; `length_m`, `width_m`, `height_m` and `outside_training`. `summary`
+    holds them all as a dict, for a table row. `seconds` is the time the prediction took."""
 
-    def __init__(self, name: str, result: JsProxy) -> None:
-        forces, geometry = result.forces, result.geometry
+    def __init__(self, name: str, summary: dict, cells: JsProxy, seconds: float) -> None:
         self.name = name
-        self.cells = _surface(result.cells)
-        self.cd_p = float(forces.cdP)
-        self.cd_p_spread = float(forces.cdPStd)
-        self.cd_p_forward = float(forces.byFacing.forward)
-        self.cd_p_rearward = float(forces.byFacing.rearward)
-        self.frontal_area_m2 = float(geometry.frontalArea)
-        self.length_m, self.width_m, self.height_m = float(geometry.length), float(geometry.width), float(geometry.height)
-        dimensions = _json(result.coverage.dimensions)
-        self.outside_training = [d["name"] for d in dimensions if not d["trainMin"] <= d["value"] <= d["trainMax"]]
-        self.seconds = float(sum(t.seconds for t in result.timings))
+        self.summary = summary
+        self.cells = _surface(cells)
+        self.seconds = seconds
+
+    def __getattr__(self, key: str):
+        if key in self.__dict__.get("summary", {}):
+            return self.summary[key]
+        raise AttributeError(f"A prediction has no {key!r}; it has cells, seconds and {', '.join(self.summary)}.")
+
+    def __dir__(self) -> list[str]:
+        return [*super().__dir__(), *self.summary]
 
     def __repr__(self) -> str:
-        return f"Prediction({self.name!r}: cd_p {self.cd_p:.4f} ± {self.cd_p_spread:.4f}, {len(self.cells):,} cells, {self.seconds:.1f} s)"
+        return f"Prediction({self.name!r}: cx {self.cx:.4f}, {len(self.cells):,} cells, {self.seconds:.1f} s)"
 
 
 cases: dict[int, Case] = {}
@@ -213,9 +214,9 @@ async def run(name: str, **arguments) -> dict:
 
 async def predict(surface: Surface, name: str = "prediction") -> Prediction:
     """Predict Cp on every cell of `surface` with the model, as the tool does for a file, on the cells as given (the
-    working mesh's resolution is what a study needs; about a second for a car). Nothing opens in the tool."""
+    working mesh's resolution is what a study needs, and coarser starves the model's inputs). Nothing opens in the tool."""
     result = await _ask("predict", {"name": name, **_geometry(surface)})
-    return Prediction(name, result)
+    return Prediction(name, _json(result.summary), result.cells, float(result.seconds))
 
 
 async def write_vtp(path: str, surface: Surface, cell_data: dict | None = None, point_data: dict | None = None) -> str:

@@ -39,6 +39,7 @@ const card = $('[data-card]');
 const paneLabels = $('[data-pane-labels]');
 const modelHost = $('[data-model]');
 const assistantHost = $('[data-assistant]');
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 
 const engine = createEngine();
 const session = new Session(engine);
@@ -49,7 +50,10 @@ const view = session.view;
 let mode = 'result';
 
 const active = () => session.active;
-const ready = () => session.active?.status === 'ready';
+/** The active case's result is on screen: ready, and its car drawn. Until then the tools wait with it. */
+const ready = () => session.active?.status === 'ready' && session.active.drawn;
+/** The case the card and the plots describe: the active one once its result is on screen, so they arrive with its car. */
+const described = () => (ready() ? active() : null);
 /** Run an operation as the engineer: what every control here does. */
 const run = (name, args) => runOperation(name, args, { session, viewer, engine, by: 'engineer' });
 
@@ -147,7 +151,7 @@ const section = createSectionTool({ host: overlay, viewport, viewer, active, vie
 const dock = createDock({
 	section,
 	probes,
-	active,
+	active: described,
 	view,
 	actions: {
 		tab: (name) => {
@@ -252,7 +256,7 @@ function setAssistant(open) {
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
-const resultCard = createResultCard({ host: card, overlay, viewer, active, run });
+const resultCard = createResultCard({ host: card, overlay, viewer, active: described, run });
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
@@ -268,8 +272,11 @@ function errorCard(c) {
 			h('button', { type: 'button', class: 'button', onclick: () => run('close_case', { case_id: c.id }) }, 'Close')));
 }
 
+/** The notice an example shows while it loads and until its car is drawn: one per case, so it stays put meanwhile. */
+const loadingCards = new WeakMap();
 function loadingCard(c) {
-	return h('div', { class: 'notice', role: 'status' }, h('div', { class: 'notice-title' }, c.name), h('div', { class: 'progress-bar indeterminate' }, h('span', { class: 'progress-fill' })));
+	if (!loadingCards.has(c)) loadingCards.set(c, h('div', { class: 'notice', role: 'status' }, h('div', { class: 'notice-title' }, c.name), h('div', { class: 'progress-bar indeterminate' }, h('span', { class: 'progress-fill' }))));
+	return loadingCards.get(c);
 }
 
 function renderCenter() {
@@ -281,26 +288,23 @@ function renderCenter() {
 	}
 	switch (c.status) {
 		case 'loading':
-			center.replaceChildren(loadingCard(c));
+			if (center.firstChild !== loadingCard(c)) center.replaceChildren(loadingCard(c));
 			strip.replaceChildren();
 			return;
 		case 'queued':
 		case 'analysing':
 			progress.render(c, session.device);
-			if (carShown(c)) {
-				center.replaceChildren();
-				if (strip.firstChild !== progress.el) strip.replaceChildren(progress.el);
-			} else {
-				strip.replaceChildren();
-				if (center.firstChild !== progress.el) center.replaceChildren(progress.el);
-			}
+			placeProgress(carShown(c) ? strip : center);
 			return;
 		case 'failed':
 			center.replaceChildren(errorCard(c));
 			strip.replaceChildren();
 			return;
 		case 'ready':
-			center.replaceChildren();
+			// A result whose car has not been drawn yet (an example still on its way to the GPU) keeps the loading
+			// notice, so the car, its card and its plots arrive together.
+			if (c.drawn) center.replaceChildren();
+			else if (center.firstChild !== loadingCard(c)) center.replaceChildren(loadingCard(c));
 			strip.replaceChildren();
 			return;
 		default:
@@ -308,11 +312,29 @@ function renderCenter() {
 	}
 }
 
+/** Whether the progress is travelling to the strip; it is moved once, when the transition takes its first picture. */
+let travelling = false;
+
+/**
+ * Put the progress in the middle of the view or in the strip. When the car appears, the same steps travel down to the
+ * strip, so the eye follows them there; under reduced motion, or without view transitions, they move at once.
+ */
+function placeProgress(place) {
+	if (progress.el.parentElement === place || travelling) return;
+	const move = () => {
+		center.replaceChildren(...(place === center ? [progress.el] : []));
+		strip.replaceChildren(...(place === strip ? [progress.el] : []));
+	};
+	if (place !== strip || progress.el.parentElement !== center || !document.startViewTransition || REDUCED_MOTION.matches) return move();
+	travelling = true;
+	document.startViewTransition(move).updateCallbackDone.finally(() => (travelling = false));
+}
+
 // ---- keeping everything in step ------------------------------------------------------------------------------------------
 
 function renderLayout() {
 	const c = active();
-	body.dataset.screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' ? 'notice' : 'case';
+	body.dataset.screen = !c ? 'start' : c.status === 'failed' || c.status === 'loading' || (c.status === 'ready' && !c.drawn) ? 'notice' : 'case';
 	body.dataset.mode = mode;
 	modelToggle.setAttribute('aria-pressed', String(mode === 'model'));
 	modelToggle.title = mode === 'model' ? 'Back to the tool' : 'How the model is built';
@@ -378,7 +400,17 @@ function carShown(c) {
 /** The analysing backdrop moves until the car is on screen, which takes it over. */
 function placeBackdrop(c) {
 	viewer.setBackdrop(!c ? 'still' : carShown(c) ? 'none' : c.status === 'failed' ? 'still' : 'moving');
-	if (carShown(c) || !c) viewer.setSweep(null);
+}
+
+/**
+ * While a case is analysed the view shows the work: until its car is on screen, a band crossing the lattice at the
+ * share done; then the car itself, at the share predicted, until the field arrives on it.
+ */
+function showWork(c) {
+	const analysing = c?.status === 'analysing' || c?.status === 'queued';
+	const shown = carShown(c);
+	viewer.setSweep(analysing && !shown ? progress.fraction(c) : null);
+	viewer.predicting(analysing && shown ? progress.predicted(c) : null);
 }
 
 /** Put a case on screen, or bring the screen up to date with it: its surface, its result and everything drawn from it. */
@@ -405,6 +437,7 @@ function present(c) {
 	placeBackdrop(c);
 	update('layout', 'tabs', 'toolbar', 'legend', 'viewer', 'center', 'card', 'dock', 'markers');
 	if (arriving) viewer.arrive();
+	showWork(c);
 }
 
 session.addEventListener('change', ({ detail: { case: c, what } }) => {
@@ -421,7 +454,7 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 			return;
 		case 'stage':
 			if (c !== active()) return;
-			if (!carShown(c)) viewer.setSweep(progress.fraction(c));
+			showWork(c);
 			update('center');
 			return;
 		case 'geometry':
@@ -446,7 +479,15 @@ session.addEventListener('change', ({ detail: { case: c, what } }) => {
 
 // A car's mesh reaches the GPU some frames after it arrives; the analysing screen hands over to it then.
 viewer.addEventListener('placed', () => {
-	placeBackdrop(active());
+	const c = active();
+	// The first time a case's car is drawn, everything about it comes on screen with it.
+	if (c && carShown(c) && !c.drawn) {
+		c.drawn = true;
+		present(c);
+		return;
+	}
+	placeBackdrop(c);
+	showWork(c);
 	update('center');
 });
 

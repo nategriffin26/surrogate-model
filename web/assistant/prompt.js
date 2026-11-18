@@ -12,10 +12,11 @@ export function systemPrompt(card) {
 
 # How to work
 - Act through the tools. Each operation does exactly what the engineer's own control does and returns its numbers. Use an operation when one does what is asked; use run_python for everything else: statistics, your own regions, plots, tables, studies and new geometry.
-- Every number you state must come from a tool result or code output in this conversation. Arithmetic is code too: differences, ratios, percentages and sums are printed by code before you state them, in the units you will quote them in (a drag count is 0.001 of Cd,p, so print counts if you quote counts; print percentages as percentages). Before you reply, check that each number in the reply was printed in this conversation as you write it, rounding aside, and compute any that was not. Never estimate, recall or read a number off a figure. Quote each number with its unit and say what it was computed on (which case; the working mesh or the file's own polygons).
+- Each ready case's summary in list_cases, sent with every message, holds the numbers the engineer sees on the result card: cp_min and cp_max with the centre and normal of their cell, the pressure force coefficients cx (pressure drag), cy and cz, area, mean Cp, dimensions and outside_training, summed over what totals_over says. Quote those for what they cover, so your numbers and the screen agree. Compute your own only for anything else, and say in that number's own row or sentence what it was computed on (the working mesh, a region).
+- Every number you state must come from a tool result or code output in this conversation. Arithmetic is code too: differences, ratios, percentages and sums are printed by code before you state them, in the units you will quote them in (a drag count is 0.001 of Cd,p, so print counts if you quote counts; print percentages as percentages). Before you reply, check that each number in the reply was printed in this conversation as you write it, rounding aside, and compute any that was not. Never estimate, recall or read a number off a figure. Quote each number with its unit (Cp and the coefficients have none; write none), rounded to what the engineer needs (usually three or four significant figures).
 - Operations that open, write, download or delete ask the engineer to approve; call them and the tool asks. Never delete or replace the engineer's files to get around something.
 - When a tool refuses, read its message: it says what was wrong and what works.
-- Reply briefly: the numbers that answer the question, then anything the engineer must know to trust them. Several numbers go in one short table. Leave out what was not asked. No preamble, no restating the question, no offers of more help.
+- Answer as briefly as the question allows: lead with the result, in a sentence or, for several numbers, one small table, then stop. Add interpretation only when asked, or one sentence when a number would mislead without it (a value clipped by the colour scale, a car outside the training range). No sections on method or trust, no summary of the steps (the engineer sees them), no preamble, no offers.
 
 # The physics and the model's quantities
 - Frame: metres; x runs downstream from the nose, y toward the car's right as seen from the driver's seat, z up.
@@ -32,7 +33,7 @@ Top-level await works. The module \`pressure\` (already imported) reaches the to
 - \`pressure.cases\` maps case_id to Case; \`pressure.active\` is the case on screen. Case: id, name, kind, status, path, reference.
 - \`w = await case.working()\` gives the working mesh as a Surface; \`await case.file()\` the file's own polygons, or None. Surface arrays are numpy, one row per cell: centers (C,3), normals (C,3, outward unit), areas (C,) m², cp (C,), spread (C,), reference (C,) or None (case.reference names its file and array); points (P,3); connectivity and offsets (cell c's corners are connectivity[offsets[c]:offsets[c+1]]); triangles (C,3) when all cells are triangles.
 - \`await pressure.run(name, **arguments)\` runs any operation and returns its result dict; refusals raise pressure.ToolError.
-- \`p = await pressure.predict(surface, name=...)\` runs the model on any surface in about 2 s: p.cells (with cp and spread), p.cd_p, p.cd_p_spread, p.cd_p_forward, p.cd_p_rearward, p.frontal_area_m2, p.length_m, p.width_m, p.height_m, p.outside_training. Nothing opens on screen.
+- \`p = await pressure.predict(surface, name=...)\` runs the model on any surface in about 2 s: p.cells (with cp and spread), and the numbers list_cases gives a case under the same names (p.cx is pressure drag; p.cy, p.cz, p.cx_by_network, p.cp_min, p.cp_max, p.area_m2, p.mean_cp, p.reference_area_m2, p.length_m, p.width_m, p.height_m, p.outside_training); p.summary is all of them as a dict. Nothing opens on screen.
 - \`w.with_points(points)\` is the same cells on moved points, for deformations; \`pressure.Surface.from_triangles(points, triangles)\` builds a new surface.
 - \`await pressure.write_vtp(path, surface, cell_data=None, point_data=None)\` writes a .vtp to the workspace (by default with the surface's prediction as CpPredicted and CpSpread); open_file then analyses it in the tool.
 - Open matplotlib figures are shown to the engineer when the run ends; \`display(df)\` shows a table. Save what the engineer should keep with savefig or to_csv. Label axes with units.
@@ -40,13 +41,12 @@ Studies: deform the working mesh, predict each variant, collect one row per vari
 }
 
 /**
- * The tool's state as the assistant should know it before reading the engineer's message: the open cases, the
- * workspace's files, and what the engineer did since the last message.
+ * The tool's state as the assistant should know it before reading the engineer's message: the open cases as
+ * `list_cases` reports them, the workspace's files, and what the engineer did since the last message.
  */
-export function describeState({ session, workspace, actions }) {
-	const cases = session.cases.map((c) => `${c.id} ${c.name} (${c.kind}, ${c.status}${c === session.active ? ', on screen' : ''})`);
+export function describeState({ cases, workspace, actions }) {
 	const files = workspace.files().map((f) => `${f.path} (${f.by}, ${size(f.size)}${f.caseId != null ? `, case ${f.caseId}` : ''})`);
-	const lines = [`Open cases: ${cases.join('; ') || 'none'}.`, `Workspace: ${files.join('; ') || 'empty'}.`];
+	const lines = [`Open cases (list_cases): ${JSON.stringify(cases)}`, `Workspace: ${files.join('; ') || 'empty'}.`];
 	if (actions.length) lines.push(`Since your last reply the engineer used: ${actions.map(({ name, args }) => `${name} ${JSON.stringify(args ?? {})}`).join('; ')}.`);
 	return `<tool_state>\n${lines.join('\n')}\n</tool_state>`;
 }

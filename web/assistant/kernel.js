@@ -3,6 +3,7 @@
 // files. A run that computes for longer than RUN_LIMIT seconds, or that the engineer stops, ends by restarting the
 // kernel; the next run starts a fresh one with the workspace's files.
 
+import { resultSummary } from '../app/cases.js';
 import { writeVtp } from '../engine/vtp.js';
 
 const RUN_LIMIT = 60;
@@ -99,26 +100,32 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 
 	/**
 	 * Run code in the kernel, starting it if needed. `onOutput` hears each item as it appears: { kind: 'text', text,
-	 * stream? }, { kind: 'table', columns, rows, total, text } or { kind: 'figure', png, title }.
+	 * stream? }, { kind: 'table', columns, rows, total, text } or { kind: 'figure', png, title }. Aborting `signal`
+	 * ends the run at once: before the code starts, the kernel goes on loading and the code never runs; while it
+	 * computes, the kernel is restarted, since Python cannot be interrupted without shared memory.
 	 * @returns {Promise<RunOutcome>}
 	 */
-	async function run(code, onOutput) {
-		await start();
-		const id = nextRun++;
+	async function run(code, onOutput, signal) {
 		const begun = performance.now();
+		const outcome = (fields) => ({ written: [], removed: [], requests: [], ...fields, seconds: (performance.now() - begun) / 1000 });
+		const stopped = new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+		if (!signal.aborted) await Promise.race([start(), stopped]);
+		if (signal.aborted) return outcome({ status: 'stopped', error: 'The engineer stopped the run before the code started.' });
+		const id = nextRun++;
 		return new Promise((resolve) => {
 			const clock = pausableClock(RUN_LIMIT * 1000, () => end('timed out'));
 			current = { id, onOutput, clock, phase: 'computing' };
-			current.finish = (outcome) => {
+			current.finish = (fields) => {
 				clock.stop();
 				current = null;
-				resolve({ written: [], removed: [], requests: [], ...outcome, seconds: (performance.now() - begun) / 1000 });
+				resolve(outcome(fields));
 			};
+			stopped.then(() => current?.id === id && end('stopped'));
 			worker.postMessage({ type: 'run', id, code, cases: cases() });
 		});
 	}
 
-	/** End the run in progress by restarting the kernel, if it is computing. */
+	/** End the run in progress by restarting the kernel, if it is computing (not once it has ended or is asking). */
 	function end(status) {
 		if (current?.phase !== 'computing') return;
 		restart();
@@ -206,8 +213,9 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 				}
 				case 'predict': {
 					const { name, points, connectivity, offsets } = payload;
-					const { forces, geometry, coverage, timings, cells } = await engine.predictQuick({ name, points, connectivity, offsets });
-					return { value: { forces, geometry, coverage, timings, cells }, transfer: buffersOf(cells) };
+					const result = await engine.predictQuick({ name, points, connectivity, offsets });
+					const seconds = result.timings.reduce((sum, stage) => sum + stage.seconds, 0);
+					return { value: { summary: resultSummary(result, false), cells: result.cells, seconds }, transfer: buffersOf(result.cells) };
 				}
 				case 'write_vtp': {
 					const { path, points, connectivity, offsets, cellData, pointData } = payload;
@@ -234,8 +242,6 @@ export function createKernel({ workspace, engine, session, operate, approve }) {
 
 	return {
 		run,
-		/** Stop the code computing now, if any, by restarting the kernel. */
-		stop: () => end('stopped'),
 		/** Shut the kernel down; the next run starts a fresh one. */
 		close: restart,
 	};

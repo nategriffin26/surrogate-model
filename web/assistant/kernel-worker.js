@@ -64,7 +64,7 @@ onmessage = async ({ data }) => {
 };
 
 async function start({ modules, files }) {
-	pyodide = await loadPyodide({ packages: PACKAGES, env: { MPLBACKEND: 'Agg', HOME: WORK } });
+	pyodide = await loadPyodide({ packages: PACKAGES, env: { MPLBACKEND: 'Agg', MPLCONFIGDIR: '/tmp/matplotlib' } });
 	removeNetwork();
 	FS = pyodide.FS;
 	FS.mkdirTree('/lib');
@@ -73,8 +73,8 @@ async function start({ modules, files }) {
 	FS.mkdirTree(BLOBS);
 	for (const file of files) await place(file);
 	held = scan();
-	pyodide.setStdout({ batched: (text) => emit({ kind: 'text', text: `${text}\n` }) });
-	pyodide.setStderr({ batched: (text) => emit({ kind: 'text', text: `${text}\n`, stream: 'stderr' }) });
+	pyodide.setStdout({ write: printed.writer('stdout') });
+	pyodide.setStderr({ write: printed.writer('stderr') });
 	pyodide.registerJsModule('_page', { request, emit });
 	pyodide.runPython(`import os, sys\nsys.path.insert(0, '/lib')\nos.chdir('${WORK}')`);
 	runner = pyodide.pyimport('runner');
@@ -90,9 +90,11 @@ function removeNetwork() {
 
 async function run({ id, code, cases }) {
 	running = id;
+	printed.reset();
 	try {
 		setCases(cases);
 		const error = await runner.run(code);
+		printed.flush();
 		const files = compare();
 		postMessage({ type: 'done', id, error: error ?? null, files }, transfers(files));
 	} catch (error) {
@@ -119,6 +121,47 @@ function emit(item) {
 	const plain = item.toJs ? item.toJs({ dict_converter: Object.fromEntries }) : item;
 	postMessage({ type: 'output', run: running, item: plain }, transfers(plain));
 }
+
+/**
+ * What a run prints, passed on a line at a time and kept up to OUTPUT_LIMIT characters a run: a print of a whole
+ * array would otherwise send the page hundreds of megabytes, which nobody reads.
+ */
+const OUTPUT_LIMIT = 100_000;
+const printed = {
+	kept: 0,
+	full: false,
+	pending: { stdout: '', stderr: '' },
+	reset() {
+		this.kept = 0;
+		this.full = false;
+	},
+	writer(stream) {
+		const decoder = new TextDecoder();
+		return (bytes) => {
+			if (this.full) return bytes.length;
+			this.pending[stream] += decoder.decode(bytes, { stream: true });
+			const end = this.pending[stream].lastIndexOf('\n');
+			if (this.kept + this.pending[stream].length > OUTPUT_LIMIT) this.send(stream, this.pending[stream]);
+			else if (end >= 0) this.send(stream, this.pending[stream].slice(0, end + 1));
+			return bytes.length;
+		};
+	},
+	/** Pass on `text`, the start of what `stream` holds, as far as the limit allows. */
+	send(stream, text) {
+		this.pending[stream] = this.pending[stream].slice(text.length);
+		const room = OUTPUT_LIMIT - this.kept;
+		if (text.length > room) {
+			text = `${text.slice(0, room)}\n… the rest of this run's output was not kept (over ${OUTPUT_LIMIT.toLocaleString('en')} characters).\n`;
+			this.full = true;
+			this.pending = { stdout: '', stderr: '' };
+		}
+		this.kept += text.length;
+		emit({ kind: 'text', text, ...(stream === 'stderr' && { stream }) });
+	},
+	flush() {
+		for (const stream of ['stdout', 'stderr']) if (this.pending[stream]) this.send(stream, this.pending[stream]);
+	},
+};
 
 /** The buffers of the typed arrays in a message, to move rather than copy; never Pyodide's own memory. */
 function transfers(value, found = new Set()) {

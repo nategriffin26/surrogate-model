@@ -1,13 +1,15 @@
 // The 3D view: one car on a studio floor, coloured through a ramp in the shader, drawn only when something changes.
 // It draws the file's full mesh whenever the device can, and the working mesh while the camera moves on devices
 // where measured frame times say the full mesh cannot keep up. Picking, probes and cuts use the working mesh.
+// While the networks predict, the clay car shows the work under way, drawn once and tinted each frame (keepStill),
+// and the field then arrives on it as a front carried downstream (arrive).
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { rampRow, rampTexture } from '../app/ramps.js';
 import { Ground, Lattice } from './ground.js';
 import { FaceIndex, VertexGrid } from './picking.js';
-import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX } from './shaders.js';
+import { CAR_FRAGMENT, CAR_VERTEX, EDGE_FRAGMENT, EDGE_VERTEX, PICK_FRAGMENT, PICK_VERTEX, SCREEN_VERTEX, WAIT_COMPOSITE_FRAGMENT, WAIT_INFO_FRAGMENT } from './shaders.js';
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 const SHADER_FIELD = { cp: 0, cfd: 1, error: 2, sigma: 3, drag: 4, none: 5 };
@@ -59,6 +61,8 @@ export class Viewer extends EventTarget {
 		this.placed = null;
 		/** Starts the field's arrival once the mesh carrying it is on the GPU. */
 		this.arrival = null;
+		/** While the networks predict: {front}, the x the predicted share's front is easing toward; else null. */
+		this.waiting = null;
 		this.lastUpload = 0;
 		/** Signalled once the GPU has taken in the last piece uploaded. */
 		this.uploadFence = null;
@@ -90,6 +94,7 @@ export class Viewer extends EventTarget {
 			this.surface?.restage();
 			this.placed = null;
 			this.uploadFence = null;
+			this.disposeStill();
 			this.requestRender();
 		});
 
@@ -137,11 +142,26 @@ export class Viewer extends EventTarget {
 			uClip: { value: 0 },
 			uArrival: { value: new THREE.Vector4() },
 			uFade: { value: 1 },
+			uWait: { value: new THREE.Vector4() },
+			uWaitTime: { value: 0 },
+			uAccent: { value: new THREE.Color(ACCENT) },
 		};
 		this.carMaterial = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: CAR_VERTEX, fragmentShader: CAR_FRAGMENT, side: THREE.DoubleSide });
 		this.car = new THREE.Mesh(new THREE.BufferGeometry(), this.carMaterial);
 		this.car.frustumCulled = false;
 		this.car.visible = false;
+		this.waitInfoMaterial = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: CAR_VERTEX, fragmentShader: WAIT_INFO_FRAGMENT, side: THREE.DoubleSide });
+		const u = this.uniforms;
+		this.waitComposite = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+			uniforms: { uStill: { value: null }, uInfo: { value: null }, uClay: u.uClay, uAccent: u.uAccent, uWait: u.uWait, uWaitTime: u.uWaitTime },
+			vertexShader: SCREEN_VERTEX,
+			fragmentShader: WAIT_COMPOSITE_FRAGMENT,
+			depthTest: false,
+			depthWrite: false,
+		}));
+		this.waitComposite.frustumCulled = false;
+		/** While the car waits for its field: the frame drawn in plain clay and what the tint needs per pixel (keepStill). */
+		this.still = null;
 
 		this.edgeMaterial = new THREE.ShaderMaterial({
 			uniforms: {
@@ -216,7 +236,15 @@ export class Viewer extends EventTarget {
 		renderer.render(this.scene, this.camera);
 		renderer.setRenderTarget(this.pickTarget);
 		renderer.render(this.pickScene, this.camera);
+		// The waiting car's two passes, into a target of the kind they use: a program is linked per kind of target.
+		const info = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+		renderer.setRenderTarget(info);
+		this.car.material = this.waitInfoMaterial;
+		renderer.render(this.car, this.camera);
+		this.car.material = this.carMaterial;
 		renderer.setRenderTarget(null);
+		renderer.render(this.waitComposite, this.camera);
+		info.dispose();
 		this.ground.bakeShadow(renderer, speck, [0, 1, 0, 1, 0]);
 		[this.car.geometry, this.edges.geometry, this.pickMesh.geometry] = geometries;
 		for (const { o, visible, culled } of objects) Object.assign(o, { visible, frustumCulled: culled });
@@ -238,6 +266,7 @@ export class Viewer extends EventTarget {
 		this.arrival = null;
 		this.uniforms.uArrival.value.w = 0;
 		this.uniforms.uFade.value = 1;
+		this.endWait();
 		this.requestRender();
 	}
 
@@ -455,29 +484,72 @@ export class Viewer extends EventTarget {
 
 	/** Position, 0 to 1, of the band that crosses the lattice while a file is analysed; null hides it. */
 	setSweep(k) {
-		this.lattice.uniforms.uSweep.value = k === null ? -100 : -5 + 14.5 * k;
+		const sweep = k === null ? -100 : -5 + 14.5 * k;
+		if (this.lattice.uniforms.uSweep.value === sweep) return;
+		this.lattice.uniforms.uSweep.value = sweep;
 		this.requestRender();
 	}
 
 	/**
 	 * The field arrives on the car as a front carried downstream, broken into streaks like dye in a tunnel. The car
-	 * stays clay until the mesh carrying the field is on the GPU, and the front starts then.
+	 * stays clay until the mesh carrying the field is on the GPU, and the front starts then; it ends the wait.
 	 */
 	arrive() {
 		const u = this.uniforms;
 		this.cancelAnimation('arrival');
+		const done = () => {
+			u.uArrival.value.w = 0;
+			u.uFade.value = 1;
+			this.endWait();
+		};
 		if (REDUCED_MOTION.matches) {
 			u.uFade.value = 0;
-			this.arrival = () => this.animate(200, (k) => (u.uFade.value = k), () => (u.uFade.value = 1), 'arrival');
+			this.arrival = () => this.animate(200, (k) => (u.uFade.value = k), done, 'arrival');
 		} else {
 			const [xmin, xmax] = this.bounds;
 			const length = xmax - xmin;
 			const width = 0.22 * length;
 			const depth = 0.1 * length;
 			u.uArrival.value.set(xmin - depth, width, depth, 1);
-			this.arrival = () => this.animate(ARRIVAL_MS, (k) => (u.uArrival.value.x = xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)), () => (u.uArrival.value.w = 0), 'arrival');
+			this.arrival = () => this.animate(ARRIVAL_MS, (k) => (u.uArrival.value.x = xmin - depth + (length + width + depth) * (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2)), done, 'arrival');
 		}
 		this.requestRender();
+	}
+
+	/**
+	 * While the networks predict, the clay car shows the work under way: the share predicted so far (0 to 1) as a
+	 * faint tint run downstream from the nose, and soft pulses carried downstream. null when nothing is predicted; a
+	 * field waiting to arrive ends the wait itself, as its front replaces it.
+	 */
+	predicting(share) {
+		const u = this.uniforms.uWait.value;
+		if (share === null) {
+			if (this.waiting && !this.arrival && !this.animating('arrival')) {
+				this.endWait();
+				this.requestRender();
+			}
+			return;
+		}
+		if (!this.bounds) return;
+		const [xmin, xmax] = this.bounds;
+		const length = xmax - xmin;
+		// The front starts ahead of the nose and ends behind the tail, past the streaks' lag either way.
+		const front = xmin - 0.1 * length + 1.2 * length * share;
+		const started = this.waiting !== null;
+		if (!started) u.set(front, xmin, length, 1);
+		this.waiting = { front };
+		// Once under way the frame loop eases the front toward the new share on the still frame; a redraw of the car
+		// is needed only to start, or under reduced motion, where the front moves only with the events.
+		if (REDUCED_MOTION.matches) u.x = front;
+		if (!started || REDUCED_MOTION.matches) this.requestRender();
+		else this.schedule();
+	}
+
+	/** Nothing waits for a field any more: the tint goes and the still frame is let go. */
+	endWait() {
+		this.waiting = null;
+		this.uniforms.uWait.value.w = 0;
+		this.disposeStill();
 	}
 
 	// ---- camera --------------------------------------------------------------------------------------------------
@@ -699,10 +771,13 @@ export class Viewer extends EventTarget {
 		return raycaster.ray;
 	}
 
+	/**
+	 * Fit the drawing buffer to the view and draw at once. Resizing a WebGL canvas clears it, and waiting for the next
+	 * animation frame would show that empty canvas for a frame. A view hidden with its page (0 × 0) keeps its buffer.
+	 */
 	resize() {
+		if (!this.host.clientWidth || !this.host.clientHeight) return;
 		const { W, H, w, h } = this.paneSize();
-		const before = this.pane;
-		this.pane = { w, h };
 		this.renderer.setSize(W, H, false);
 		this.perspective.aspect = w / h;
 		this.perspective.updateProjectionMatrix();
@@ -712,21 +787,10 @@ export class Viewer extends EventTarget {
 		o.top = h / 2;
 		o.bottom = -h / 2;
 		o.updateProjectionMatrix();
-		// A pane that narrows or widens at the same height (a side panel opening, a second pane) keeps showing the same
-		// width of the world about the orbit centre, so the car shrinks into the room left rather than being cut off.
-		if (before && before.h === h && before.w !== w && before.w > 1 && w > 1) this.scaleView(before.w / w);
 		this.resetLod(this.lod.layer);
-		this.requestRender();
+		this.disposeStill();
+		this.render();
 		this.dispatchEvent(new CustomEvent('resize'));
-	}
-
-	/** Show k times as much of the world about the orbit centre, without turning the camera. */
-	scaleView(k) {
-		const camera = this.camera;
-		if (camera.isPerspectiveCamera) camera.position.sub(this.target).multiplyScalar(k).add(this.target);
-		else camera.zoom /= k;
-		camera.updateProjectionMatrix();
-		this.controls.update();
 	}
 
 	// ---- picking ----------------------------------------------------------------------------------------------------
@@ -840,6 +904,22 @@ export class Viewer extends EventTarget {
 		for (const a of this.animations) if (a.key === key) this.animations.delete(a);
 	}
 
+	animating(key) {
+		return [...this.animations].some((a) => a.key === key);
+	}
+
+	/**
+	 * Move the waiting car on by `dt` seconds: its front eases toward the share predicted (events come a few times a
+	 * second) and the pulses run on. Under reduced motion it stands still between events. Returns whether it moved.
+	 */
+	stepWait(dt) {
+		if (!this.waiting || !this.placed || REDUCED_MOTION.matches) return false;
+		const u = this.uniforms.uWait.value;
+		u.x += (this.waiting.front - u.x) * (1 - Math.exp(-dt / 0.25));
+		this.uniforms.uWaitTime.value += dt;
+		return true;
+	}
+
 	requestRender() {
 		this.dirty = true;
 		this.schedule();
@@ -863,7 +943,7 @@ export class Viewer extends EventTarget {
 				a.done?.();
 			}
 		}
-		const cameraAnimating = [...this.animations].some((a) => a.key === 'camera');
+		const cameraAnimating = this.animating('camera');
 		const controlled = !cameraAnimating && this.controls.update();
 		// Damping glides on for a second in sub-pixel steps; only motion a viewer can see counts as moving. The camera
 		// can also move between frames (a wheel step updates it at once), so motion is measured on screen. The glide is
@@ -873,18 +953,25 @@ export class Viewer extends EventTarget {
 		if (!cameraAnimating && (!controlled || shift <= SUBPIXEL)) this.stopGlide();
 		if (cameraAnimating || shift > MOVING_PX) this.lastMotion = now;
 		if (shift > SUBPIXEL && this.pointer && this.hoverPicking) this.hover(this.pointer);
+		const dt = Math.min(100, now - this.lastFrame) / 1000;
 		const latticeMoving = this.lattice.object.visible && this.backdrop === 'moving';
-		if (latticeMoving) this.lattice.uniforms.uTime.value += Math.min(100, now - this.lastFrame) / 1000;
+		if (latticeMoving) this.lattice.uniforms.uTime.value += dt;
+		const waitMoving = this.stepWait(dt);
 		const moving = now - this.lastMotion < SETTLE_MS;
 		const layer = this.chooseLayer(moving);
-		if (this.dirty || animating || shift > SUBPIXEL || latticeMoving || layer !== this.drawn?.layer) {
+		const redraw = this.dirty || animating || shift > SUBPIXEL || latticeMoving || layer !== this.drawn?.layer;
+		// While the car waits for its field it is drawn once, and each frame after only the tint is laid over it.
+		const still = waitMoving && this.panes.length === 1 && layer !== null && !this.animating('arrival');
+		if (redraw || (waitMoving && !(still && this.still?.layer === layer))) {
 			const start = performance.now();
-			this.render(layer);
+			if (still) this.keepStill(layer);
+			else this.render(layer);
 			if (layer === 'full' && moving && !this.lod.decided) this.measure(start);
 		}
+		if (still) this.composeWait();
 		this.lastFrame = now;
 		this.dirty = false;
-		if (this.animations.size > 0 || controlled || moving || latticeMoving || this.surface?.uploading) this.schedule();
+		if (this.animations.size > 0 || controlled || moving || latticeMoving || waitMoving || this.surface?.uploading) this.schedule();
 	}
 
 	/** The largest distance, in pixels, any corner of the car's box moved on screen since the previous frame. */
@@ -897,6 +984,58 @@ export class Viewer extends EventTarget {
 		this.corners = corners;
 		if (!previous) return Infinity;
 		return Math.max(...corners.map((p, i) => Math.hypot(p.x - previous[i].x, p.y - previous[i].y)));
+	}
+
+	/**
+	 * Draw the waiting car once: the frame in plain clay, kept as a texture, and for each pixel of the car where its
+	 * tint is read and how strongly it shows (WAIT_INFO_FRAGMENT). Each frame after only lays the tint over the kept
+	 * frame (composeWait), so the animation costs one pass over the screen however many triangles the car has, and
+	 * leaves the GPU to the networks it shares it with.
+	 */
+	keepStill(layer) {
+		const renderer = this.renderer;
+		const u = this.uniforms;
+		const { W, H } = this.paneSize();
+		if (this.still && (this.still.width !== W || this.still.height !== H)) this.disposeStill();
+		if (!this.still) {
+			const frame = new THREE.FramebufferTexture(W, H);
+			const info = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+			const composite = this.waitComposite.material.uniforms;
+			composite.uStill.value = frame;
+			composite.uInfo.value = info.texture;
+			this.still = { width: W, height: H, frame, info, key: null, layer: null };
+		}
+		const strength = u.uWait.value.w;
+		u.uWait.value.w = 0;
+		this.render(layer);
+		u.uWait.value.w = strength;
+		renderer.copyFramebufferToTexture(this.still.frame);
+		// The car's pixels change only with the view, the mesh and the section; a fading backdrop leaves them be.
+		const camera = this.camera;
+		const key = [layer, ...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, ...u.uPlane.value.toArray(), u.uClip.value, u.uSection.value].join();
+		if (this.still.key !== key) {
+			// Cleared to transparent black, so a pixel off the car reads 0 where the car's read 1.
+			renderer.setRenderTarget(this.still.info);
+			this.car.material = this.waitInfoMaterial;
+			renderer.render(this.car, camera);
+			this.car.material = this.carMaterial;
+			renderer.setRenderTarget(null);
+			this.still.key = key;
+		}
+		this.still.layer = layer;
+	}
+
+	/** Lay the waiting tint, as it is now, over the kept frame. */
+	composeWait() {
+		this.renderer.setViewport(0, 0, this.host.clientWidth, this.host.clientHeight);
+		this.renderer.render(this.waitComposite, this.camera);
+	}
+
+	disposeStill() {
+		if (!this.still) return;
+		this.still.frame.dispose();
+		this.still.info.dispose();
+		this.still = null;
 	}
 
 	/**
@@ -975,6 +1114,7 @@ export class Viewer extends EventTarget {
 
 	dispose() {
 		this.disposed = true;
+		this.disposeStill();
 		this.resizeObserver.disconnect();
 		this.controls.dispose();
 		this.renderer.dispose();

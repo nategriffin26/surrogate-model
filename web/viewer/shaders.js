@@ -28,7 +28,21 @@ void main() {
 	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
-export const CAR_FRAGMENT = /* glsl */ `
+/**
+ * The clay while the networks predict, at a point whose x has been moved by the streaks: the share predicted so far
+ * as a tint run downstream from the nose, and soft pulses carried downstream in the same streaks the field will
+ * arrive in, like dye let into the tunnel. Needs uClay, uAccent, uWait and uWaitTime.
+ */
+const WAITING_CLAY = /* glsl */ `
+vec3 waitingClay(float x) {
+	float done = 1.0 - smoothstep(-0.05 * uWait.z, 0.0, x - uWait.x);
+	float phase = fract((x - uWait.y) / (0.5 * uWait.z) - 0.6 * uWaitTime);
+	float pulse = exp(-pow((phase - 0.5) / 0.06, 2.0));
+	return mix(uClay, uAccent, 0.2 * done + 0.28 * pulse) + 0.06 * pulse;
+}`;
+
+/** Uniforms, inputs and functions of the car's fragment shaders: the colour of a field, and its shading. */
+const CAR_COMMON = /* glsl */ `
 uniform sampler2D uRamp;
 uniform int uField;          // 0 cp, 1 cfd, 2 cp - cfd, 3 sigma, 4 -cp nx, 5 none
 uniform vec4 uMap;           // lo, hi, bands (0 = continuous), ramp row
@@ -45,6 +59,9 @@ uniform float uSection;      // 1 draws the section line
 uniform float uEmphasis;     // faces to pick out by the sign of their outward n_x: -1 forward-facing, 1 rearward-facing, 0 none
 uniform vec4 uArrival;       // x of the front, front width, streak depth, 1 while the field is arriving
 uniform float uFade;         // 0..1 fade from clay, used instead of the front under reduced motion
+uniform vec4 uWait;          // while the networks predict: x of the predicted share's front, x of the nose, car length, 1
+uniform float uWaitTime;     // seconds, carrying the pulses downstream; still under reduced motion
+uniform vec3 uAccent;
 ${CLIP}
 varying float vCp;
 varying float vSigma;
@@ -83,18 +100,15 @@ float lineAt(float s, float px) {
 	return 1.0 - smoothstep(w * px * 0.5, w * (px * 0.5 + 1.0), abs(s));
 }
 
-void main() {
-	if (clipped(vWorld)) discard;
-	vec3 base = uField == 5 ? uClay : fieldColour();
-	if (uArrival.w > 0.0) {
-		float lag = uArrival.z * (streaks(vWorld.yz * 9.0) * 0.65 + streaks(vWorld.yz * 23.0) * 0.35);
-		float behind = 1.0 - smoothstep(-uArrival.y, 0.0, vWorld.x + lag - uArrival.x);
-		float crest = exp(-pow((vWorld.x + lag - uArrival.x + 0.35 * uArrival.y) / (0.35 * uArrival.y), 2.0));
-		base = mix(uClay, base, behind) + 0.12 * crest * (1.0 - behind * 0.5);
-	}
-	if (uFade < 1.0) base = mix(uClay, base, uFade);
-	if (uEmphasis != 0.0 && vNormal.x * uEmphasis <= 0.0) base = mix(base, uClay, 0.85);
+${WAITING_CLAY}
 
+/** Smooth noise across the flow, by which a front or a pulse lags as it is carried downstream. */
+float streakNoise() {
+	return streaks(vWorld.yz * 9.0) * 0.65 + streaks(vWorld.yz * 23.0) * 0.35;
+}
+
+/** A base colour lit and reflected, darker inside the shell, under the section line. Affine in the base colour. */
+vec3 shaded(vec3 base) {
 	vec3 N = normalize(vNormal);
 	if (!gl_FrontFacing) N = -N;
 	vec3 V = uOrtho > 0.5 ? -uViewDir : normalize(cameraPosition - vWorld);
@@ -114,8 +128,63 @@ void main() {
 	// The inside of the shell, seen through a clip, reads darker than the outside.
 	if (!gl_FrontFacing) colour *= 0.62;
 	if (uSection > 0.5) colour = mix(colour, uInk, 0.9 * lineAt(dot(vWorld, uPlane.xyz) - uPlane.w, 2.0));
-	gl_FragColor = vec4(colour, 1.0);
+	return colour;
+}`;
+
+export const CAR_FRAGMENT = /* glsl */ `${CAR_COMMON}
+void main() {
+	if (clipped(vWorld)) discard;
+	float noise = uArrival.w > 0.0 || uWait.w > 0.0 ? streakNoise() : 0.0;
+	vec3 clay = uWait.w > 0.0 ? waitingClay(vWorld.x + 0.1 * uWait.z * noise) : uClay;
+	vec3 base = uField == 5 ? clay : fieldColour();
+	if (uArrival.w > 0.0) {
+		float lag = uArrival.z * noise;
+		float behind = 1.0 - smoothstep(-uArrival.y, 0.0, vWorld.x + lag - uArrival.x);
+		float crest = exp(-pow((vWorld.x + lag - uArrival.x + 0.35 * uArrival.y) / (0.35 * uArrival.y), 2.0));
+		base = mix(clay, base, behind) + 0.12 * crest * (1.0 - behind * 0.5);
+	}
+	if (uFade < 1.0) base = mix(clay, base, uFade);
+	if (uEmphasis != 0.0 && vNormal.x * uEmphasis <= 0.0) base = mix(base, uClay, 0.85);
+	gl_FragColor = vec4(shaded(base), 1.0);
 	#include <colorspace_fragment>
+}`;
+
+/**
+ * The waiting car's still, per pixel of the car: the x its tint is read at (streaks included), and how much the
+ * colour shown moves with the base colour. Shading is affine in the base, so the composite below can add the
+ * waiting tint to a frame drawn once in plain clay and get what the car shader would draw.
+ */
+export const WAIT_INFO_FRAGMENT = /* glsl */ `${CAR_COMMON}
+void main() {
+	if (clipped(vWorld)) discard;
+	float gain = shaded(vec3(1.0)).g - shaded(vec3(0.0)).g;
+	gl_FragColor = vec4(vWorld.x + 0.1 * uWait.z * streakNoise(), gain, 1.0, 1.0);
+}`;
+
+export const SCREEN_VERTEX = /* glsl */ `
+varying vec2 vUv;
+void main() {
+	vUv = uv;
+	gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
+
+/** A waiting frame: the still frame, as the canvas held it, with the waiting tint added over the car's pixels. */
+export const WAIT_COMPOSITE_FRAGMENT = /* glsl */ `
+uniform sampler2D uStill;
+uniform sampler2D uInfo;
+uniform vec3 uClay;
+uniform vec3 uAccent;
+uniform vec4 uWait;
+uniform float uWaitTime;
+varying vec2 vUv;
+${WAITING_CLAY}
+vec3 decode(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+vec3 encode(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+void main() {
+	vec4 still = texture2D(uStill, vUv);
+	vec4 info = texture2D(uInfo, vUv);
+	if (info.z > 0.5) still.rgb = encode(max(decode(still.rgb) + (waitingClay(info.x) - uClay) * info.y, 0.0));
+	gl_FragColor = still;
 }`;
 
 export const EDGE_VERTEX = /* glsl */ `

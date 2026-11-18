@@ -77,7 +77,7 @@
 .assistant-note { display: grid; gap: 10px; justify-items: start; color: var(--muted); font-size: 13px; }
 .assistant-note p { margin: 0; }
 .assistant-note-title { color: var(--heading); font-weight: 600; font-size: 14px; }
-.assistant-note code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+.assistant-note code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; white-space: nowrap; }
 
 /* The message box. */
 .assistant-composer { position: relative; padding: 10px 12px 12px; border-top: 1px solid var(--hair); }

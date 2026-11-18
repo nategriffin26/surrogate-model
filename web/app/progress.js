@@ -1,5 +1,6 @@
 // Progress of an analysis: the engine's four stages as they run, what runs the networks, and a way to cancel.
-// A card in the middle of the view until the car appears, then a strip along the bottom so the car can be handled.
+// A card in the middle of the view until the car appears; then the same steps travel to a strip along the bottom
+// (a view transition, styled in app.css), so the eye follows them while the car is handled.
 
 import { h } from './dom.js';
 import { bytes, seconds } from './format.js';
@@ -21,6 +22,8 @@ export function createProgress({ cancel }) {
 	});
 	const stop = h('button', { type: 'button', class: 'button progress-cancel' }, icon('cancel'), 'Cancel');
 	const el = h('div', { class: 'progress', role: 'status' },
+		// The card's box, apart from its content, so it can stretch from card to strip without distorting the text.
+		h('span', { class: 'progress-panel' }),
 		h('div', { class: 'progress-head' }, name, size),
 		h('div', { class: 'progress-stages' }, rows.map((r) => r.row)),
 		h('div', { class: 'progress-foot' }, device, stop));
@@ -50,5 +53,11 @@ export function createProgress({ cancel }) {
 		return (done + active) / STAGES.length;
 	}
 
-	return { el, render, fraction };
+	/** Share of the prediction done, for the car while it waits: 0 until the networks start, 1 once they finish. */
+	function predicted(c) {
+		const st = c.stages.predicting;
+		return !st ? 0 : st.end ? 1 : st.fraction;
+	}
+
+	return { el, render, fraction, predicted };
 }

@@ -27,11 +27,14 @@ TABLE_ROWS = 200
 # Figures in the tool's light theme (web/app/theme.css): hairline axes, quiet grid, its blues and accents.
 plt.rcParams.update(
     {
-        "figure.figsize": (6.4, 4.0),
+        # Sized for the panel (about 400 px wide) at twice its resolution, so the text reads at the panel's own size.
+        "figure.figsize": (4.4, 3.0),
         "figure.dpi": 100,
-        "savefig.dpi": 144,
+        "savefig.dpi": 180,
         "savefig.bbox": "tight",
-        "font.size": 10,
+        "font.size": 9,
+        "xtick.labelsize": 8.5,
+        "ytick.labelsize": 8.5,
         "text.color": "#1a2b3a",
         "axes.labelcolor": "#1a2b3a",
         "axes.edgecolor": "#cddce4",
@@ -39,7 +42,7 @@ plt.rcParams.update(
         "axes.spines.right": False,
         "axes.grid": True,
         "axes.axisbelow": True,
-        "axes.titlesize": 11,
+        "axes.titlesize": 9.5,
         "axes.titlelocation": "left",
         "axes.prop_cycle": cycler(color=["#0b6fbf", "#a35b1a", "#197b80", "#a83258", "#9a55e8", "#237f50"]),
         "grid.color": "#e3ecf1",

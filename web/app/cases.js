@@ -16,13 +16,37 @@ export function caseSummary(c, active) {
 		shown: c === active,
 		...(c.path ? { path: c.path } : {}),
 		...(c.error ? { error: c.error } : {}),
-		...(r ? {
-			cells: r.source.cells,
-			length_m: r.geometry.length,
-			width_m: r.geometry.width,
-			height_m: r.geometry.height,
-			reference_area_m2: r.geometry.frontalArea,
-		} : {}),
+		...(r ? resultSummary(r, c.kind === 'file' && r.form === 'full' && !c.exact) : {}),
+	};
+}
+
+/**
+ * A Result's size and whole-car numbers, as the result card shows them and list_cases reports them; `sampled` while
+ * every polygon is still to come. The assistant's kernel reports a predicted variant with it too.
+ */
+export function resultSummary(r, sampled) {
+	const t = r.totals;
+	const point = (x) => x.map((v) => +v.toFixed(4));
+	const extreme = (e) => ({ value: e.value, center_m: point(e.center), normal: point(e.normal) });
+	return {
+		cells: r.source.cells,
+		length_m: r.geometry.length,
+		width_m: r.geometry.width,
+		height_m: r.geometry.height,
+		reference_area_m2: r.geometry.frontalArea,
+		totals_over: sampled ? 'an even area sample of the polygons; every polygon replaces it when ready' : 'every polygon',
+		area_m2: t.area,
+		mean_cp: t.meanCp,
+		cx: t.coefficients[0],
+		cy: t.coefficients[1],
+		cz: t.coefficients[2],
+		cx_by_network: r.forces.cdPModels,
+		cp_min: extreme(t.cpMin),
+		cp_max: extreme(t.cpMax),
+		outside_training: r.coverage.dimensions
+			.filter((d) => d.value < d.trainMin || d.value > d.trainMax)
+			.map((d) => ({ dimension: d.name, value_m: d.value, training_min_m: d.trainMin, training_max_m: d.trainMax })),
+		reference: r.reference ? { file: r.reference.file, array: r.reference.array, mapping: r.reference.mapping, cx: r.forces.cdPCfd, r2: r.accuracy?.r2 ?? null } : null,
 	};
 }
 
@@ -30,7 +54,7 @@ export function caseSummary(c, active) {
 export function defineCaseOperations({ session }) {
 	defineOperation({
 		name: 'list_cases',
-		description: 'The open cases, one per tab: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed), status (queued, analysing, loading, ready or failed), whether it is on screen, and once ready its polygon count, size and reference (frontal) area. Field data of a case is reached by its case_id.',
+		description: 'The open cases, one per tab: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed), status (queued, analysing, loading, ready or failed) and whether it is on screen. Once ready, the numbers the result card shows: polygon count, size, reference (frontal) area, and summed over the polygons named in totals_over the surface area, area-weighted mean Cp, the pressure force coefficients cx (pressure drag), cy and cz on the reference area (no wall shear), cx from each network, the lowest and highest Cp with the centre and outward normal of their polygon, the dimensions outside the training cars\' range, and the reference field when there is one (its file, array, how it was mapped, its cx and the area-weighted r2 against it). Field data of a case is reached by its case_id.',
 		parameters: { type: 'object', properties: {}, additionalProperties: false },
 		run: () => ({ cases: session.cases.map((c) => caseSummary(c, session.active)) }),
 	});

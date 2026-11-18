@@ -12,22 +12,10 @@ const DIMENSION_LABELS = { length: 'Length', width: 'Width', height: 'Height' };
 const WIDTH = 234;
 const PROFILE_BINS = 96;
 
-/** The vertices of highest and lowest Cp on the working mesh, with their positions and normals. */
-function extremesOf(mesh) {
-	const cp = mesh.cp;
-	let max = 0, min = 0, hi = cp[0], lo = cp[0];
-	for (let v = 1; v < cp.length; v++) {
-		const value = cp[v];
-		if (value > hi) {
-			hi = value;
-			max = v;
-		} else if (value < lo) {
-			lo = value;
-			min = v;
-		}
-	}
-	const at = (v) => ({ cp: mesh.cp[v], point: Array.from(mesh.positions.subarray(3 * v, 3 * v + 3)), normal: Array.from(mesh.normals.subarray(3 * v, 3 * v + 3)) });
-	return { max: at(max), min: at(min) };
+/** The polygons of highest and lowest Cp over the whole car, from the Result's totals, as the card marks them. */
+function extremesOf({ cpMax, cpMin }) {
+	const at = (e) => ({ cp: e.value, point: e.center, normal: e.normal });
+	return { max: at(cpMax), min: at(cpMin) };
 }
 
 /** The car's side outline (x against z) as an SVG path inside a 4 px margin of the card's width, and the mapping into it. */
@@ -61,7 +49,9 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 	/** The extremes marked on the car: the one hovered in the card, and the one last flown to. */
 	const marked = { hovered: null, pinned: null };
 
-	const of = (c) => derived.get(c) ?? derived.set(c, { extremes: extremesOf(c.result.mesh), profile: profileOf(c.result.mesh, c.result.geometry.bounds) }).get(c);
+	// The outline is drawn once per car; the extremes follow the totals, which every polygon replaces once summed.
+	const outline = (c) => derived.get(c) ?? derived.set(c, profileOf(c.result.mesh, c.result.geometry.bounds)).get(c);
+	const of = (c) => ({ extremes: extremesOf(c.result.totals), profile: outline(c) });
 
 	function placeMarkers() {
 		const c = active();
