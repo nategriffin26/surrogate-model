@@ -31,6 +31,7 @@ import { createResultCard } from './results.js';
 import { Session } from './session.js';
 import { acceptDrops, startScreen } from './start.js';
 import { VIEW_KEYS, createToolbar } from './toolbar.js';
+import { createVariants, shortName } from './variants.js';
 import { createWorkspace } from './workspace.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -99,6 +100,7 @@ const regions = createRegions(tool);
 const annotations = createAnnotations({ session, engine, viewer, view, overlay, update, run });
 defineHistogramOperations({ session, regions });
 const comparison = createComparison({ session, regions, update, run });
+const variants = createVariants({ session, engine, workspace, regions, update, run });
 defineExportOperations(tool);
 const files = defineFileOperations(tool);
 
@@ -116,8 +118,11 @@ defineExport({
 	label: 'Surface',
 	format: 'VTP',
 	title: 'The analysed file with CpPredicted and CpSpread cell arrays added',
-	// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on.
-	unavailable: (c) => (engine.canExportVtp(c.result) ? null : 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
+	// The engine holds the whole predicted surface of the file analysed last only, from its exact numbers on. A variant's
+	// surface was written with its prediction when it was made.
+	unavailable: (c) => (engine.canExportVtp(c.result) ? null
+		: c.variant ? `The variant's surface, with CpPredicted and CpSpread, is in the workspace at ${c.path}.`
+			: 'The surface file exists for the file analysed last, once every polygon is predicted; open or reopen it to export it.'),
 	make: (c) => engine.exportVtp(c.result),
 	fileName: (c) => `${baseName(c)}_prediction.vtp`,
 });
@@ -168,6 +173,7 @@ const panels = [
 	{ name: 'regions', label: 'Regions', ...regionsPanel },
 	{ name: 'histogram', label: 'Histogram', ...createHistogramPanel({ session, regions, active: described, run }) },
 	{ name: 'compare', label: 'Compare', ...comparison.panel },
+	{ name: 'variants', label: 'Variants', ...variants.panel },
 	{ name: 'layers', label: 'Layers', ...annotations.panel },
 ];
 
@@ -207,7 +213,7 @@ function renderTabs() {
 	tabs.replaceChildren(...session.cases.map((c) => h('div', { class: 'case-tab', role: 'tab', 'aria-selected': String(c === active()), 'data-status': c.status, title: c.name },
 		h('button', { type: 'button', class: 'case-open', onclick: () => run('show_case', { case_id: c.id }) },
 			h('span', { class: 'case-state', 'aria-hidden': 'true' }),
-			h('span', { class: 'case-name' }, c.name)),
+			h('span', { class: 'case-name' }, shortName(c))),
 		h('button', { type: 'button', class: 'case-close', title: c.status === 'analysing' || c.status === 'queued' ? `Cancel and close ${c.name}` : `Close ${c.name}`, onclick: () => run('close_case', { case_id: c.id }) }, icon('close')))));
 }
 
@@ -455,10 +461,13 @@ function present(c) {
 	const arriving = Boolean(c?.result && !c.arrived);
 	if (arriving) {
 		c.arrived = true;
-		// Every car opens on its centreline section; the sections kept in the plot and how it is drawn stay.
-		Object.assign(view.section, { on: true, axis: 1, offset: 0, clip: 0 });
-		view.dock = 'section';
-		view.dockCollapsed = false;
+		// Every car opens on its centreline section; the sections kept in the plot and how it is drawn stay. A variant
+		// opens as its car was left, in the tab it was made from.
+		if (!c.variant) {
+			Object.assign(view.section, { on: true, axis: 1, offset: 0, clip: 0 });
+			view.dock = 'section';
+			view.dockCollapsed = false;
+		}
 	}
 	if (c?.result && !view.maps) view.maps = defaultMaps(c.result.mesh);
 	const surface = c?.surface ?? null;

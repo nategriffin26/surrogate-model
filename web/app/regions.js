@@ -317,10 +317,11 @@ export function createRegions({ session, engine, update }) {
 	 * The cells a case's sums run over, and what operations call them: a dropped file's own polygons, fetched from the
 	 * engine the first time they are wanted once every polygon is predicted (and again when a reference is attached),
 	 * and kept with the result; until then, and for a bundled example, which carries only the working mesh, that
-	 * mesh's faces.
+	 * mesh's faces. A variant was predicted on its faces themselves, so they are its own polygons.
 	 */
 	function sumBasis(c) {
 		const held = known(c.result);
+		if (c.result.form === 'quick') return { cells: held.cells, over: `every face it was predicted on (${held.cells.areas.length})`, exact: true };
 		const { reference } = c.result;
 		if (held.file?.cells && held.file.reference === reference) return held.file;
 		if (c.kind === 'file' && held.file?.reference !== reference && engine.canExportVtp(c.result)) {

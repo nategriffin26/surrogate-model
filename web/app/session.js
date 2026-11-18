@@ -2,6 +2,7 @@
 // moves in one place:
 //   example:  loading → ready | failed
 //   file:     queued → analysing → ready, or failed from queued or analysing
+//   variant:  ready, predicted before it opens (variants.js)
 // and any case can be closed, which cancels its analysis. A file goes to the engine as soon as it is opened; the
 // engine analyses one at a time in that order, and a file stays queued until its first stage begins.
 
@@ -74,8 +75,10 @@ export class Session extends EventTarget {
 		this.notify(c, 'status');
 	}
 
-	add(c) {
-		this.cases.push(c);
+	/** Open a case, after the case at `after` when given, and show it. */
+	add(c, after = null) {
+		const at = after ? this.cases.indexOf(after) + 1 : this.cases.length;
+		this.cases.splice(at, 0, c);
 		this.notify(c, 'cases');
 		this.activate(c);
 		return c;
@@ -102,6 +105,10 @@ export class Session extends EventTarget {
 			arrived: false,
 			/** Section cuts through its working mesh, by plane, cached by the section tool. */
 			cuts: null,
+			/** For a variant, the car it was made from and the changes from that car: {root, changes}; else null. */
+			variant: null,
+			/** A car with variants: its surface predicted unchanged the way they are (a quick Result), so they compare like for like. */
+			baseline: null,
 			abort: new AbortController(),
 		};
 	}
@@ -132,6 +139,18 @@ export class Session extends EventTarget {
 		const c = this.add(this.newCase(file.name, 'file', file.size, 'queued', path));
 		this.analyse(c, file);
 		return c;
+	}
+
+	/**
+	 * Open a variant, a quick Result of a changed copy of `root`'s surface, after `root` and the variants of it already
+	 * open. Its surface is kept in the workspace at `path`.
+	 */
+	openVariant(result, { name, root, changes, path }) {
+		const c = { ...this.newCase(name, 'variant', null, 'ready', path), variant: { root, changes } };
+		c.result = result;
+		c.surface = new Surface(result.mesh);
+		const last = this.cases.findLast((x) => x === root || x.variant?.root === root);
+		return this.add(c, last);
 	}
 
 	async analyse(c, file) {

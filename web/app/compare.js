@@ -1,10 +1,12 @@
 // Comparing the car on screen with the CFD its file carries (the back-check of the prediction) or with another open
 // case. The other's pressure is brought onto this car's working mesh: the CFD as the file gives it, another car's
-// from its nearest vertex facing the same way (sampleFields), so the two can be drawn and subtracted point by point.
+// from its nearest vertex facing the same way (sampleFields), a car's and its variants' vertex for vertex, so the two
+// can be drawn and subtracted point by point.
 // A comparison offers two fields, the other's Cp on this car and the difference ΔCp, this car's minus the other's;
 // draws this car beside the other on request; adds the other's line to the section plot; and reads the whole car,
 // the selection and every saved region on both into one table. In the table each side is measured on its own faces:
-// the CFD on this car's, another car on its own, where the same rules pick its regions.
+// the CFD on this car's, another car on its own, where the same rules pick its regions. A car and one of its variants
+// are compared like for like: the car's side is its surface predicted unchanged the way the variant was.
 
 import { sampleFields } from '../engine/nearest.js';
 import { caseSummary } from './cases.js';
@@ -16,6 +18,7 @@ import { signed } from './format.js';
 import { icon } from './icons.js';
 import { menu } from './menu.js';
 import { defineOperation } from './operations.js';
+import { comparedAs, sameVertices } from './variants.js';
 
 /** The fields a comparison offers: the other's Cp on this car, and this car's Cp minus it. */
 export const COMPARED = 'compared';
@@ -23,18 +26,20 @@ export const DIFFERENCE = 'difference';
 const DIFFERENCE_RAMPS = ['coolwarm', 'purplegreen', 'brownteal'];
 
 /**
- * What case c is compared with under the view's comparison: {other (a case, or null for the CFD), label (the other's
- * name), mine (this side's name: Predicted beside the CFD, else the case's)}; or null when there is nothing to compare
- * c with: no comparison, no CFD on c, or the other case is c itself or has no result.
+ * What case c is compared with under the view's comparison: {other (a case, or null for the CFD), self (c as it is
+ * compared), label (the other's name), mine (this side's name: Predicted beside the CFD, else the case's), unchanged
+ * (whether a car is read as predicted unchanged beside its variant)}; or null when there is nothing to compare c with:
+ * no comparison, no CFD on c, or the other case is c itself or has no result.
  */
 export function counterpart(view, cases, c) {
 	const compare = view.compare;
 	if (!compare || !c?.result) return null;
-	if (compare.with === 'cfd') return c.result.mesh.cfd ? { other: null, label: 'CFD', mine: 'Predicted' } : null;
+	if (compare.with === 'cfd') return c.result.mesh.cfd ? { other: null, self: c, label: 'CFD', mine: 'Predicted', unchanged: false } : null;
 	const other = cases.find((x) => x.id === compare.with);
 	if (!other?.result || other === c) return null;
 	const [mine, label] = shortNames(c.name, other.name);
-	return { other, label, mine };
+	const self = comparedAs(c, other), them = comparedAs(other, c);
+	return { other: them, self, label, mine, unchanged: self !== c || them !== other };
 }
 
 /**
@@ -51,7 +56,8 @@ function shortNames(a, b) {
 
 /**
  * The other's Cp at each working-mesh vertex of case c, this car's minus it, and the end of a scale spanning 98 % of
- * the difference; worked out once per pair of results and kept with c's result.
+ * the difference; worked out once per pair of results and kept with c's result. This car's Cp is its own, or beside
+ * one of its variants its surface's predicted unchanged, which has the same vertices.
  */
 const held = new WeakMap();
 export function comparedOn(view, cases, c) {
@@ -61,9 +67,9 @@ export function comparedOn(view, cases, c) {
 	const key = pair.other?.result ?? c.result.mesh.cfd;
 	let known = held.get(c.result);
 	if (known?.key !== key) {
-		const { mesh } = c.result;
+		const { mesh } = pair.self.result;
 		const from = pair.other?.result.mesh;
-		const compared = from ? sampleFields({ positions: from.positions, normals: from.normals, cp: from.cp }, mesh).cp : mesh.cfd;
+		const compared = !from ? mesh.cfd : sameVertices(c, pair.other) ? from.cp : sampleFields({ positions: from.positions, normals: from.normals, cp: from.cp }, mesh).cp;
 		const difference = Float32Array.from(mesh.cp, (cp, v) => cp - compared[v]);
 		known = { key, compared, difference, end: scaleEnd(difference.length, (v) => difference[v]) };
 		held.set(c.result, known);
@@ -125,8 +131,9 @@ export function createComparison({ session, regions, update, run }) {
 
 	/**
 	 * The rows of the table: the whole car, the selection, each saved region; each side summed on its own polygons
-	 * (regions.measureOn: a dropped file's own, a bundled example's simplified mesh), with the RMS of ΔCp over this
-	 * car's. A whole car the simplified mesh would only approach comes from the exact numbers its result carries.
+	 * (regions.measureOn: a dropped file's own, a bundled example's simplified mesh, a variant's own), with the RMS of
+	 * ΔCp over this car's. A whole car the simplified mesh would only approach comes from the exact numbers its result
+	 * carries.
 	 */
 	function rows(c) {
 		const pair = compared(c);
@@ -136,7 +143,7 @@ export function createComparison({ session, regions, update, run }) {
 			...(view.selection ? [{ name: 'Selection', terms: view.selection.terms }] : []),
 			...session.regions.map((r) => ({ name: r.name, region_id: r.id, terms: r.terms })),
 		];
-		return items.map((item) => ({ ...item, mine: side(c, item.terms, false), other: side(pair.other ?? c, item.terms, !pair.other), rms: rms(c, pair, item.terms) }));
+		return items.map((item) => ({ ...item, mine: side(pair.self, item.terms, false), other: side(pair.other ?? pair.self, item.terms, !pair.other), rms: rms(pair.self, pair, item.terms) }));
 	}
 
 	/** One side of a row: case x's prediction, or with `cfd` its reference field, over the faces some terms pick. */
@@ -171,10 +178,12 @@ export function createComparison({ session, regions, update, run }) {
 
 	/** What the table sums on the simplified mesh rather than on the polygons of a file, said once under it; or null. */
 	function simplified(c) {
-		const pair = compared(c);
+		const { self, other } = compared(c);
 		const exact = (x) => regions.sumBasis(x).exact;
-		const regionRows = Boolean(view.selection || session.regions.length) && !(exact(c) && (!pair.other || exact(pair.other)));
-		const rmsRow = Boolean(pair.other) || !exact(c);
+		// A car and its variant are both predicted on the simplified mesh, so it is the surface the difference is taken on.
+		const quick = (x) => x.result.form === 'quick';
+		const regionRows = Boolean(view.selection || session.regions.length) && !(exact(self) && (!other || exact(other)));
+		const rmsRow = (Boolean(other) && !(quick(self) && quick(other))) || !exact(self);
 		if (regionRows && rmsRow) return 'Regions are summed, and RMS ΔCp taken, on the simplified mesh.';
 		if (regionRows) return 'Regions are summed on the simplified mesh.';
 		return rmsRow ? 'RMS ΔCp is taken on the simplified mesh.' : null;
@@ -196,9 +205,10 @@ export function createComparison({ session, regions, update, run }) {
 		return {
 			case_id: c.id,
 			compared_with: pair.other ? { case_id: pair.other.id, name: pair.other.name } : 'cfd',
+			...(pair.unchanged ? { like_for_like: 'The car is read as its surface predicted unchanged on the simplified mesh, as its variant is, so the difference is the change alone.' } : {}),
 			side_by_side: view.compare.sideBySide,
 			rows: rows(c).map(rowOut),
-			rms_dcp_over: pair.other || !regions.sumBasis(c).exact ? 'this car\'s simplified mesh, of the difference field as drawn' : 'this car\'s polygons, Cp minus CFD on each',
+			rms_dcp_over: pair.other || !regions.sumBasis(pair.self).exact ? 'this car\'s simplified mesh, of the difference field as drawn' : 'this car\'s polygons, Cp minus CFD on each',
 		};
 	}
 

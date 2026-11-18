@@ -151,7 +151,7 @@ export function plotSeries(view, shown, cases) {
 	const cars = s.cars === 'all' ? [shown, ...cases.filter((c) => c.result && c !== shown)] : [shown];
 	const pair = field === 'cp' ? counterpart(view, cases, shown) : null;
 	// A car plotted already is not plotted again as what the car shown is compared with.
-	const alongside = pair && !cars.includes(pair.other);
+	const alongside = pair && !cars.some((c) => c.id === pair.other?.id);
 	const sectionName = (plane) => (planes.length > 1 ? planeLabel(plane) : null);
 	const series = planes.flatMap((plane) => [
 		...cars.map((c) => ({ plane, case: c, field, source: c.name, label: [sectionName(plane), cars.length > 1 ? c.name : alongside ? pair.mine : null].filter(Boolean).join(' · ') })),

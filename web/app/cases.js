@@ -15,6 +15,7 @@ export function caseSummary(c, active) {
 		status: c.status,
 		shown: c === active,
 		...(c.path ? { path: c.path } : {}),
+		...(c.variant ? { variant_of: c.variant.root.id, changes: c.variant.changes } : {}),
 		...(c.error ? { error: c.error } : {}),
 		...(r ? resultSummary(r, c.kind === 'file' && r.form === 'full' && !c.exact) : {}),
 	};

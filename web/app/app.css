@@ -429,6 +429,29 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .compare-table td.compare-delta { font-weight: 600; padding-right: 20px; }
 .compare-table td.compare-name { font-weight: 500; }
 
+/* ---- variants ---- */
+.variants-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
+.variants-controls .tool { height: 28px; }
+.variants-form { display: flex; align-items: center; gap: 6px; padding: 8px 0; font-size: 13px; }
+.variants-part { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
+.variants-part[hidden] { display: none; }
+.variants-part .tool { height: 28px; }
+.variants-label { color: var(--muted); margin-left: 6px; }
+.variants-form .button { height: 28px; margin-left: 10px; }
+/* The region menu sits in the dock's scrolling body, which would cut off a menu opening upward. */
+.dock .variants .popover { top: calc(100% + 6px); bottom: auto; }
+.variants-problem { margin: 0 0 8px; color: var(--rose); font-size: 12.5px; }
+.variants-table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.variants-table th { text-align: right; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+.variants-table th:first-child, .variants-table td.variants-name { text-align: left; padding-right: 20px; }
+.variants-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--hair); color: var(--heading); white-space: nowrap; }
+.variants-table td.variants-delta { font-weight: 600; padding-right: 20px; }
+.variants-table td.variants-name { font-weight: 500; }
+.variants-table tbody tr { cursor: pointer; }
+.variants-table tbody tr:hover td { background: var(--tint); }
+.variants-table tbody tr.current td.variants-name { color: var(--link); }
+.variants-basis { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+
 /* ---- regions ---- */
 .regions-controls { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-left: 1px solid var(--hair); }
 .regions-controls .segmented { margin-right: 6px; }
