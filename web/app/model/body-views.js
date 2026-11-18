@@ -17,32 +17,52 @@ const f1 = (v) => v.toFixed(1);
 const pathOf = (points, close = false) =>
 	points.map(([x, y], i) => `${i ? 'L' : 'M'}${f1(x)} ${f1(y)}`).join('') + (close ? 'Z' : '');
 
-/** An arrow from (x1, y1) to (x2, y2) with an open head; nothing when it is shorter than its head. */
-function arrow(x1, y1, x2, y2, cls, head = 5) {
+/** A filled arrowhead with its tip at (x, y), pointing along the unit vector (ux, uy), `length` long. */
+function head(x, y, ux, uy, length) {
+	const w = length * 0.38;
+	const bx = x - ux * length;
+	const by = y - uy * length;
+	return `M${f1(x)} ${f1(y)}L${f1(bx - uy * w)} ${f1(by + ux * w)}L${f1(bx + uy * w)} ${f1(by - ux * w)}Z`;
+}
+
+/** An arrow from (x1, y1) to (x2, y2) with a filled head; nothing when it is shorter than its head. */
+function arrow(x1, y1, x2, y2, cls, size = 7) {
 	const length = Math.hypot(x2 - x1, y2 - y1);
 	if (length < 0.5) return '';
 	const ux = (x2 - x1) / length;
 	const uy = (y2 - y1) / length;
-	const h = Math.min(head, length);
-	const a = [x2 - ux * h - uy * h * 0.55, y2 - uy * h + ux * h * 0.55];
-	const b = [x2 - ux * h + uy * h * 0.55, y2 - uy * h - ux * h * 0.55];
-	return `<path class="${cls}" d="M${f1(x1)} ${f1(y1)}L${f1(x2)} ${f1(y2)}M${f1(a[0])} ${f1(a[1])}L${f1(x2)} ${f1(y2)}L${f1(b[0])} ${f1(b[1])}"/>`;
+	const h = Math.min(size, length);
+	const shaft = `M${f1(x1)} ${f1(y1)}L${f1(x2 - ux * h * 0.8)} ${f1(y2 - uy * h * 0.8)}`;
+	return `<g class="arrow ${cls}"><path d="${shaft}"/><path class="head" d="${head(x2, y2, ux, uy, h)}"/></g>`;
 }
 
-/** A dimension: a line with end ticks between two points, its text beside the middle. */
-function dimension(x1, y1, x2, y2, text, cls, where = 'above') {
-	const horizontal = Math.abs(y2 - y1) < Math.abs(x2 - x1);
-	const t = 4;
-	const ticks = horizontal
-		? `M${f1(x1)} ${f1(y1 - t)}V${f1(y1 + t)}M${f1(x2)} ${f1(y2 - t)}V${f1(y2 + t)}`
-		: `M${f1(x1 - t)} ${f1(y1)}H${f1(x1 + t)}M${f1(x2 - t)} ${f1(y2)}H${f1(x2 + t)}`;
+/** Length of a dimension's arrowheads, in pixels. */
+const DIM_HEAD = 6;
+
+/**
+ * A dimension between two points: a line with a filled arrowhead at each end, pointing out to the points, and its text
+ * beside the middle (`where`: above or below a horizontal one, left or right of a vertical one).
+ */
+function dimension(x1, y1, x2, y2, text, where = 'above') {
+	const length = Math.hypot(x2 - x1, y2 - y1);
+	if (length < 0.5) return '';
+	const ux = (x2 - x1) / length;
+	const uy = (y2 - y1) / length;
+	const h = Math.min(DIM_HEAD, length / 2);
+	const line = `M${f1(x1 + ux * h)} ${f1(y1 + uy * h)}L${f1(x2 - ux * h)} ${f1(y2 - uy * h)}`;
+	const heads = head(x1, y1, -ux, -uy, h) + head(x2, y2, ux, uy, h);
 	const mx = (x1 + x2) / 2;
 	const my = (y1 + y2) / 2;
+	const horizontal = Math.abs(uy) < Math.abs(ux);
 	const label = horizontal
-		? `<text class="dim-text" x="${f1(mx)}" y="${f1(where === 'above' ? my - 6 : my + 14)}" text-anchor="middle">${text}</text>`
+		? `<text class="dim-text" x="${f1(mx)}" y="${f1(where === 'above' ? my - 6 : my + 15)}" text-anchor="middle">${text}</text>`
 		: `<text class="dim-text" x="${f1(where === 'left' ? mx - 7 : mx + 7)}" y="${f1(my + 4)}" text-anchor="${where === 'left' ? 'end' : 'start'}">${text}</text>`;
-	return `<g class="${cls}"><path d="M${f1(x1)} ${f1(y1)}L${f1(x2)} ${f1(y2)}${ticks}"/>${label}</g>`;
+	return `<g class="dim"><path class="dim-line" d="${line}"/><path class="head" d="${heads}"/>${label}</g>`;
 }
+
+/** A thin extension line, carrying a measured point out to its dimension. */
+const extension = (x1, y1, x2, y2) =>
+	`<line class="extension" x1="${f1(x1)}" y1="${f1(y1)}" x2="${f1(x2)}" y2="${f1(y2)}"/>`;
 
 /**
  * Watch an element's width; `draw(width)` runs on every change and once now. A redraw changes the element's height,
@@ -51,7 +71,7 @@ function dimension(x1, y1, x2, y2, text, cls, where = 'above') {
 function sized(node, draw) {
 	let last = -1;
 	const run = () => {
-		const width = Math.floor(node.getBoundingClientRect().width);
+		const width = node.clientWidth;
 		if (width > 0 && width !== last) {
 			last = width;
 			draw(width);
@@ -139,40 +159,49 @@ const NOSE = SIDE[0][0];
 const TAIL = NOSE + LENGTH;
 const LOWEST = Math.min(...SIDE.map(([, z]) => z));
 const HIGHEST = Math.max(...SIDE.map(([, z]) => z));
+/** The heights of the nose's and the tail's furthest points. */
+const NOSE_Z = profile(0).top;
+const TAIL_Z = profile(LENGTH).top;
 
-/** A side view of x in `range` (metres), nose on the left, `below` metres of room under the lowest point and `ladder` pixels under that. */
+/**
+ * A side view of x in `range` (metres), nose on the left, `below` metres of room under the lowest point and `ladder`
+ * pixels under that. `shift` lowers the drawing; `paintSide` sets it to half the ladder's room when the ladder is not
+ * drawn, so the body sits in the middle of the view.
+ */
 export function sideFrame(width, { range, below, above = 0.12, ladder = 0, pad = 12 }) {
 	const k = (width - 2 * pad) / (range[1] - range[0]);
-	const z0 = LOWEST - below;
-	const bodyHeight = (HIGHEST + above - z0) * k;
-	return {
+	const top = HIGHEST + above;
+	const bodyHeight = (top - (LOWEST - below)) * k;
+	const frame = {
 		width,
 		height: Math.round(bodyHeight + 2 * pad + ladder),
 		k,
 		range,
 		pad,
+		ladder,
+		shift: 0,
 		X: (x) => pad + (x - range[0]) * k,
-		Y: (z) => pad + (HIGHEST + above - z) * k,
-		toWorld: (px, py) => [range[0] + (px - pad) / k, HIGHEST + above - (py - pad) / k],
+		Y: (z) => frame.shift + pad + (top - z) * k,
+		toWorld: (px, py) => [range[0] + (px - pad) / k, top - (py - frame.shift - pad) / k],
 		ladderTop: pad + bodyHeight,
 	};
+	return frame;
 }
 
-function sideBody({ X, Y }) {
-	return (
-		`<path class="body pickable" d="${pathOf(
-			SIDE.map(([x, z]) => [X(x), Y(z)]),
-			true,
-		)}"/>` +
-		markup(
-			'text',
-			'inputs.side.nose',
-			{},
-			`class="end-label" x="${f1(X(NOSE) - 4)}" y="${f1(Y(LOWEST + 0.42) + 4)}" text-anchor="end"`,
-		) +
-		markup('text', 'inputs.side.tail', {}, `class="end-label" x="${f1(X(TAIL) + 4)}" y="${f1(Y(LOWEST + 0.62) + 4)}"`)
-	);
-}
+const sideBody = ({ X, Y }) =>
+	`<path class="body pickable" d="${pathOf(
+		SIDE.map(([x, z]) => [X(x), Y(z)]),
+		true,
+	)}"/>`;
+
+/** The nose's and the tail's names, beside them; drawn over the lines that cross there. */
+const sideLabels = ({ X, Y }) =>
+	markup(
+		'text',
+		'inputs.side.nose',
+		{},
+		`class="end-label" x="${f1(X(NOSE) - 6)}" y="${f1(Y(NOSE_Z) + 4)}" text-anchor="end"`,
+	) + markup('text', 'inputs.side.tail', {}, `class="end-label" x="${f1(X(TAIL) + 6)}" y="${f1(Y(TAIL_Z) + 4)}"`);
 
 /** The cell and its facing, as seen from the side; the handle round it takes the pointer. */
 function sideCell({ X, Y }, { position: { x, z, normal } }, length = 34) {
@@ -181,24 +210,25 @@ function sideCell({ X, Y }, { position: { x, z, normal } }, length = 34) {
 	return `${arrow(cx, cy, cx + normal[0] * length, cy - normal[2] * length, 'facing')}<g class="handle"><circle class="handle-area" cx="${f1(cx)}" cy="${f1(cy)}" r="22"/><circle class="cell-dot" cx="${f1(cx)}" cy="${f1(cy)}" r="5"/></g>`;
 }
 
+/** The ground line: the lowest point, which heights are measured from. */
+const ground = ({ X, Y, range }) =>
+	`<line class="lowest" x1="${f1(X(range[0]))}" x2="${f1(X(range[1]))}" y1="${f1(Y(LOWEST))}" y2="${f1(Y(LOWEST))}"/>`;
+
 /** Three distances of position, drawn where they are measured: along the length below the body, and up from the lowest point. */
-function sidePosition({ X, Y, range }, { position: p }) {
-	const level = Y(LOWEST) + 16;
-	let out = `<line class="lowest" x1="${f1(X(range[0]))}" x2="${f1(X(range[1]))}" y1="${f1(Y(LOWEST))}" y2="${f1(Y(LOWEST))}"/>`;
-	out += `<line class="guide" x1="${f1(X(p.x))}" x2="${f1(X(p.x))}" y1="${f1(Y(p.z))}" y2="${f1(level)}"/>`;
-	out += dimension(X(p.nose), level, X(p.x), level, metres(p.fromNose), 'dim dim-position', 'below');
-	out += dimension(X(p.x), level, X(p.tail), level, metres(p.toTail), 'dim dim-position', 'below');
+function sidePosition({ X, Y }, { position: p }) {
+	const level = Y(LOWEST) + 20;
+	const [nx, cx, tx, cy] = [X(p.nose), X(p.x), X(p.tail), Y(p.z)];
+	let out =
+		extension(nx, Y(NOSE_Z) + 4, nx, level + 5) +
+		extension(cx, cy + 8, cx, level + 5) +
+		extension(tx, Y(TAIL_Z) + 4, tx, level + 5);
+	out += dimension(nx, level, cx, level, metres(p.fromNose), 'below');
+	out += dimension(cx, level, tx, level, metres(p.toTail), 'below');
+	// The height stands beside the cell, on the side away from the body's longer half.
 	const left = p.x - NOSE > LENGTH / 2;
-	const dx = left ? -12 : 12;
-	out += dimension(
-		X(p.x) + dx,
-		Y(LOWEST),
-		X(p.x) + dx,
-		Y(p.z),
-		metres(p.height),
-		'dim dim-position',
-		left ? 'left' : 'right',
-	);
+	const hx = cx + (left ? -16 : 16);
+	out += extension(cx + (left ? -8 : 8), cy, hx + (left ? -4 : 4), cy);
+	out += dimension(hx, Y(LOWEST), hx, cy, metres(p.height), left ? 'left' : 'right');
 	return out;
 }
 
@@ -213,23 +243,26 @@ function sideRings({ X, Y, k }, { position: { x, z }, surface }, size) {
 		.join('');
 }
 
-/** The stations as lines across the body, the shown one strong with its reads above and below the cell. */
+/**
+ * The stations as lines across the body, the shown one strong with its reads above and below the cell. A station
+ * beyond the nose or the tail cuts nothing: a dashed line the body's height.
+ */
 function sideStations({ X, Y, range }, { position: p, stations }, shown) {
 	let out = '';
 	stations.forEach(({ x }, st) => {
 		if (x <= range[0] || x >= range[1]) return;
 		const s = x - NOSE;
-		const top = s > 0 && s < LENGTH ? profile(s).top : LOWEST + 0.15;
-		const bottom = s > 0 && s < LENGTH ? profile(s).bottom : LOWEST - 0.05;
-		out += `<line class="station${st === shown ? ' on' : ''}" x1="${f1(X(x))}" x2="${f1(X(x))}" y1="${f1(Y(top) - 6)}" y2="${f1(Y(bottom) + 6)}"/>`;
+		const on = s > 0 && s < LENGTH;
+		const [top, bottom] = on ? [Y(profile(s).top) - 6, Y(profile(s).bottom) + 6] : [Y(HIGHEST), Y(LOWEST)];
+		out += `<line class="station${on ? '' : ' off'}${st === shown ? ' on' : ''}" x1="${f1(X(x))}" x2="${f1(X(x))}" y1="${f1(top)}" y2="${f1(bottom)}"/>`;
 	});
 	const read = stations[shown];
 	const sx = X(read.x);
 	if (sx > X(range[0]) && sx < X(range[1])) {
-		out += `<circle class="station-cell" cx="${f1(sx)}" cy="${f1(Y(p.z))}" r="3.5"/>`;
 		out +=
-			arrow(sx, Y(p.z), sx, Y(p.z + read.above), 'read-arrow', 4) +
-			arrow(sx, Y(p.z), sx, Y(p.z - read.below), 'read-arrow', 4);
+			arrow(sx, Y(p.z), sx, Y(p.z + read.above), 'read-arrow', 6) +
+			arrow(sx, Y(p.z), sx, Y(p.z - read.below), 'read-arrow', 6);
+		out += `<circle class="station-cell" cx="${f1(sx)}" cy="${f1(Y(p.z))}" r="3.5"/>`;
 	}
 	return out;
 }
@@ -275,12 +308,13 @@ export const ladderHeight = (width, count) => Math.min((width - 24) / count - 3,
 
 /** The side view with the overlays asked for: `position`, the rings of `size`, the stations with `station` shown and its ladder. */
 export function paintSide(frame, state, { position = false, size = null, station = null, ladder = false }) {
-	let out = sideBody(frame);
+	frame.shift = ladder ? 0 : frame.ladder / 2;
+	let out = ground(frame) + sideBody(frame);
 	if (position) out += sidePosition(frame, state);
 	if (size !== null) out += sideRings(frame, state, size);
 	if (station !== null) out += sideStations(frame, state, station);
 	if (ladder) out += sideLadder(frame, state, station);
-	return out + sideCell(frame, state);
+	return out + sideLabels(frame) + sideCell(frame, state);
 }
 
 // ---- one slice, end-on ----
@@ -311,37 +345,64 @@ function endSlice({ X, Y }, x, cls) {
 		: '';
 }
 
+let front = null;
+/**
+ * The whole body seen from the front, (y, z) round its outline: of every station's outline, the point furthest from
+ * a centre inside them all, in each of 360 directions. Built once, when first drawn.
+ */
+function frontOutline() {
+	if (front) return front;
+	const cz = LOWEST + 0.45 * (HIGHEST - LOWEST);
+	const far = Array.from({ length: 360 }, () => ({ r: 0, point: null }));
+	for (let s = 0.025; s < LENGTH; s += 0.05)
+		for (const [y, z] of outline(NOSE + s, 1440).points) {
+			const bin = Math.round(((Math.atan2(z - cz, y) / (2 * Math.PI) + 1) % 1) * 360) % 360;
+			const r = Math.hypot(y, z - cz);
+			if (r > far[bin].r) far[bin] = { r, point: [y, z] };
+		}
+	front = far.filter((f) => f.point).map((f) => f.point);
+	return front;
+}
+
 /** The four reads of one station: its area, and how far it reaches outboard of, above and below the cell's place. */
 function endReads({ X, Y }, { position: { y, z }, stations }, station) {
 	const read = stations[station];
 	const out = Math.sign(y || 1);
 	const reach = Math.abs(y) + read.outboard;
 	const side = out > 0 ? 'start' : 'end';
-	const nudge = out > 0 ? 6 : -6;
-	let s = `<circle class="station-cell" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="4"/>`;
-	s +=
-		arrow(X(y), Y(z), X(out * reach), Y(z), 'read-arrow') +
-		arrow(X(y), Y(z), X(y), Y(z + read.above), 'read-arrow') +
-		arrow(X(y), Y(z), X(y), Y(z - read.below), 'read-arrow');
+	const nudge = out > 0 ? 7 : -7;
+	let s =
+		arrow(X(y), Y(z), X(out * reach), Y(z), 'read-arrow', 6) +
+		arrow(X(y), Y(z), X(y), Y(z + read.above), 'read-arrow', 6) +
+		arrow(X(y), Y(z), X(y), Y(z - read.below), 'read-arrow', 6);
+	s += `<circle class="station-cell" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="4"/>`;
 	s += `<text class="read-text" x="${f1((X(y) + X(out * reach)) / 2)}" y="${f1(Y(z) - 7)}" text-anchor="middle">${num(read.outboard)}</text>`;
 	s += `<text class="read-text" x="${f1(X(y) + nudge)}" y="${f1((Y(z) + Y(z + read.above)) / 2 + 4)}" text-anchor="${side}">${num(read.above)}</text>`;
 	s += `<text class="read-text" x="${f1(X(y) + nudge)}" y="${f1((Y(z) + Y(z - read.below)) / 2 + 4)}" text-anchor="${side}">${num(read.below)}</text>`;
-	s += `<text class="read-text area-text" x="${f1(X(-out * 0.45))}" y="${f1(Y(LOWEST + 0.5))}" text-anchor="middle">${num(read.area)} m²</text>`;
+	s += `<text class="read-text area-text" x="${f1(X(-out * 0.45))}" y="${f1(Y(LOWEST + 0.45))}" text-anchor="middle">${num(read.area)} m²</text>`;
 	return s;
 }
 
-/** The end-on view: the cell's own slice, and with `station` that station's slice and its reads; with `position`, its distance from the centre plane. */
+/**
+ * The end-on view: the whole body's outline from the front, the cell's own slice, and with `station` that station's
+ * slice and its reads; with `position`, its distance from the centre plane.
+ */
 export function paintEnd(frame, state, { position = false, station = null }) {
 	const { X, Y, width } = frame;
 	const { x, y, z, normal } = state.position;
-	let out = `<line class="centre-plane" x1="${f1(X(0))}" x2="${f1(X(0))}" y1="${f1(Y(HIGHEST + 0.1))}" y2="${f1(Y(LOWEST - 0.1))}"/><line class="lowest" x1="8" x2="${width - 8}" y1="${f1(Y(LOWEST))}" y2="${f1(Y(LOWEST))}"/>`;
+	let out = `<line class="lowest" x1="0" x2="${width}" y1="${f1(Y(LOWEST))}" y2="${f1(Y(LOWEST))}"/>`;
+	out += `<path class="front" d="${pathOf(
+		frontOutline().map(([fy, fz]) => [X(fy), Y(fz)]),
+		true,
+	)}"/>`;
 	if (station === null) out += endSlice(frame, x, 'body pickable');
 	else
 		out +=
 			endSlice(frame, x, 'own-slice') +
 			endSlice(frame, state.stations[station].x, 'slice') +
 			endSlice(frame, x, 'pick-area pickable');
-	if (position) out += dimension(X(0), Y(z), X(y), Y(z), metres(y), 'dim dim-position', 'above');
+	out += `<line class="centre-plane" x1="${f1(X(0))}" x2="${f1(X(0))}" y1="${f1(Y(HIGHEST + 0.08))}" y2="${f1(Y(LOWEST - 0.08))}"/>`;
+	if (position) out += dimension(X(0), Y(z), X(y) - Math.sign(y || 1) * 5, Y(z), metres(y), 'above');
 	if (station !== null) out += endReads(frame, state, station);
 	return `${out}${arrow(X(y), Y(z), X(y) + normal[1] * 30, Y(z) - normal[2] * 30, 'facing')}<g class="handle"><circle class="handle-area" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="22"/><circle class="cell-dot" cx="${f1(X(y))}" cy="${f1(Y(z))}" r="5"/></g>`;
 }
@@ -458,7 +519,7 @@ export function paintPatch(frame, state, size, part) {
 	const length = radius * 0.72;
 	const [fx, fy] = project(state.position.normal);
 	const [mx, my] = project(state.surface[size].parts[part].facing);
-	out += arrow(cx, cy, cx + fx * length, cy + fy * length, 'facing', 6);
+	out += arrow(cx, cy, cx + fx * length, cy + fy * length, 'facing');
 	out += arrow(cx, cy, cx + mx * length, cy + my * length, 'mean-facing', 7);
 	out += `<circle class="cell-dot" cx="${f1(cx)}" cy="${f1(cy)}" r="4.5"/>`;
 	out += markup('text', 'inputs.patch.ahead', {}, `class="patch-side" x="${f1(cx - radius)}" y="${f1(height - 4)}"`);
@@ -571,7 +632,7 @@ export function vectorLayout(places, blocks, cell) {
 export function vectorSquares(layout, standard, shown) {
 	let out = '';
 	for (const block of layout.blocks)
-		out += `<text class="block-name" style="fill: ${COLORS[block.group]}" x="${f1(layout.origin[block.group])}" y="11">${block.count}</text>`;
+		out += `<g class="block-name"><rect x="${f1(layout.origin[block.group])}" y="3" width="8" height="8" rx="2" style="fill: ${COLORS[block.group]}"/><text x="${f1(layout.origin[block.group] + 12)}" y="11">${block.count}</text></g>`;
 	layout.squares.forEach((sq, i) => {
 		out += `<rect class="square${shown.has(i) ? ' selected' : ''}" data-col="${i}" data-group="${sq.group}" x="${f1(sq.x)}" y="${f1(sq.y)}" width="${f1(sq.size)}" height="${f1(sq.size)}" rx="1.5" style="fill: ${shade(standard[i], 1.5)}"/>`;
 	});

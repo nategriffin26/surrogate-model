@@ -1,7 +1,8 @@
 // The invented body the inputs are taught on: a smooth car-like shape defined by its side profile and half-width
 // along its length, meshed into quadrilaterals no longer than 14 mm and handed to the engine like any car given as
-// arrays, which measures and predicts it as it does a file. Axes as in the car files: x back from the nose, z up, y
-// across from the centre plane. Lengths in metres.
+// arrays, which measures and predicts it as it does a file. Its profile follows the centre-plane outline of DrivAerML
+// run 1 (`web/app/examples.js`) scaled to its length: bonnet, windscreen, roof, rear window and boot deck, without
+// wheels. Axes as in the car files: x back from the nose, z up, y across from the centre plane. Lengths in metres.
 
 /** Length, and where the nose and the lowest point sit, inside the box the model's slices are read in. */
 export const LENGTH = 4.4;
@@ -50,25 +51,33 @@ function monotone(knots) {
 
 // Side profile (top and bottom above the lowest point) and half-width, by distance s back from the nose.
 const TOP = monotone([
-	[0, 0.6],
-	[0.3, 0.68],
-	[0.75, 0.75],
-	[1.3, 0.8],
-	[1.95, 1.27],
-	[2.45, 1.34],
-	[3.0, 1.31],
-	[3.6, 1.0],
-	[4.1, 0.97],
-	[4.4, 0.92],
+	[0, 0.5],
+	[0.15, 0.6],
+	[0.4, 0.68],
+	[0.8, 0.75],
+	[1.15, 0.79],
+	[1.3, 0.82],
+	[1.5, 0.93],
+	[1.8, 1.08],
+	[2.1, 1.19],
+	[2.4, 1.22],
+	[2.8, 1.22],
+	[3.1, 1.2],
+	[3.45, 1.1],
+	[3.8, 0.95],
+	[3.95, 0.91],
+	[4.2, 0.87],
+	[4.4, 0.84],
 ]);
 const BOTTOM = monotone([
-	[0, 0.2],
-	[0.3, 0.12],
-	[0.65, 0.04],
-	[1.0, 0],
-	[3.7, 0],
-	[4.15, 0.1],
-	[4.4, 0.3],
+	[0, 0.08],
+	[0.25, 0.04],
+	[0.6, 0.02],
+	[0.9, 0],
+	[3.5, 0],
+	[3.9, 0.03],
+	[4.2, 0.09],
+	[4.4, 0.18],
 ]);
 const HALF_WIDTH = monotone([
 	[0, 0.8],
@@ -77,8 +86,14 @@ const HALF_WIDTH = monotone([
 	[3.4, 0.92],
 	[4.4, 0.86],
 ]);
-const NOSE_ROUND = 0.42;
-const TAIL_ROUND = 0.16;
+const NOSE_ROUND = 0.2;
+const TAIL_ROUND = 0.1;
+/** The beltline, above the lowest point: the cabin above it narrows to the roof by up to CABIN_LEAN of the width. */
+const BELT = 0.82;
+const CABIN_LEAN = 0.3;
+/** The heights the nose and the tail close to: the middle of the body's end there. */
+const NOSE_MID = (TOP(0) + BOTTOM(0)) / 2;
+const TAIL_MID = (TOP(LENGTH) + BOTTOM(LENGTH)) / 2;
 const EXPONENT = 4;
 
 /** The rounding that closes the body at the nose and the tail: 1 between, 0 at the ends. */
@@ -89,15 +104,15 @@ function closure(s) {
 	return 1;
 }
 
-/** The body's station at s from the nose: its top and bottom (z) and half-width. */
+/** The body's station at s from the nose: its top and bottom (z), half-width, beltline (z) and the cabin's lean. */
 export function profile(s) {
 	const c = closure(s);
-	const mid = s < LENGTH / 2 ? 0.42 : 0.62;
+	const mid = s < LENGTH / 2 ? NOSE_MID : TAIL_MID;
 	const top = mid + (TOP(s) - mid) * c;
 	const bottom = mid + (BOTTOM(s) - mid) * c;
-	// Tall stations lean in towards the roof, as a cabin does.
-	const lean = 0.34 * Math.min(Math.max((TOP(s) - 0.85) / 0.45, 0), 1);
-	return { top: LOW_Z + top, bottom: LOW_Z + bottom, half: HALF_WIDTH(s) * c, lean };
+	// A station that rises above the beltline carries a cabin, leaning in more the taller it is.
+	const lean = CABIN_LEAN * Math.min(Math.max((TOP(s) - BELT) / 0.3, 0), 1);
+	return { top: LOW_Z + top, bottom: LOW_Z + bottom, half: HALF_WIDTH(s) * c, belt: LOW_Z + BELT, lean };
 }
 
 /** A point of the station's outline at angle θ from the bottom (θ = 0), round through +y (θ = π/2). */
@@ -106,7 +121,9 @@ function outlinePoint(p, theta) {
 	const v = -Math.cos(theta);
 	const Y = Math.sign(u) * Math.abs(u) ** (2 / EXPONENT);
 	const T = Math.sign(v) * Math.abs(v) ** (2 / EXPONENT);
-	return [p.half * Y * (1 - p.lean * Math.max(0, T) ** 2), (p.top + p.bottom) / 2 + ((p.top - p.bottom) / 2) * T];
+	const z = (p.top + p.bottom) / 2 + ((p.top - p.bottom) / 2) * T;
+	const cabin = p.lean ? Math.min(Math.max((z - p.belt) / (p.top - p.belt), 0), 1) : 0;
+	return [p.half * Y * (1 - p.lean * cabin), z];
 }
 
 /** Points taken round an outline before they are spaced evenly along it. */

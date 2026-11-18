@@ -45,7 +45,7 @@
 	"inputs.answer.value": "Cp {cp}",
 	"inputs.answer.network": "each network",
 	"inputs.answer.mean": "their mean",
-	"inputs.key": "Brown = below mean, white = at mean, blue = above mean",
+	"inputs.key": "Red = below mean, white = at mean, blue = above mean",
 	"inputs.names.fromNose": "from nose",
 	"inputs.names.toTail": "to tail",
 	"inputs.names.fromCentre": "from center plane",

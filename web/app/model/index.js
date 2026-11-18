@@ -15,7 +15,7 @@ import { Surface } from '../../viewer/surface.js';
 import { createAccuracy } from './accuracy.js';
 import { countWord } from './charts.js';
 import { copied, loadCopy, shareValues } from './copy.js';
-import { inputGroups } from './groups.js';
+import { COLORS, inputGroups } from './groups.js';
 import { CAMERA, createInputs, requestAt } from './inputs.js';
 import { measure } from './measures.js';
 import { createNetworks } from './networks.js';
@@ -81,7 +81,11 @@ export function mountModelPage(host, { engine }) {
 	const title = h('h1');
 	const page = h(
 		'div',
-		{ class: 'model-page', 'data-state': 'loading' },
+		{
+			class: 'model-page',
+			'data-state': 'loading',
+			style: ['position', 'surface', 'slice'].map((kind) => `--group-${kind}: ${COLORS[kind]}`).join('; '),
+		},
 		h('header', { class: 'model-top' }, title),
 		notice,
 	);

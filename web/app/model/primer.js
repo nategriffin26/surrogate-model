@@ -4,7 +4,8 @@
 // and predicted by the engine like any car given as arrays; every number here is the engine's explanation at the
 // body's cell, read through the model's own columns.
 
-import { h } from '../dom.js';
+import { h, segmented } from '../dom.js';
+import { icon } from '../icons.js';
 import { aroundLookup, bodySurface, sideLookup } from './body.js';
 import {
 	cm,
@@ -22,7 +23,7 @@ import {
 	vectorSquares,
 	view,
 } from './body-views.js';
-import { shade } from './charts.js';
+import { shade, shadeGradient } from './charts.js';
 import { copied } from './copy.js';
 import { COLORS } from './groups.js';
 
@@ -150,7 +151,8 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			{
 				type: 'button',
 				role: 'tab',
-				style: `--group: ${mode === 'all' ? COLORS.network : COLORS[mode]}`,
+				class: 'button',
+				style: mode === 'all' ? null : `--group: ${COLORS[mode]}`,
 				onclick: () => {
 					ui.mode = i;
 					repaint();
@@ -162,32 +164,20 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		),
 	);
 
-	const choice = (labels, onPick) => {
-		const buttons = labels.map((label, i) =>
-			h(
-				'button',
-				{
-					type: 'button',
-					onclick: () => {
-						onPick(i);
-						repaint();
-					},
-				},
-				label,
-			),
-		);
-		return {
-			el: h('div', { class: 'choice', role: 'group' }, buttons),
-			press: (index) => buttons.forEach((b, i) => b.setAttribute('aria-pressed', String(i === index))),
-		};
-	};
-	const sizes = choice(scales.map(cm), (i) => {
-		ui.size = i;
-	});
-	const parts = choice(
-		PARTS.map((part) => copied(h('span'), `inputs.parts.${part}`)),
+	const sizes = segmented(
+		'Size',
+		scales.map((scale, i) => [i, cm(scale)]),
+		(i) => {
+			ui.size = i;
+			repaint();
+		},
+	);
+	const parts = segmented(
+		'Part',
+		PARTS.map((part, i) => [i, copied(h('span'), `inputs.parts.${part}`)]),
 		(i) => {
 			ui.part = i;
+			repaint();
 		},
 	);
 	const stationName = h('output', { class: 'station-name' });
@@ -196,13 +186,14 @@ export function createPrimer({ card, groups, engine, onShow }) {
 			'button',
 			{
 				type: 'button',
+				class: `button step-${by < 0 ? 'ahead' : 'behind'}`,
 				'aria-label': label,
 				onclick: () => {
 					ui.station = Math.min(Math.max(ui.station + by, 0), stations.length - 1);
 					repaint();
 				},
 			},
-			by < 0 ? '◂' : '▸',
+			icon('chevron'),
 		);
 	const ahead = step(-1, 'Station further ahead');
 	const behind = step(1, 'Station further behind');
@@ -239,7 +230,12 @@ export function createPrimer({ card, groups, engine, onShow }) {
 				'div',
 				{},
 				vectorHost,
-				h('p', { class: 'colour-key copy-block' }, h('i', { class: 'ramp' }), copied(h('span'), 'inputs.key')),
+				h(
+					'p',
+					{ class: 'colour-key copy-block' },
+					h('i', { class: 'ramp', style: `background: ${shadeGradient()}` }),
+					copied(h('span'), 'inputs.key'),
+				),
 			),
 			readout,
 		),
@@ -364,8 +360,8 @@ export function createPrimer({ card, groups, engine, onShow }) {
 		// The controls of every mode share one place, the others inert and unseen, so the figure keeps the height of the
 		// tallest at any width and with any words.
 		for (const [id, control] of Object.entries(controls)) control.inert = id !== mode;
-		sizes.press(ui.size);
-		parts.press(ui.part);
+		sizes.show(ui.size);
+		parts.show(ui.part);
 		ahead.disabled = ui.station === 0;
 		behind.disabled = ui.station === stations.length - 1;
 		const dx = stations[ui.station];

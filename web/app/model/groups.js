@@ -2,8 +2,12 @@
 // order, each with its colour. The page is drawn for the kinds below; a model with an input of any other kind stops
 // the page with an error naming it.
 
-/** The page's colours: each kind of input's, and the networks' (the theme's --steel, --orange, --teal and --link). */
-export const COLORS = { position: '#2f739c', surface: '#a35b1a', slice: '#197b80', network: '#0b6fbf' };
+/**
+ * The page's colours: each kind of input's, three steps of the theme's blue that differ in lightness (OKLab L 0.36,
+ * 0.53 and 0.70), so they tell apart without hue; and the networks', the theme's --link. The page sets each kind's as
+ * a custom property on its root (`--group-position`, `--group-surface`, `--group-slice`) for the stylesheet.
+ */
+export const COLORS = { position: '#173e63', surface: '#0b6fbf', slice: '#5fa4de', network: '#0b6fbf' };
 
 /**
  * For a kind that reads the same things over and over, the column field it repeats over, of which the page shows one

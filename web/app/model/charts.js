@@ -3,7 +3,7 @@
 
 import { h } from '../dom.js';
 import { niceTicks } from '../format.js';
-import { rampCss } from '../ramps.js';
+import { RAMPS, rampCss } from '../ramps.js';
 import { copied, hasCopy } from './copy.js';
 
 const NUMBER_WORDS = [
@@ -62,10 +62,12 @@ export function colorBar({ ramp, lo, hi }, labelKey) {
 	);
 }
 
-const NEGATIVE = [163, 91, 26];
-const POSITIVE = [11, 111, 191];
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+/** The pressure map's ends (coolwarm, `ramps.js`): its red below the mean, its blue above. */
+const NEGATIVE = rgb(RAMPS.coolwarm.stops.at(-1)[1]);
+const POSITIVE = rgb(RAMPS.coolwarm.stops[0][1]);
 
-/** A value's shade: white at zero, towards blue for positive values and orange for negative, saturating smoothly. */
+/** A value's shade: white at zero, towards blue for positive values and red for negative, saturating smoothly. */
 export function shade(value, scale) {
 	const strength = Math.tanh(Math.abs(value) / scale);
 	const [r, g, b] = value < 0 ? NEGATIVE : POSITIVE;
@@ -73,11 +75,14 @@ export function shade(value, scale) {
 	return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
+/** The shades as a CSS gradient for their key, from the most negative through white to the most positive. */
+export const shadeGradient = () => `linear-gradient(90deg, ${shade(-3, 1)}, #fff 50%, ${shade(3, 1)})`;
+
 const INK = [13, 34, 51];
 
 /** A colour per size of nearby surface, smallest first: the group's colour, darker for the smallest, lighter for the largest. */
 export function sizeShades(hex, count) {
-	const colour = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+	const colour = rgb(hex);
 	return Array.from({ length: count }, (_, k) => {
 		const t = -0.35 + (0.95 * k) / Math.max(count - 1, 1);
 		const towards = t < 0 ? INK : [255, 255, 255];
