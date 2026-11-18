@@ -112,14 +112,12 @@ void main() {
 	gl_Position = projectionMatrix * viewMatrix * world;
 }`;
 
-// The weight a surface element has in a regional input: the voxel grid is averaged with its mirror image across
-// the centre plane, so an element counts half in its own voxel and half in its mirror's.
+// The weight a surface element has in a regional input: the trilinear weight of the voxel it lies in.
 const TINT_FRAGMENT = /* glsl */ `
 uniform vec3 uMin[${BLOCKS}];
 uniform vec3 uWeights[${BLOCKS}];
 uniform float uCell[${BLOCKS}];
 uniform float uStrength[${BLOCKS}];
-uniform float uMirrorY;
 uniform float uSizes;
 uniform vec3 uColor;
 varying vec3 vWorld;
@@ -130,10 +128,9 @@ float blockWeight(vec3 q, int b) {
 	return w.x * w.y * w.z;
 }
 void main() {
-	vec3 mirrored = vec3(vWorld.x, uMirrorY - vWorld.y, vWorld.z);
 	float total = 0.0;
 	for (int b = 0; b < ${BLOCKS}; b++) {
-		if (uStrength[b] > 0.0) total += uStrength[b] * 0.5 * (blockWeight(vWorld, b) + blockWeight(mirrored, b));
+		if (uStrength[b] > 0.0) total += uStrength[b] * blockWeight(vWorld, b);
 	}
 	float alpha = 0.75 * clamp(total / max(uSizes, 1.0), 0.0, 1.0);
 	if (alpha < 0.01) discard;
@@ -184,7 +181,6 @@ export class Stencil {
 				uWeights: { value: Array.from({ length: BLOCKS }, () => new THREE.Vector3()) },
 				uCell: { value: new Array(BLOCKS).fill(1) },
 				uStrength: { value: new Array(BLOCKS).fill(0) },
-				uMirrorY: { value: 0 },
 				uSizes: { value: 1 },
 				uColor: { value: new THREE.Color(KIND_COLORS.bend) },
 				uLift: { value: 0.002 },
@@ -206,7 +202,6 @@ export class Stencil {
 		const tint = new THREE.Mesh(geometry, this.tintMaterial);
 		tint.renderOrder = ORDER.tint;
 		tint.frustumCulled = false;
-		this.tintMaterial.uniforms.uMirrorY.value = 2 * Math.fround(lookups.yCenter);
 		this.car = { result, cutter: new SurfaceCutter(mesh, lookups.definition.rasterStep), tint, segments: new WeakMap() };
 	}
 

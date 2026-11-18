@@ -1,4 +1,4 @@
-"""Physics, symmetry, and geometry-only boundary tests for Gate 1 preprocessing."""
+"""Physics and geometry-only boundary tests for Gate 1 preprocessing."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import pyvista as pv
 
-from surrogate.features import FEATURE_COLUMNS, SurfaceContext, extract_query_features
+from surrogate.features import DX_OWN, FEATURE_COLUMNS, SurfaceContext, extract_query_features
 from surrogate.surface import compute_pressure_forces, read_vtp_surface, sample_cells_by_area
 
 
@@ -94,24 +94,22 @@ def test_geometry_only_vtp_without_cp_and_poisoned_solver_arrays_produce_identic
     np.testing.assert_allclose(f_geom, f_full, atol=1e-6)
 
 
-def test_mirror_symmetric_points_receive_identical_feature_vectors(tmp_path: Path) -> None:
-    """Catches broken lateral symmetry folding on y and n_y across left/right car halves."""
-    vtp = _make_closed_box_vtp(tmp_path / "sym.vtp", include_cp=False)
-    surf = read_vtp_surface(vtp)
-    ctx = SurfaceContext.from_surface(surf)
+def test_a_part_on_one_side_of_the_car_is_not_seen_from_the_other_side(tmp_path: Path) -> None:
+    """Catches lookups that blend the two halves of the car: a part under the floor on the +y side
+    only must show up in the slices read on that side and not in those of the mirrored points."""
+    body = pv.Box(bounds=(-0.8, 3.8, -0.9, 0.9, -0.3, 1.1)).triangulate()
+    part = pv.Box(bounds=(1.2, 1.8, 0.2, 0.6, -0.42, -0.3)).triangulate().subdivide(2)
+    body.merge(part).save(tmp_path / "one_sided.vtp")
+    ctx = SurfaceContext.from_surface(read_vtp_surface(tmp_path / "one_sided.vtp"))
 
-    left_centers = np.array([[0.5, 0.45, 0.35], [2.1, 0.85, 0.15]], dtype=np.float32)
-    left_normals = np.array([[-0.3, 0.8, 0.52], [0.1, 0.99, 0.1]], dtype=np.float32)
+    centers = np.asarray(part.cell_centers().points, dtype=np.float32)
+    under = centers[centers[:, 2] < -0.41]
+    mirrored = under * np.array([1.0, -1.0, 1.0], dtype=np.float32)
+    down = np.tile(np.array([0.0, 0.0, -1.0], dtype=np.float32), (len(under), 1))
 
-    right_centers = left_centers.copy()
-    right_centers[:, 1] *= -1.0
-    right_normals = left_normals.copy()
-    right_normals[:, 1] *= -1.0
-
-    f_left = extract_query_features(ctx, left_centers, left_normals)
-    f_right = extract_query_features(ctx, right_centers, right_normals)
-
-    np.testing.assert_allclose(f_left, f_right, atol=1e-5)
+    own_slice_has_body = FEATURE_COLUMNS.slices.start + 2 * (1 + len(DX_OWN)) + 3
+    assert np.all(extract_query_features(ctx, under, down)[:, own_slice_has_body] == 1.0)
+    assert np.all(extract_query_features(ctx, mirrored, down)[:, own_slice_has_body] == 0.0)
 
 
 def test_area_weighted_sampling_matches_physical_surface_share() -> None:

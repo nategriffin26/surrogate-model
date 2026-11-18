@@ -11,7 +11,7 @@ import { NetworkFigure, shade } from './network.js';
 const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const word = (n) => WORDS[n] ?? String(n);
 const capital = (text) => text[0].toUpperCase() + text.slice(1);
-/** "3, 8, 25 and 75 cm" */
+/** Values as a list in a sentence, with their unit: "a, b, c and d cm". */
 const listOf = (values, unit) => `${values.slice(0, -1).join(', ')}${values.length > 1 ? ' and ' : ''}${values.at(-1)} ${unit}`;
 const centimetres = (metres) => Math.round(metres * 100);
 const distinct = (values) => [...new Set(values)].sort((a, b) => a - b);
@@ -35,7 +35,7 @@ function layerStories(card, groups) {
 		position: {
 			drawn: ['position'],
 			title: 'Where it is',
-			text: 'How far it is from the nose, the tail, the centre plane and the lowest point of the car, and which way the surface faces there.',
+			text: 'How far it is from the nose and from the tail, how far it lies from the centre plane and on which side, its height above the lowest point of the car, and which way the surface faces there.',
 		},
 		bend: {
 			drawn: ['bend'],
@@ -45,7 +45,7 @@ function layerStories(card, groups) {
 		slice: {
 			drawn: ['slice', 'neighbour', 'outline'],
 			title: 'The car’s outline along the flow',
-			text: `Where the car’s top and bottom are in the streamwise cut through the point, out to ${reach} m ahead and behind; the same in cuts ${listOf(offsets('neighbour', 1), 'cm')} to either side; how far out the car reaches at the point’s height and ${listOf(offsets('outline', 2), 'cm')} above and below it; and whether there is car at each of those places. It tells the point what the air has passed on its way there, and what lies behind.`,
+			text: `Where the car’s top and bottom are in the streamwise cut through the point, out to ${reach} m ahead and behind; the same in cuts ${listOf(offsets('neighbour', 1), 'cm')} to either side; how far out the car reaches on the point’s side, at the point’s height and ${listOf(offsets('outline', 2), 'cm')} above and below it; and whether there is car at each of those places. It tells the point what the air has passed on its way there, and what lies behind.`,
 		},
 	};
 }
@@ -158,7 +158,7 @@ export function createStory({ card, groups, layers, act }) {
 				bar(entry.row.crossValidationR2, 1, entry.row.crossValidationR2.toFixed(3)),
 				bar(dragCounts(entry.row.dragMae), worst, String(dragCounts(entry.row.dragMae)), baseline ? dragCounts(baseline.dragMae) : null))),
 			baseline ? h('p', { class: 'chart-key' }, h('i', { class: 'reference-key' }), `Predicting every car’s mean drag: ${dragCounts(baseline.dragMae)} counts`) : null),
-		prose(`The bend brings the detail in pressure; the outline along the flow brings the drag error down; together they do both. A network that learns its own summary of the whole car memorises ${word(card.trainRuns.length)} cars and does worst. Boosted trees given the same numbers come close on pressure, not on drag.`));
+		prose(`The bend brings the detail in pressure; the outline along the flow brings the drag error down. All ${word(layers.length)} together give the best pressure, but a larger drag error than the outline alone, and larger than predicting every car’s mean drag. A network that learns its own summary of the whole car memorises ${word(card.trainRuns.length)} cars and does worst on pressure. Boosted trees given the same numbers come close on pressure, not on drag.`));
 
 	// One network.
 	const network = new NetworkFigure({ card, act });

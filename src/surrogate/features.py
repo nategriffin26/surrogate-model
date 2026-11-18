@@ -1,17 +1,19 @@
 """Deterministic multi-scale geometric feature extraction on surface meshes.
 
-Builds three symmetry-aware geometric context blocks strictly from polygon coordinates,
-outward normals, and areas:
-  1. `local`    (10 cols): car-frame offsets, ground clearance, symmetry-folded normal,
+Builds three geometric context blocks strictly from polygon coordinates, outward normals, and
+areas:
+  1. `local`    (10 cols): car-frame offsets (signed sideways), ground clearance, normal,
                            and normalized bounding-box coordinates.
-  2. `regional` (60 cols): 3, 8, 25, and 75 cm voxelized normal & area-density fields
+  2. `regional` (60 cols): voxelized normal & area-density fields at each `VOXEL_SCALES` size
                            plus local curvature (`n_cell - n_voxel`) and ±h streamwise steps.
   3. `slices`  (121 cols): streamwise XZ buttock-line envelopes (±1.6 m stencil + explicit
                            on-body occupancy masks), neighboring Y-slice hops (±4, ±12, ±36 cm),
                            and XY waterline planform offsets for side-facing body panels.
 
-The lookup grids are laid out in the file's own coordinates (`DOMAIN_*`), which every
-DrivAerML run shares; a car placed elsewhere is caught by the coverage check.
+Every lookup is laid out on the car as it is: its two sides are kept apart, so a part that
+exists on one side only is read on that side only. The grids are in the file's own coordinates
+(`DOMAIN_*`), which every DrivAerML run shares; a car placed elsewhere is caught by the coverage
+check.
 """
 
 from __future__ import annotations
@@ -34,9 +36,9 @@ DX_OWN = (-1.6, -0.8, -0.4, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6)  #
 DX_NEIGHBOR = (-0.3, 0.0, 0.3)
 DY_NEIGHBOR = (-0.36, -0.12, -0.04, 0.04, 0.12, 0.36)  # x3 from two raster cells
 DZ_NEIGHBOR = (-0.12, -0.04, 0.04, 0.12)
-# 75 cm divided by three at each step. 3 cm is the smallest box that still holds ten or more
-# mesh cells (2 to 10 mm across) on 98% of the surface; at 2 cm that falls to 75%.
-VOXEL_SCALES = (0.03, 0.08, 0.25, 0.75)
+# About three times larger at each step, up to 75 cm. 3 cm is the smallest box that still holds
+# ten or more mesh cells (2 to 10 mm across) on 98% of the surface; at 2 cm that falls to 75%.
+VOXEL_SCALES = (0.03, 0.10, 0.25, 0.75)
 
 
 @dataclass(frozen=True)
@@ -73,13 +75,13 @@ class SurfaceContext:
     nx: int
     ny: int
     nz: int
-    z_top: np.ndarray            # (nx, ny) upper envelope z(x, |y|)
-    z_bot: np.ndarray            # (nx, ny) lower envelope z(x, |y|)
+    z_top: np.ndarray            # (nx, ny) upper envelope z(x, y), y from -DOMAIN_Y_HALF
+    z_bot: np.ndarray            # (nx, ny) lower envelope z(x, y)
     xz_occupied: np.ndarray      # (nx, ny) bool
-    y_out: np.ndarray            # (nx, nz) outboard waterline |y|(x, z)
-    x_first_by_y: np.ndarray     # (ny,) leading-edge x at each |y|
-    x_last_by_y: np.ndarray      # (ny,) trailing-edge x at each |y|
-    z_peak_by_y: np.ndarray      # (ny,) max height along each |y| strip
+    y_out: np.ndarray            # (2, nx, nz) how far the body reaches from the centre plane at (x, z): [0] toward -y, [1] toward +y
+    x_first_by_y: np.ndarray     # (ny,) leading-edge x of each y strip
+    x_last_by_y: np.ndarray      # (ny,) trailing-edge x of each y strip
+    z_peak_by_y: np.ndarray      # (ny,) max height along each y strip
     section_area_x: np.ndarray   # (nx,) cross-sectional area curve S(x) in m^2
     voxel_grids: tuple[_VoxelScaleGrid, ...]
 
@@ -92,18 +94,18 @@ class SurfaceContext:
         y_center = 0.5 * (ymin + ymax)
 
         x = c[:, 0]
-        y_abs = np.abs(c[:, 1] - y_center)
+        y_rel = c[:, 1] - y_center
         z = c[:, 2]
 
         x0, x1 = DOMAIN_X
         z0, z1 = DOMAIN_Z
         h = RASTER_STEP
         nx = int(round((x1 - x0) / h))
-        ny = int(round(DOMAIN_Y_HALF / h))
+        ny = 2 * int(round(DOMAIN_Y_HALF / h))
         nz = int(round((z1 - z0) / h))
 
         ix = np.clip(((x - x0) / h).astype(np.int64), 0, nx - 1)
-        iy = np.clip((y_abs / h).astype(np.int64), 0, ny - 1)
+        iy = np.clip(((y_rel + DOMAIN_Y_HALF) / h).astype(np.int64), 0, ny - 1)
         iz = np.clip(((z - z0) / h).astype(np.int64), 0, nz - 1)
 
         z_top_flat = np.full(nx * ny, -np.inf, dtype=np.float32)
@@ -120,16 +122,17 @@ class SurfaceContext:
         z_bot = z_bot_flat.reshape(nx, ny)
         xz_occupied = occ_flat.reshape(nx, ny)
 
-        y_out_flat = np.zeros(nx * nz, dtype=np.float32)
-        np.maximum.at(y_out_flat, ix * nz + iz, y_abs)
-        y_out = y_out_flat.reshape(nx, nz)
+        side = (y_rel >= 0.0).astype(np.int64)
+        y_out_flat = np.zeros(2 * nx * nz, dtype=np.float32)
+        np.maximum.at(y_out_flat, (side * nx + ix) * nz + iz, np.abs(y_rel))
+        y_out = y_out_flat.reshape(2, nx, nz)
 
         xs = x0 + h * np.arange(nx, dtype=np.float32)
         any_occ = xz_occupied.any(axis=0)
         x_first = np.where(any_occ, xs[np.argmax(xz_occupied, axis=0)], xmin).astype(np.float32)
         x_last = np.where(any_occ, xs[nx - 1 - np.argmax(xz_occupied[::-1], axis=0)], xmax).astype(np.float32)
         z_peak = z_top.max(axis=0).astype(np.float32)
-        section_area_x = ((z_top - z_bot).sum(axis=1) * h * 2.0).astype(np.float32)
+        section_area_x = ((z_top - z_bot).sum(axis=1) * h).astype(np.float32)
 
         # Multi-scale 3D voxel grids, one per entry of VOXEL_SCALES
         voxel_grids: list[_VoxelScaleGrid] = []
@@ -156,18 +159,12 @@ class SurfaceContext:
                 np.bincount(flat_v, weights=areas * n[:, k], minlength=size).reshape(shp)
                 for k in range(3)
             ]
-            # Symmetrize across the y=0 midplane so minor triangulation asymmetry
-            # never produces asymmetric features or Cp predictions on a symmetric body.
-            area_sum = 0.5 * (area_raw + area_raw[:, ::-1, :])
-            nx_sum = 0.5 * (norm_raw[0] + norm_raw[0][:, ::-1, :])
-            ny_sum = 0.5 * (norm_raw[1] - norm_raw[1][:, ::-1, :])
-            nz_sum = 0.5 * (norm_raw[2] + norm_raw[2][:, ::-1, :])
             voxel_grids.append(
                 _VoxelScaleGrid(
                     scale=scale,
                     origin=g_min,
-                    area_sum=area_sum,
-                    normal_sum=(nx_sum, ny_sum, nz_sum),
+                    area_sum=area_raw,
+                    normal_sum=(norm_raw[0], norm_raw[1], norm_raw[2]),
                 )
             )
 
@@ -220,26 +217,22 @@ def extract_query_features(
     height = max(zmax - zmin, 1e-6)
 
     sx = query_centers[:, 0].astype(np.float32, copy=False)
-    sy_rel = (query_centers[:, 1] - context.y_center).astype(np.float32)
-    sya = np.abs(sy_rel)
-    y_sign = np.where(sy_rel >= 0.0, 1.0, -1.0).astype(np.float32)
+    sy = (query_centers[:, 1] - context.y_center).astype(np.float32)
     sz = query_centers[:, 2].astype(np.float32, copy=False)
-
-    sn = query_normals.astype(np.float32, copy=True)
-    sn[:, 1] *= y_sign  # outboard-positive lateral normal
+    sn = query_normals.astype(np.float32, copy=False)
 
     # 1. Local cell features (10 cols)
     f_local = np.stack(
         [
             sx - xmin,
             xmax - sx,
-            sya,
+            sy,
             sz - zmin,
             sn[:, 0],
             sn[:, 1],
             sn[:, 2],
             (sx - xmin) / length,
-            sya / half_width,
+            sy / half_width,
             (sz - zmin) / height,
         ],
         axis=1,
@@ -251,7 +244,7 @@ def extract_query_features(
         h_v = vg.scale
 
         def _lookup_voxel(dx_shift: float, vg: _VoxelScaleGrid = vg, h_v: float = h_v) -> tuple[np.ndarray, np.ndarray]:
-            pts = np.stack([sx + dx_shift, sy_rel, sz], axis=1)
+            pts = np.stack([sx + dx_shift, sy, sz], axis=1)
             coords = ((pts - vg.origin) / h_v - 0.5).T
             dens = map_coordinates(vg.area_sum, coords, order=1, mode="nearest")
             vec = np.stack(
@@ -259,7 +252,6 @@ def extract_query_features(
                 axis=1,
             )
             vec = vec / np.maximum(dens, 1e-9)[:, None]
-            vec[:, 1] *= y_sign
             return vec.astype(np.float32), (dens / (h_v * h_v)).astype(np.float32)
 
         v0, d0 = _lookup_voxel(0.0)
@@ -274,29 +266,36 @@ def extract_query_features(
     z0 = DOMAIN_Z[0]
     h = RASTER_STEP
 
-    def _xz_lookup(xq: np.ndarray, yq_abs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _y_row(yq: np.ndarray) -> np.ndarray:
+        return np.clip(((yq + DOMAIN_Y_HALF) / h).astype(np.int64), 0, context.ny - 1)
+
+    def _xz_lookup(xq: np.ndarray, yq: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         i = np.clip(((xq - x0) / h).astype(np.int64), 0, context.nx - 1)
-        j = np.clip((np.abs(yq_abs) / h).astype(np.int64), 0, context.ny - 1)
+        j = _y_row(yq)
         return context.z_top[i, j], context.z_bot[i, j], context.xz_occupied[i, j].astype(np.float32)
+
+    # The plan-view outline on the cell's own side of the centre plane, as how far it lies outboard of the cell.
+    side = (sy >= 0.0).astype(np.int64)
+    sy_from_centre = np.abs(sy)
 
     def _xy_lookup(xq: np.ndarray, zq: np.ndarray) -> np.ndarray:
         i = np.clip(((xq - x0) / h).astype(np.int64), 0, context.nx - 1)
         k = np.clip(((zq - z0) / h).astype(np.int64), 0, context.nz - 1)
-        return context.y_out[i, k]
+        return context.y_out[side, i, k] - sy_from_centre
 
     xz_own_cols: list[np.ndarray] = []
     own_masks: list[np.ndarray] = []
 
-    zt0, zb0, m0 = _xz_lookup(sx, sya)
+    zt0, zb0, m0 = _xz_lookup(sx, sy)
     xz_own_cols.extend([zt0 - sz, zb0 - sz])
     own_masks.append(m0)
 
     for dx in DX_OWN:
-        zt_d, zb_d, m_d = _xz_lookup(sx + dx, sya)
+        zt_d, zb_d, m_d = _xz_lookup(sx + dx, sy)
         xz_own_cols.extend([zt_d - sz, zb_d - sz])
         own_masks.append(m_d)
 
-    j_row = np.clip((sya / h).astype(np.int64), 0, context.ny - 1)
+    j_row = _y_row(sy)
     xz_own_cols.extend(
         [
             sx - context.x_first_by_y[j_row],
@@ -309,16 +308,16 @@ def extract_query_features(
     nb_masks: list[np.ndarray] = []
     for dy in DY_NEIGHBOR:
         for dx in DX_NEIGHBOR:
-            zt_n, zb_n, m_n = _xz_lookup(sx + dx, sya + dy)
+            zt_n, zb_n, m_n = _xz_lookup(sx + dx, sy + dy)
             xz_nb_cols.extend([zt_n - sz, zb_n - sz])
             nb_masks.append(m_n)
 
-    xy_cols: list[np.ndarray] = [_xy_lookup(sx, sz) - sya]
+    xy_cols: list[np.ndarray] = [_xy_lookup(sx, sz)]
     for dx in DX_OWN:
-        xy_cols.append(_xy_lookup(sx + dx, sz) - sya)
+        xy_cols.append(_xy_lookup(sx + dx, sz))
     for dz in DZ_NEIGHBOR:
         for dx in DX_NEIGHBOR:
-            xy_cols.append(_xy_lookup(sx + dx, sz + dz) - sya)
+            xy_cols.append(_xy_lookup(sx + dx, sz + dz))
 
     f_slices = np.column_stack(xz_own_cols + own_masks + xz_nb_cols + nb_masks + xy_cols).astype(np.float32)
 

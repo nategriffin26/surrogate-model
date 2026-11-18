@@ -2,7 +2,11 @@
  * The numbers the networks are told about a surface point, as `features.py` defines them: the point's
  * position and facing; how the surface bends around it at each voxel scale; the body's outline in the
  * point's own streamwise slice and in the slices beside it; the plan-view outline; and flags for
- * whether the body is there at each place looked at.
+ * whether the body is there at each place looked at. Nothing is folded across the centre plane: the
+ * lookups keep the car's two sides apart, and a point is read on its own side.
+ *
+ * Axes are the file's: x downstream, z up, and so (right-handed) +y toward the car's right as seen
+ * from the driver's seat.
  *
  * The definition's constants (voxel scales, stencils, raster, domain) come from the model file, which
  * `export_web.py` writes from `features.py`, so a model trained on another definition brings its own.
@@ -25,8 +29,10 @@ const f32 = Math.fround;
  * @property {number[]} dzNeighbor
  * @property {number[]} voxelScales
  *
- * @typedef {FeatureDefinition & { h: number, x0: number, z0: number, nx: number, ny: number, nz: number,
+ * @typedef {FeatureDefinition & { h: number, x0: number, y0: number, z0: number, nx: number, ny: number, nz: number,
  *   dxOwn32: number[], dxNeighbor32: number[], dyNeighbor32: number[], dzNeighbor32: number[] }} FeatureLayout
+ *   The raster's origin (x0, y0, z0) and step h in float32, its size (nx, ny, nz) over the domain, y from
+ *   −domainYHalf to domainYHalf relative to the car's centre plane.
  */
 
 /**
@@ -40,9 +46,10 @@ export function featureLayout(definition) {
     ...definition,
     h: f32(rasterStep),
     x0: f32(domainX[0]),
+    y0: f32(-domainYHalf),
     z0: f32(domainZ[0]),
     nx: Math.round((domainX[1] - domainX[0]) / rasterStep),
-    ny: Math.round(domainYHalf / rasterStep),
+    ny: 2 * Math.round(domainYHalf / rasterStep),
     nz: Math.round((domainZ[1] - domainZ[0]) / rasterStep),
     dxOwn32: definition.dxOwn.map(f32),
     dxNeighbor32: definition.dxNeighbor.map(f32),
@@ -59,10 +66,12 @@ export function featureLayout(definition) {
 /**
  * For each column, in the networks' order: `kind`, a stable id of its family; `group`, the family's
  * display label; a short plain name; its unit; `offset`, the place it reads relative to the point,
- * [dx, dy, dz] in metres with dx downstream, dy outboard (away from the centre plane, on the point's
- * side) and dz up; and `along`, for a distance in metres, the unit direction it runs from that place,
- * so place + value × along is where it measured to (a body surface, or for the distances from nose,
- * tail, centre plane and lowest point that plane), null for every other column.
+ * [dx, dy, dz] in metres along the file's axes (dx downstream, dy toward +y, dz up); and `along`, for
+ * a distance in metres, the unit direction it runs from that place, so place + value × along is where
+ * it measured to (a body surface, or for the distances from nose, tail, centre plane and lowest point
+ * that plane), null for every other column. The plan-view outline is measured outboard, away from the
+ * centre plane on the point's own side: its `along` is [0, 1, 0] for a point on the +y side and is
+ * turned to [0, −1, 0] for a point on the −y side.
  * @param {FeatureDefinition} definition
  * @returns {{ kind: string, group: string, name: string, unit: string, offset: number[], along: number[] | null }[]}
  */
@@ -77,22 +86,23 @@ export function describeColumns({ voxelScales, dxOwn, dxNeighbor, dyNeighbor, dz
       if (value) parts.push(`${Math.round(Math.abs(value) * 100)} cm ${value < 0 ? negative : positive}`);
     };
     say(dx, 'forward', 'rearward');
-    say(dy, 'inboard', 'outboard');
+    say(dy, 'toward −y', 'toward +y');
     say(dz, 'down', 'up');
     return parts.length ? `, ${parts.join(', ')}` : '';
   };
-  const forward = [-1, 0, 0], rearward = [1, 0, 0], inboard = [0, -1, 0], outboard = [0, 1, 0], down = [0, 0, -1], up = [0, 0, 1];
+  const forward = [-1, 0, 0], rearward = [1, 0, 0], towardMinusY = [0, -1, 0], outboard = [0, 1, 0], down = [0, 0, -1], up = [0, 0, 1];
 
   const position = 'Position and facing';
   add('position', position, 'Distance from nose', { along: forward });
   add('position', position, 'Distance to tail', { along: rearward });
-  add('position', position, 'Distance from centre plane', { along: inboard });
+  // Signed, so a point at y below the centre plane reads a negative value and still reaches the plane.
+  add('position', position, 'y from centre plane', { along: towardMinusY });
   add('position', position, 'Height above lowest point', { along: down });
   add('position', position, 'Facing rearward');
-  add('position', position, 'Facing outboard');
+  add('position', position, 'Facing +y');
   add('position', position, 'Facing up');
   add('position', position, 'Share of length from nose');
-  add('position', position, 'Share of half-width from centre');
+  add('position', position, 'y from centre plane, share of half-width');
   add('position', position, 'Share of height from bottom');
 
   for (const scale of voxelScales) {
@@ -100,13 +110,13 @@ export function describeColumns({ voxelScales, dxOwn, dxNeighbor, dyNeighbor, dz
     const block = (offset) => {
       const label = where(offset);
       add('bend', group, `Mean facing rearward${label}`, { offset });
-      add('bend', group, `Mean facing outboard${label}`, { offset });
+      add('bend', group, `Mean facing +y${label}`, { offset });
       add('bend', group, `Mean facing up${label}`, { offset });
       add('bend', group, `Surface density${label}`, { offset });
     };
     block([0, 0, 0]);
     add('bend', group, 'Bend, rearward');
-    add('bend', group, 'Bend, outboard');
+    add('bend', group, 'Bend, +y');
     add('bend', group, 'Bend, up');
     block([-scale, 0, 0]);
     block([scale, 0, 0]);
@@ -164,7 +174,7 @@ export function kindsWithin(columns, ranges) {
 }
 
 /**
- * @typedef {Object} VoxelGrid  Area and area-weighted normal sums on a regular grid, mirrored across y = 0.
+ * @typedef {Object} VoxelGrid  Area and area-weighted normal sums on a regular grid centred on the car's centre plane.
  *   Summed in float64 as the reference does, then kept as float32: a fine grid is tens of MB, every
  *   helper worker holds a copy, and the features read from it move by under 1e-6.
  * @property {number} scale
@@ -179,11 +189,12 @@ export function kindsWithin(columns, ranges) {
  * @property {FeatureLayout} layout
  * @property {number[]} bounds
  * @property {number} yCenter
- * @property {Float32Array} zTop        (nx, ny) highest centre in each (x, |y|) column
+ * @property {Float32Array} zTop        (nx, ny) highest centre in each (x, y) column, rows from y = −domainYHalf
  * @property {Float32Array} zBottom     (nx, ny) lowest
  * @property {Float32Array} occupied    (nx, ny) 1 where the column holds any polygon
- * @property {Float32Array} yOut        (nx, nz) outermost |y| in each (x, z) column
- * @property {Float32Array} xFirst      (ny) leading x of each |y| strip
+ * @property {Float32Array} yOut        (2, nx, nz) how far the body reaches from the centre plane in each
+ *   (x, z) column: [0] toward −y, [1] toward +y
+ * @property {Float32Array} xFirst      (ny) leading x of each y strip
  * @property {Float32Array} xLast       (ny) trailing x
  * @property {Float32Array} zPeak       (ny) highest z
  * @property {VoxelGrid[]} voxels
@@ -196,7 +207,7 @@ export function kindsWithin(columns, ranges) {
  */
 export function buildContext(cells, layout) {
   const { centers, normals, areas, bounds } = cells;
-  const { h, x0, z0, nx, ny, nz } = layout;
+  const { h, x0, y0, z0, nx, ny, nz } = layout;
   const [xmin, xmax, ymin, ymax, zmin] = bounds;
   const yCenter = 0.5 * (ymin + ymax);
   const yCenter32 = f32(yCenter);
@@ -204,21 +215,22 @@ export function buildContext(cells, layout) {
 
   const zTop = new Float32Array(nx * ny).fill(-Infinity);
   const zBottom = new Float32Array(nx * ny).fill(Infinity);
-  const yOut = new Float32Array(nx * nz);
+  const yOut = new Float32Array(2 * nx * nz);
   const voxels = layout.voxelScales.map((scale) => voxelGrid(scale, layout));
 
   for (let c = 0; c < cellCount; c++) {
     const x = centers[3 * c];
     const yRelative = f32(centers[3 * c + 1] - yCenter32);
-    const yAbs = Math.abs(yRelative);
+    const fromCentre = Math.abs(yRelative);
     const z = centers[3 * c + 2];
     const ix = clamp(Math.trunc(f32(f32(x - x0) / h)), nx);
-    const iy = clamp(Math.trunc(f32(yAbs / h)), ny);
+    const iy = clamp(Math.trunc(f32(f32(yRelative - y0) / h)), ny);
     const iz = clamp(Math.trunc(f32(f32(z - z0) / h)), nz);
     const column = ix * ny + iy;
     if (z > zTop[column]) zTop[column] = z;
     if (z < zBottom[column]) zBottom[column] = z;
-    if (yAbs > yOut[ix * nz + iz]) yOut[ix * nz + iz] = yAbs;
+    const reach = ((yRelative >= 0 ? nx : 0) + ix) * nz + iz;
+    if (fromCentre > yOut[reach]) yOut[reach] = fromCentre;
 
     const area = areas[c];
     for (const grid of voxels) {
@@ -265,7 +277,6 @@ export function buildContext(cells, layout) {
   }
 
   for (const grid of voxels) {
-    mirror(grid);
     for (const field of ['area', 'normalX', 'normalY', 'normalZ']) grid[field] = new Float32Array(grid[field]);
   }
   return { layout, bounds, yCenter, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, voxels };
@@ -291,25 +302,6 @@ function voxelGrid(scale, { domainX, domainYHalf, domainZ }) {
   };
 }
 
-/** Average each grid with its mirror image across y = 0 (the lateral normal changes sign). */
-function mirror(grid) {
-  const [sx, sy, sz] = grid.shape;
-  for (let x = 0; x < sx; x++) {
-    for (let y = 0; y < sy / 2; y++) {
-      for (let z = 0; z < sz; z++) {
-        const a = (x * sy + y) * sz + z;
-        const b = (x * sy + (sy - 1 - y)) * sz + z;
-        for (const [field, sign] of [[grid.area, 1], [grid.normalX, 1], [grid.normalY, -1], [grid.normalZ, 1]]) {
-          const first = field[a];
-          const second = field[b];
-          field[a] = 0.5 * (first + sign * second);
-          field[b] = 0.5 * (second + sign * first);
-        }
-      }
-    }
-  }
-}
-
 function clamp(index, size) {
   return index < 0 ? 0 : index >= size ? size - 1 : index;
 }
@@ -324,7 +316,7 @@ function clamp(index, size) {
  */
 export function computeFeatures(context, positions, normals, first, count, out, stride = context.layout.count) {
   const { layout, zTop, zBottom, occupied, yOut, xFirst, xLast, zPeak, voxels } = context;
-  const { h, x0, z0, nx, ny, nz, dxOwn32, dxNeighbor32, dyNeighbor32, dzNeighbor32 } = layout;
+  const { h, x0, y0, z0, nx, ny, nz, dxOwn32, dxNeighbor32, dyNeighbor32, dzNeighbor32 } = layout;
   const [xmin, xmax, ymin, ymax, zmin, zmax] = context.bounds;
   const xmin32 = f32(xmin), xmax32 = f32(xmax), zmin32 = f32(zmin);
   const length = f32(Math.max(xmax - xmin, 1e-6));
@@ -332,17 +324,17 @@ export function computeFeatures(context, positions, normals, first, count, out, 
   const height = f32(Math.max(zmax - zmin, 1e-6));
   const yCenter32 = f32(context.yCenter);
   const columnX = (x) => clamp(Math.trunc(f32(f32(x - x0) / h)), nx);
+  const rowY = (y) => clamp(Math.trunc(f32(f32(y - y0) / h)), ny);
   const sampled = new Float64Array(4);
 
   for (let p = 0; p < count; p++) {
     const q = 3 * (first + p);
     const sx = positions[q];
-    const yRelative = f32(positions[q + 1] - yCenter32);
-    const sya = Math.abs(yRelative);
-    const ySign = yRelative >= 0 ? 1 : -1;
+    const sy = f32(positions[q + 1] - yCenter32);
+    const fromCentre = Math.abs(sy);
     const sz = positions[q + 2];
     const n0 = normals[q];
-    const n1 = f32(normals[q + 1] * ySign);
+    const n1 = normals[q + 1];
     const n2 = normals[q + 2];
     let k = p * stride;
 
@@ -351,13 +343,13 @@ export function computeFeatures(context, positions, normals, first, count, out, 
     const fromBottom = f32(sz - zmin32);
     out[k++] = fromNose;
     out[k++] = xmax32 - sx;
-    out[k++] = sya;
+    out[k++] = sy;
     out[k++] = fromBottom;
     out[k++] = n0;
     out[k++] = n1;
     out[k++] = n2;
     out[k++] = fromNose / length;
-    out[k++] = sya / halfWidth;
+    out[k++] = sy / halfWidth;
     out[k++] = fromBottom / height;
 
     // Bend at each voxel scale: mean facing and surface density here, upstream and downstream.
@@ -365,10 +357,10 @@ export function computeFeatures(context, positions, normals, first, count, out, 
       const voxelFace = grid.scale * grid.scale;
       for (const dx of [0, -grid.scale, grid.scale]) {
         const x = dx === 0 ? sx : f32(sx + f32(dx));
-        sampleGrid(grid, x, yRelative, sz, sampled);
+        sampleGrid(grid, x, sy, sz, sampled);
         const area = Math.max(sampled[0], 1e-9);
         const vx = f32(sampled[1] / area);
-        const vy = f32((sampled[2] / area) * ySign);
+        const vy = f32(sampled[2] / area);
         const vz = f32(sampled[3] / area);
         out[k++] = vx;
         out[k++] = vy;
@@ -385,7 +377,7 @@ export function computeFeatures(context, positions, normals, first, count, out, 
     // Own slice: the body's top and bottom here and along the stencil, then the slice's extent.
     const ownTop = k;
     const ownFlags = ownTop + 5 + 2 * dxOwn32.length;
-    let j = clamp(Math.trunc(f32(sya / h)), ny);
+    let j = rowY(sy);
     let i = columnX(sx);
     out[ownTop] = zTop[i * ny + j] - sz;
     out[ownTop + 1] = zBottom[i * ny + j] - sz;
@@ -406,7 +398,7 @@ export function computeFeatures(context, positions, normals, first, count, out, 
     const neighbourFlags = neighbourTop + 2 * dyNeighbor32.length * dxNeighbor32.length;
     let n = 0;
     for (let e = 0; e < dyNeighbor32.length; e++) {
-      j = clamp(Math.trunc(f32(Math.abs(f32(sya + dyNeighbor32[e])) / h)), ny);
+      j = rowY(f32(sy + dyNeighbor32[e]));
       for (let d = 0; d < dxNeighbor32.length; d++, n++) {
         i = columnX(f32(sx + dxNeighbor32[d]));
         out[neighbourTop + 2 * n] = zTop[i * ny + j] - sz;
@@ -415,14 +407,17 @@ export function computeFeatures(context, positions, normals, first, count, out, 
       }
     }
 
-    // Plan-view outline: how far outboard the body reaches at the point's height, along the stencil.
+    // Plan-view outline: how far beyond the point the body reaches away from the centre plane, on the
+    // point's own side and at its height, along the stencil.
+    const side = sy >= 0 ? nx : 0;
+    const reach = (x, kz) => yOut[(side + columnX(x)) * nz + kz] - fromCentre;
     let o = neighbourFlags + n;
     let kz = clamp(Math.trunc(f32(f32(sz - z0) / h)), nz);
-    out[o++] = yOut[columnX(sx) * nz + kz] - sya;
-    for (let d = 0; d < dxOwn32.length; d++) out[o++] = yOut[columnX(f32(sx + dxOwn32[d])) * nz + kz] - sya;
+    out[o++] = reach(sx, kz);
+    for (let d = 0; d < dxOwn32.length; d++) out[o++] = reach(f32(sx + dxOwn32[d]), kz);
     for (let e = 0; e < dzNeighbor32.length; e++) {
       kz = clamp(Math.trunc(f32(f32(f32(sz + dzNeighbor32[e]) - z0) / h)), nz);
-      for (let d = 0; d < dxNeighbor32.length; d++) out[o++] = yOut[columnX(f32(sx + dxNeighbor32[d])) * nz + kz] - sya;
+      for (let d = 0; d < dxNeighbor32.length; d++) out[o++] = reach(f32(sx + dxNeighbor32[d]), kz);
     }
   }
 }

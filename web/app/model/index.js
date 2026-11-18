@@ -47,7 +47,7 @@ function cutName(mark, columns) {
 	const [, dy, dz] = columns[mark.columns[0]].offset;
 	const cm = (v) => `${Math.round(Math.abs(v) * 100)} cm`;
 	if (mark.layer === 'slice') return 'Streamwise cut through the point';
-	if (mark.layer === 'neighbour') return `Streamwise cut ${cm(dy)} ${dy < 0 ? 'inboard' : 'outboard'}`;
+	if (mark.layer === 'neighbour') return `Streamwise cut ${cm(dy)} toward ${dy < 0 ? '−y' : '+y'}`;
 	return dz === 0 ? 'Outline at the point’s height' : `Outline ${cm(dz)} ${dz < 0 ? 'lower' : 'higher'}`;
 }
 

@@ -1,8 +1,17 @@
 // What the networks were told at a point, as places on and around the car, in world coordinates: each reading at
 // the place `engine/features.js` reads it, each regional box at the voxels it averages, each slice as the car's
-// own cut along the plane the raster column lies in. The stencil draws these; the view names them on hover.
+// own cut along the plane the raster row lies in. The stencil draws these; the view names them on hover.
+
+import { featureLayout } from '../../engine/features.js';
 
 const f32 = Math.fround;
+const clamp = (index, size) => Math.min(Math.max(index, 0), size - 1);
+/** The raster layout of each feature definition, worked out once. */
+const layouts = new WeakMap();
+const layoutOf = (definition) => {
+	if (!layouts.has(definition)) layouts.set(definition, featureLayout(definition));
+	return layouts.get(definition);
+};
 
 /**
  * The drawing layers, in the order the view lists them; each input belongs to one. `shown` is whether a layer is
@@ -48,10 +57,12 @@ export function layerOf(column) {
  */
 export function measure(columns, lookups, { position, features }) {
 	const { yCenter, definition } = lookups;
-	const h = definition.rasterStep;
-	const yRelative = f32(position[1] - f32(yCenter));
-	const side = yRelative >= 0 ? 1 : -1;
-	const world = ([x, y, z]) => [x, side * y, z];
+	const { h, y0, z0, ny, nz } = layoutOf(definition);
+	const sy = f32(position[1] - f32(yCenter));
+	// Offsets and directions are in the car's axes, except the plan-view outline's reach, which runs outboard on the
+	// point's own side.
+	const side = sy >= 0 ? 1 : -1;
+	const direction = (column) => (column.kind === 'outline' ? [column.along[0], side * column.along[1], column.along[2]] : column.along);
 	const marks = [];
 
 	// Readings: a distance where it ends. Readings at one place are one mark. A distance measured from the point
@@ -61,8 +72,8 @@ export function measure(columns, lookups, { position, features }) {
 	const station = (layer, offset) => `${layer}:${offset.join()}`;
 	columns.forEach((column, i) => {
 		if (!column.along) return;
-		const place = position.map((p, k) => p + world(column.offset)[k]);
-		const at = place.map((p, k) => p + features[i] * world(column.along)[k]);
+		const place = position.map((p, k) => p + column.offset[k]);
+		const at = place.map((p, k) => p + features[i] * direction(column)[k]);
 		const layer = layerOf(column);
 		const key = `${column.kind}:${at.join()}`;
 		if (!readings.has(key)) readings.set(key, { type: 'reading', layer, kind: column.kind, at, columns: [], hollow: false });
@@ -82,23 +93,15 @@ export function measure(columns, lookups, { position, features }) {
 			for (const reading of found) reading.columns.push(i);
 			return;
 		}
-		const at = position.map((p, k) => p + world(column.offset)[k]);
+		const at = position.map((p, k) => p + column.offset[k]);
 		readings.set(`flag:${i}`, { type: 'reading', layer: layerOf(column), kind: 'flag', at, columns: [i], hollow: features[i] < 0.5 });
 	});
 	marks.push(...readings.values());
 
-	// Cuts: the raster column a slice reads is a bin of |y − yCenter| (or of z) one raster step wide; the car is
-	// cut along that bin's middle, on the side of the centre plane the reading lies.
-	const sliceY = (offsetY) => {
-		const across = f32(Math.abs(yRelative) + offsetY);
-		const bin = Math.trunc(f32(Math.abs(across) / h));
-		return yCenter + side * Math.sign(across || 1) * (bin + 0.5) * h;
-	};
-	const heightZ = (offsetZ) => {
-		const z0 = f32(definition.domainZ[0]);
-		const bin = Math.trunc(f32(f32(f32(position[2] + offsetZ) - z0) / f32(h)));
-		return z0 + (bin + 0.5) * h;
-	};
+	// Cuts: a slice reads one raster row of y, an outline one layer of z, each a raster step wide; the car is cut
+	// along its middle, rounded as `computeFeatures` rounds.
+	const sliceY = (offsetY) => yCenter + y0 + (clamp(Math.trunc(f32(f32(f32(sy + f32(offsetY)) - y0) / h)), ny) + 0.5) * h;
+	const heightZ = (offsetZ) => z0 + (clamp(Math.trunc(f32(f32(f32(position[2] + f32(offsetZ)) - z0) / h)), nz) + 0.5) * h;
 	const cuts = new Map();
 	columns.forEach((column, i) => {
 		const layer = layerOf(column);
@@ -129,7 +132,7 @@ export function measure(columns, lookups, { position, features }) {
 			const grid = lookups.voxels.find((g) => g.scale === scale);
 			const x = dx === 0 ? position[0] : f32(position[0] + f32(dx));
 			const sample = dx === 0 ? 'here' : dx < 0 ? 'upstream' : 'downstream';
-			blocks.set(key, { type: 'block', layer: 'bend', scale, sample, ...voxelBlock(grid, [x, yRelative, position[2]], yCenter), columns: [] });
+			blocks.set(key, { type: 'block', layer: 'bend', scale, sample, ...voxelBlock(grid, [x, sy, position[2]], yCenter), columns: [] });
 		}
 		blocks.get(key).columns.push(i);
 	});

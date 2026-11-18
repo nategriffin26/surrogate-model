@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from surrogate.features import FEATURE_COLUMNS
+from surrogate.features import FEATURE_COLUMNS, VOXEL_SCALES
 from surrogate.metrics import (
     case_evaluation_summary,
     regional_r2_breakdown,
@@ -501,10 +501,11 @@ def train_and_evaluate(
         print(f"[Ablation: PointNet 64D g] CV R²={pnet['cv']['mean_r2']:.4f} | Cd,p MAE={pnet['cv']['cd_p_mae']:.4f}")
 
         # 2c. Feature-block MLP ablations (local only, slices only, regional only)
+        voxel_sizes = "/".join(f"{100 * scale:g}" for scale in VOXEL_SCALES)
         subset_specs: list[tuple[str, str, tuple[str, ...]]] = [
             ("local_only_mlp", "Local MLP (position + normal only)", ("local",)),
             ("local_plus_slices_mlp", "Local + streamwise XZ/XY slices & Y-hops", ("local", "slices")),
-            ("local_plus_regional_mlp", "Local + 3D regional voxels (3/8/25/75 cm)", ("local", "regional")),
+            ("local_plus_regional_mlp", f"Local + 3D regional voxels ({voxel_sizes} cm)", ("local", "regional")),
         ]
         for key, label, blocks in subset_specs:
             sub_folds: list[FoldModel] = []

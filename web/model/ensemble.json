@@ -46,14 +46,14 @@
   ],
   "voxelScales": [
    0.03,
-   0.08,
+   0.1,
    0.25,
    0.75
   ]
  },
  "zClip": 6.0,
  "activation": "GELU",
- "spreadScale": 2.381927251815796,
+ "spreadScale": 2.3947973251342773,
  "folds": [
   {
    "xMean": 0,
@@ -252,7 +252,7 @@
     "max": 1.5255
    }
   },
-  "spreadCoverage": 0.6583,
+  "spreadCoverage": 0.7071,
   "networks": [
    {
     "trainRuns": [
@@ -371,19 +371,19 @@
    }
   ],
   "crossValidation": {
-   "meanR2": 0.9235,
-   "dragMae": 0.0147
+   "meanR2": 0.9233,
+   "dragMae": 0.0185
   },
   "outsideRuns": [
    {
     "run": 1,
-    "r2": 0.93114,
-    "dragMae": 0.01051
+    "r2": 0.92603,
+    "dragMae": 0.00419
    },
    {
     "run": 500,
-    "r2": 0.95352,
-    "dragMae": 0.01368
+    "r2": 0.95902,
+    "dragMae": 0.01519
    }
   ],
   "comparison": [
@@ -401,8 +401,8 @@
       10
      ]
     ],
-    "crossValidationR2": 0.6468,
-    "dragMae": 0.0603
+    "crossValidationR2": 0.6188,
+    "dragMae": 0.0403
    },
    {
     "learner": "mlp",
@@ -412,8 +412,8 @@
       10
      ]
     ],
-    "crossValidationR2": 0.7546,
-    "dragMae": 0.0571
+    "crossValidationR2": 0.7667,
+    "dragMae": 0.0481
    },
    {
     "learner": "mlp",
@@ -427,8 +427,8 @@
       191
      ]
     ],
-    "crossValidationR2": 0.8943,
-    "dragMae": 0.0143
+    "crossValidationR2": 0.8948,
+    "dragMae": 0.0159
    },
    {
     "learner": "mlp",
@@ -442,8 +442,8 @@
       70
      ]
     ],
-    "crossValidationR2": 0.9089,
-    "dragMae": 0.0291
+    "crossValidationR2": 0.91,
+    "dragMae": 0.0295
    },
    {
     "learner": "trees",
@@ -461,8 +461,8 @@
       191
      ]
     ],
-    "crossValidationR2": 0.9141,
-    "dragMae": 0.0306
+    "crossValidationR2": 0.9139,
+    "dragMae": 0.0284
    },
    {
     "learner": "ensemble",
@@ -480,10 +480,10 @@
       191
      ]
     ],
-    "crossValidationR2": 0.9235,
-    "dragMae": 0.0147
+    "crossValidationR2": 0.9233,
+    "dragMae": 0.0185
    }
   ]
  },
- "weightsSha256": "e807307f886948b9809a165d46ed05d72711052a3d81048736c65920ab572cfc"
+ "weightsSha256": "ef6ee48dc843bb97310d2851ab39e49d00962d0701da754343e783bfff2870fb"
 }

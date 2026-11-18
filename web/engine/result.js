@@ -173,10 +173,13 @@
  * @property {string} name      a short plain name
  * @property {string} unit      'm' for distances, '' for the rest
  * @property {number[]} offset  the place it reads relative to the point asked about, [dx, dy, dz] in
- *   metres, dx downstream, dy outboard (away from the centre plane, on the point's side), dz up
+ *   metres along the file's axes: dx downstream, dy toward +y (the car's right as seen from the
+ *   driver's seat), dz up
  * @property {number[] | null} along  for a distance, the unit direction (same axes) it runs from that
  *   place, so place + value × along is where it measured to: the body surface, or for the distances
- *   from nose, tail, centre plane and lowest point, that plane; null for every other column
+ *   from nose, tail, centre plane and lowest point, that plane; null for every other column. The
+ *   plan-view outline ('outline') is measured outboard, away from the centre plane on the point's own
+ *   side: its [0, 1, 0] holds for a point on the +y side and turns to [0, −1, 0] on the −y side
  *
  * @typedef {Object} ParsedSurface  The file's surface as the parser hands it to the rest of the engine.
  * @property {string} name
