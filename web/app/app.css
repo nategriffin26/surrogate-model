@@ -386,8 +386,14 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 .result-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--hair); font-size: 12.5px; }
 .result-facts dt { color: var(--muted); }
 .result-facts dd { margin: 0; color: var(--heading); font-weight: 500; text-align: right; }
-.result-outside { display: grid; gap: 2px; margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: rgba(163, 91, 26, 0.08); color: var(--orange); font-size: 12px; }
-.result-outside > div:first-child { font-weight: 600; }
+/* Dimensions outside the training range: laid out as the coefficients above, the car's value flagged in orange beside the trained range. */
+.result-outside { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 3px 12px; margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--hair); font-size: 12.5px; }
+.result-outside dt { color: var(--muted); }
+.result-outside dd { margin: 0; color: var(--orange); font-weight: 600; text-align: right; }
+.result-outside .result-label { grid-column: span 2; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--heading); }
+.result-outside .result-label i { width: 6px; height: 6px; border-radius: 50%; background: var(--orange); }
+.result-outside .result-head { align-self: end; margin-bottom: 4px; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.result-outside .result-aside { color: var(--muted); font-weight: 500; }
 /* The pressure extremes on a side view of the car; their colours are the ends of the cool-to-warm ramp. */
 .extremes { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
 .profile { display: block; overflow: visible; }

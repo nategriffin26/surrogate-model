@@ -202,16 +202,15 @@ export function createResultCard({ host, overlay, viewer, active, run }) {
 			outside.length === 0
 				? null
 				: h(
-						'div',
+						'dl',
 						{ class: 'result-outside', role: 'note' },
-						h('div', {}, 'Outside the training range'),
-						outside.map((d) =>
-							h(
-								'div',
-								{ class: 'num' },
-								`${DIMENSION_LABELS[d.name]} ${d.value.toFixed(2)} m, trained ${d.trainMin.toFixed(2)} to ${d.trainMax.toFixed(2)} m`,
-							),
-						),
+						h('dt', { class: 'result-label' }, h('i', { 'aria-hidden': 'true' }), 'Outside training range'),
+						h('dd', { class: 'result-head', title: 'The range of the cars the networks were trained on' }, 'Trained'),
+						outside.map((d) => [
+							h('dt', {}, DIMENSION_LABELS[d.name]),
+							h('dd', { class: 'num' }, `${d.value.toFixed(2)} m`),
+							h('dd', { class: 'result-aside num' }, `${d.trainMin.toFixed(2)}–${d.trainMax.toFixed(2)}`),
+						]),
 					),
 		];
 	}
