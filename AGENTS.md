@@ -37,6 +37,10 @@ Choose between designs on cross-validation over the ten training cars. Seeds 42,
 - A change to the assistant's prompt (`web/assistant/prompt.js`), its tools or its kernel is checked with real conversations in that browser against a cheap test model set through `ASSISTANT_MODEL`: the tools it calls, and that every number in its reply comes from a tool result.
 - Analysing a full file takes about 4.9 GB in the browser; a training run or a full-surface job in Python is heavy too. Run at most three such jobs at once on one machine.
 
+## Publishing
+
+- Every push to `origin` is followed by `deploy/assistant-worker/deploy.sh` from a working tree whose `web/` matches the pushed commit, so https://nategriffin.dev/surrogate/ serves what is on GitHub. A push is finished when the deploy succeeds and the live site shows the change.
+
 ## Documentation
 
 - A change is finished when the documents that describe it are true: `README.md` (setup and commands), `docs/model.md` (input table, results, limitations), `docs/development.md` (reproduce steps, tests, layout), the other files in `docs/`, this file, `data/README.md`, and the docstring at the top of each module touched.
