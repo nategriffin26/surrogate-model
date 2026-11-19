@@ -2,7 +2,7 @@
 
 A model that predicts the mean pressure coefficient $C_p$ on every cell of a DrivAerML car from its geometry alone, and Surrogate Model, a browser tool for working with what it predicts. I trained it on the ten assigned cases (runs 80, 98, 102, 208, 213, 281, 397, 425, 445 and 474). On the two cars I kept out of training entirely, runs 1 and 500, it scores an area-weighted $R^2$ of 0.956 against the CFD.
 
-![Surrogate Model showing the predicted pressure on DrivAerML run 1](docs/images/surrogate-model.png)
+![Predicted pressure coefficient on DrivAerML run 1, from the front, the side and the rear](docs/images/run-1-pressure.png)
 
 To try it without installing anything, the web app is live at https://nategriffin.dev/surrogate/.
 
