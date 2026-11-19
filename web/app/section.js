@@ -116,24 +116,47 @@ export function sectionStations(c, plane, count, branch) {
 	);
 }
 
-/** A value range rounded outward to tidy ticks. */
+/** A value range rounded outward to half the step of its ticks, so its ends sit close to the values. */
 function tidy(lo, hi) {
-	const { step } = niceTicks(lo, hi, 5);
+	const step = niceTicks(lo, hi, 5).step / 2;
 	return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step];
 }
 
+/** The sorted values of a series' quantity at every vertex of its case's working mesh, remembered for the case. */
+function surfaceValues(one) {
+	const c = one.case;
+	c.surfaceValues ??= new Map();
+	const key = `${one.source}|${one.quantity.key}`;
+	const known = c.surfaceValues.get(key);
+	if (known) return known;
+	const read = one.quantity.read(c);
+	const { cp, sigma, normals } = c.result.mesh;
+	const values = new Float64Array(read ? cp.length : 0);
+	for (let i = 0; i < values.length; i++)
+		values[i] = read({ a: i, b: i, t: 0, cp: cp[i], sigma: sigma[i], nx: normals[3 * i] });
+	values.sort();
+	c.surfaceValues.set(key, values);
+	return values;
+}
+
 /**
- * The value axis for the curves plotted: the span of the middle 98 % of their values, taking in zero, padded and
- * rounded out to tidy ticks. A spike at a sharp edge (the nose, a mirror) reaches past it and is cut at the frame, so
- * it does not flatten every other curve; the cursor still reads its value.
+ * The value axis for the series plotted, set by their values over the whole surface rather than along the cut, so it
+ * holds still while the section moves: the span of the middle 99.8 % of each series' values, taking in zero, padded and
+ * rounded out to tidy ticks. A spike at a sharp edge (a mirror, a wheel arch) reaches past it and is cut at the frame,
+ * so it does not flatten every curve; the cursor still reads its value.
  */
-function valueRange(lines) {
-	const values = Float64Array.from(lines.flatMap((line) => line.points.map((point) => point[1]))).sort();
-	if (values.length === 0) return [-1, 1];
-	const at = (q) => values[Math.round(q * (values.length - 1))];
-	const lo = Math.min(0, at(0.01)),
-		hi = Math.max(0, at(0.99));
-	const pad = 0.08 * (hi - lo || 1);
+function valueRange(series) {
+	let lo = 0,
+		hi = 0;
+	for (const one of series) {
+		const values = surfaceValues(one);
+		if (values.length === 0) continue;
+		const at = (q) => values[Math.round(q * (values.length - 1))];
+		lo = Math.min(lo, at(0.001));
+		hi = Math.max(hi, at(0.999));
+	}
+	if (lo === hi) return [-1, 1];
+	const pad = 0.08 * (hi - lo);
 	return tidy(lo - pad, hi + pad);
 }
 
@@ -454,7 +477,7 @@ export function createSectionTool({ host, viewport, viewer, active, view, run })
 			height,
 			x: { domain: [bounds[2 * along] - 0.05, bounds[2 * along + 1] + 0.05], label: `${AXIS_NAMES[along]}, m` },
 			// The value axis says which way it runs where it is turned over, as pressure is.
-			y: { domain: valueRange(lines), label: q.invert ? `${q.label}, negative up` : q.label, invert: q.invert },
+			y: { domain: valueRange(series), label: q.invert ? `${q.label}, negative up` : q.label, invert: q.invert },
 			series: lines,
 		});
 		return { frame, series, along, names };
