@@ -237,7 +237,7 @@ export function createOverview({ card, groups, training }) {
 			const { result, pictures, maps } = car;
 			grid.replaceChildren(...training.cars.map((trained) => trainingCarImage(trained, maps.cp)));
 			fieldFrame.show(pictures.fieldSide);
-			copied(loopLabel, 'overview.loop', { cells: count(result.source.cells) });
+			copied(loopLabel, 'overview.loop', { cells: (result.source.cells / 1e6).toFixed(1) });
 			parts.drag.replaceChildren(
 				h(
 					'span',

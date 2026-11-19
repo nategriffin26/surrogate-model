@@ -14,7 +14,7 @@
 	"overview.steps.answer": "Predict Cp ×{networks}",
 	"overview.steps.field": "Repeat on all input cells",
 	"overview.steps.drag": "Postprocessing",
-	"overview.loop": "For each of {cells} cells",
+	"overview.loop": "For each of ~{cells} million cells",
 	"point.title": "Decision: train per cell not per car",
 	"point.lede": "{cars} cars to sample is a very small dataset, so it needs to be made larger. Still need to hold out by car to train to avoid memorization/nearest neighbor issues.",
 	"point.cars.caption": "Per car",
