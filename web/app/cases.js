@@ -14,6 +14,7 @@ export function caseSummary(c, active) {
 		kind: c.kind,
 		status: c.status,
 		shown: c === active,
+		in_tabs: c.inTabs,
 		...(c.path ? { path: c.path } : {}),
 		...(c.variant ? { variant_of: c.variant.root.id, changes: c.variant.changes } : {}),
 		...(c.error ? { error: c.error } : {}),
@@ -80,7 +81,7 @@ export function defineCaseOperations({ session }) {
 	defineOperation({
 		name: 'list_cases',
 		description:
-			"The open cases, one per tab: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed; variant: a changed copy of an open car, predicted on its working mesh), status (queued, analysing, loading, ready or failed) and whether it is on screen. Once ready, the numbers the result card shows: polygon count, size, reference (frontal) area, and summed over the polygons named in totals_over the surface area, area-weighted mean Cp, the pressure force coefficients cx (pressure drag), cy and cz on the reference area (no wall shear), cx from each network, the lowest and highest Cp with the centre and outward normal of their polygon, the dimensions outside the training cars' range, and the reference field when there is one (its file, array, how it was mapped, its own mean Cp, cx, cy and cz summed over every polygon, and the area-weighted r2 against it). Field data of a case is reached by its case_id.",
+			"The open cases: each with its case_id (what other operations take), name, kind (file: a .vtp from the workspace the model ran on; example: a bundled DrivAerML car with its result precomputed; variant: a changed copy of an open car, predicted on its working mesh), status (queued, analysing, loading, ready or failed), whether it is on screen, and in_tabs, whether it has a tab (a variant you make has none until show_case shows it). Once ready, the numbers the result card shows: polygon count, size, reference (frontal) area, and summed over the polygons named in totals_over the surface area, area-weighted mean Cp, the pressure force coefficients cx (pressure drag), cy and cz on the reference area (no wall shear), cx from each network, the lowest and highest Cp with the centre and outward normal of their polygon, the dimensions outside the training cars' range, and the reference field when there is one (its file, array, how it was mapped, its own mean Cp, cx, cy and cz summed over every polygon, and the area-weighted r2 against it). Field data of a case is reached by its case_id.",
 		parameters: { type: 'object', properties: {}, additionalProperties: false },
 		run: () => ({ cases: session.cases.map((c) => caseSummary(c, session.active)) }),
 	});
@@ -115,7 +116,7 @@ export function defineCaseOperations({ session }) {
 	defineOperation({
 		name: 'show_case',
 		description:
-			'Put an open case on screen, as clicking its tab does. The camera, field, colour scale and section stay as they are, so cars compare from the same view.',
+			'Put an open case on screen, as clicking its tab does; a case without a tab gets one. The camera, field, colour scale and section stay as they are, so cars compare from the same view.',
 		parameters: {
 			type: 'object',
 			properties: { case_id: { type: 'integer', description: 'From list_cases.' } },

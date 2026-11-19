@@ -3,8 +3,10 @@
 // 600,000 triangles) and predicted there by the engine's quick prediction, in a second or two. The car itself is
 // predicted unchanged on the same mesh, once, so a variant and its car have the same vertices and differ by the change
 // alone: a variant's Change field is its Cp minus the car's, vertex for vertex, each point of the body against itself
-// before the change, and its section plot draws the car's line beside its own. Each variant opens as a case beside
-// its car, its surface kept in the workspace under variants/ with the prediction as cell arrays.
+// before the change, and its section plot draws the car's line beside its own. Each variant joins its car's study, its
+// surface kept in the workspace under variants/ with the prediction as cell arrays. One the engineer makes opens in a
+// tab and is shown; one the assistant makes stays out of the tabs until it is shown, so a study of many variants does
+// not fill the strip.
 //
 // A car and its open variants are one study, shown as one table whoever made the rows: the Variants tab and the
 // assistant both call make_variant, and read_study reads the table.
@@ -309,7 +311,7 @@ export function createVariants({ session, engine, workspace, run }) {
 			),
 			by,
 		);
-		const c = session.openVariant(result, { name: label, root, changes: made, path });
+		const c = session.openVariant(result, { name: label, root, changes: made, path, show: by !== 'assistant' });
 		workspace.link(path, c.id);
 		return rowOut(c, root);
 	}
@@ -377,7 +379,7 @@ export function createVariants({ session, engine, workspace, run }) {
 	defineOperation({
 		name: 'make_variant',
 		description:
-			'Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It opens as a case beside its car, offering the field change (set_field "change": its Cp minus its car\'s, predicted unchanged on the same mesh, which shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant of a variant adds its changes to the first one\'s. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.',
+			"Make a variant of a car and predict it: its surface changed (stretched along an axis, or the ride height raised or lowered) and predicted on the working mesh in a second or two. It joins its car's study as a case, offering the field change (set_field \"change\": its Cp minus its car's, predicted unchanged on the same mesh, which shows where the pressure changed); its surface is saved under variants/ in the workspace. A variant you make is not put on screen or in the tabs: call show_case with its case_id when the engineer should see it. A variant of a variant adds its changes to the first one's. Returns its Cx, Cy, Cz, mean Cp and frontal area, and their differences from the car predicted unchanged on the same mesh, so the differences are the change alone. For a study, call it once per variant, then read_study.",
 		parameters: {
 			type: 'object',
 			properties: {

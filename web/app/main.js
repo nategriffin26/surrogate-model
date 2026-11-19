@@ -189,8 +189,9 @@ $('.brand').before(filesPanel.toggle);
 
 const tabs = $('[data-cases]');
 function renderTabs() {
+	const tabbed = session.cases.filter((c) => c.inTabs);
 	tabs.replaceChildren(
-		...session.cases.map((c) =>
+		...tabbed.map((c) =>
 			h(
 				'div',
 				{

@@ -83,12 +83,13 @@ export class Session extends EventTarget {
 		this.notify(c, 'status');
 	}
 
-	/** Open a case, after the case at `after` when given, and show it. */
-	add(c, after = null) {
+	/** Open a case, after the case at `after` when given, and show it unless `show` is false. */
+	add(c, after = null, show = true) {
 		const at = after ? this.cases.indexOf(after) + 1 : this.cases.length;
 		this.cases.splice(at, 0, c);
+		c.inTabs = show;
 		this.notify(c, 'cases');
-		this.activate(c);
+		if (show) this.activate(c);
 		return c;
 	}
 
@@ -112,6 +113,10 @@ export class Session extends EventTarget {
 			arrived: false,
 			/** Section cuts through its working mesh, by plane, cached by the section tool. */
 			cuts: null,
+			/** The section plot's quantities over its whole working mesh, sorted, cached by the section tool for its value axis. */
+			surfaceValues: null,
+			/** Whether its tab is in the strip: a variant the assistant makes stays out of it until it is shown. */
+			inTabs: true,
 			/** For a variant, the car it was made from and the changes from that car: {root, changes}; else null. */
 			variant: null,
 			/** A car with variants: its surface predicted unchanged the way they are (a quick Result), so they compare like for like. */
@@ -120,8 +125,10 @@ export class Session extends EventTarget {
 		};
 	}
 
+	/** Show a case, which puts its tab in the strip if it had none. */
 	activate(c) {
 		if (c === this.active) return;
+		if (c) c.inTabs = true;
 		this.active = c;
 		this.notify(c, 'active');
 	}
@@ -150,14 +157,15 @@ export class Session extends EventTarget {
 
 	/**
 	 * Open a variant, a quick Result of a changed copy of `root`'s surface, after `root` and the variants of it already
-	 * open. Its surface is kept in the workspace at `path`.
+	 * open. Its surface is kept in the workspace at `path`. With `show` false it stays off screen and out of the tabs,
+	 * in its car's study, until something shows it.
 	 */
-	openVariant(result, { name, root, changes, path }) {
+	openVariant(result, { name, root, changes, path, show }) {
 		const c = { ...this.newCase(name, 'variant', null, 'ready', path), variant: { root, changes } };
 		c.result = result;
 		c.surface = new Surface(result.mesh);
 		const last = this.cases.findLast((x) => x === root || x.variant?.root === root);
-		return this.add(c, last);
+		return this.add(c, last, show);
 	}
 
 	async analyse(c, file) {
@@ -226,7 +234,7 @@ export class Session extends EventTarget {
 		this.notify(c, 'numbers');
 	}
 
-	/** Close a case: its analysis stops, its GPU memory is released, and a neighbouring case is shown. */
+	/** Close a case: its analysis stops, its GPU memory is released, and a neighbouring tab is shown. */
 	close(c) {
 		const i = this.cases.indexOf(c);
 		if (i < 0) return;
@@ -235,6 +243,9 @@ export class Session extends EventTarget {
 		c.surface?.dispose();
 		this.cases.splice(i, 1);
 		this.notify(c, 'cases');
-		if (this.active === c) this.activate(this.cases[Math.min(i, this.cases.length - 1)] ?? null);
+		if (this.active !== c) return;
+		const tabs = this.cases.filter((x) => x.inTabs);
+		const after = tabs.findIndex((x) => this.cases.indexOf(x) >= i);
+		this.activate(tabs[after < 0 ? tabs.length - 1 : after] ?? null);
 	}
 }
