@@ -291,6 +291,12 @@ def test_the_public_worker() -> None:
     run_deno_tests("assistant_worker.test.js")
 
 
+@pytest.mark.skipif(DENO is None, reason="the Worker's tests run under Deno")
+def test_the_public_worker_visit_log() -> None:
+    """Runs tests/worker_visits.test.js: page views are recorded without the address; a failed write serves the page."""
+    run_deno_tests("worker_visits.test.js")
+
+
 SHARED = [
     "UPSTREAM",
     "DEFAULT_MODEL",

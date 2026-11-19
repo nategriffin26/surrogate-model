@@ -41,3 +41,5 @@ The page sends the conversation to `/api/assistant`, and the server adds the key
 - A host that serves the route but not the kernel's Content-Security-Policy does not start the Python kernel: `run_python` fails with a message saying so, and the rest of the tool works.
 
 The tool is also published at https://nategriffin.dev/surrogate/ by `deploy/assistant-worker/deploy.sh`: a Cloudflare Worker (`worker.js`, `wrangler.jsonc`) serves `web/` as static files and the same route from `assistant.js`, with limits of 120 requests a minute overall, 60 a minute from one address and 5,000 a day, and a credit limit on its key at OpenRouter behind them.
+
+That Worker also records each opening of the page and each message the assistant answers in the site's visit log (the D1 database `nategriffin-visits`): time, path, referrer, city, region, country, the network's owner and user agent, never the IP address. The write runs after the response is sent, and a failed write is only logged.

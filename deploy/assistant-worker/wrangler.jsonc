@@ -9,8 +9,8 @@
 		"binding": "ASSETS",
 		"html_handling": "auto-trailing-slash",
 		"not_found_handling": "none",
-		// Only the assistant's route and its kernel script need worker.js; the rest is served as files.
-		"run_worker_first": ["/surrogate/api/*", "/surrogate/assistant/kernel-worker.js"],
+		// The page (to record visits), the assistant's route and its kernel script need worker.js; the rest is served as files.
+		"run_worker_first": ["/surrogate/", "/surrogate/api/*", "/surrogate/assistant/kernel-worker.js"],
 	},
 	"routes": [
 		{ "pattern": "nategriffin.dev/surrogate", "zone_name": "nategriffin.dev" },
@@ -18,6 +18,14 @@
 	],
 	"durable_objects": { "bindings": [{ "name": "ASSISTANT_LIMITS", "class_name": "AssistantLimits" }] },
 	"migrations": [{ "tag": "assistant-limits", "new_sqlite_classes": ["AssistantLimits"] }],
+	// The site's visit log, shared with the site's Worker; its schema lives in the site's repository (migrations/).
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "nategriffin-visits",
+			"database_id": "3ed8411c-9521-49bb-9fdb-8ace50410d21",
+		},
+	],
 	"workers_dev": false,
 	"preview_urls": false,
 }
