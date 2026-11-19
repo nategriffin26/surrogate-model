@@ -20,7 +20,7 @@
 	"point.cars.caption": "Per car",
 	"point.cells.caption": "Per cell",
 	"point.cells.note": "{cells} cells from each of {cars} cars",
-	"inputs.title": "Decision: measure shape, don’t learn it",
+	"inputs.title": "Create geometry pseudo-embedding",
 	"inputs.lede": "{cars} cars are too few to learn a shape encoder, so the shape inputs are measured from the geometry.",
 	"inputs.modes.position": "Position and normal",
 	"inputs.modes.surface": "Nearby geometry",
