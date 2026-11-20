@@ -1,6 +1,8 @@
 // Element builders. `h('div', {class: 'x', onclick}, ...children)`; null, false and undefined children are skipped.
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** A screen used by touch: a tap places what a click would, and nothing can be dropped onto the page. */
+export const TOUCH = matchMedia('(pointer: coarse)');
 
 function build(element, attrs, children) {
 	for (const [k, v] of Object.entries(attrs)) {

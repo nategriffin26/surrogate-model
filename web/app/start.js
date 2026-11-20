@@ -1,6 +1,7 @@
-// The first screen: a drop zone and the bundled examples. Dropping a file anywhere on the window works too.
+// The first screen: a drop zone and the bundled examples. Dropping a file anywhere on the window works too; on a touch
+// screen, which cannot drop, the zone says that a tap chooses a file.
 
-import { h, s } from './dom.js';
+import { TOUCH, h, s } from './dom.js';
 import { EXAMPLES, exampleFacts } from './examples.js';
 
 function meshMark() {
@@ -43,8 +44,13 @@ export function startScreen({ onFile, onExample }) {
 			{ class: 'drop' },
 			input,
 			h('span', { class: 'drop-mark' }, meshMark()),
-			h('span', { class: 'drop-title' }, 'Drop a .vtp file'),
-			h('span', { class: 'drop-sub' }, 'or ', h('span', { class: 'link' }, 'choose one')),
+			// A touch screen cannot drop a file here; a tap on the zone chooses one.
+			TOUCH.matches
+				? h('span', { class: 'drop-title' }, 'Choose a .vtp file')
+				: [
+						h('span', { class: 'drop-title' }, 'Drop a .vtp file'),
+						h('span', { class: 'drop-sub' }, 'or ', h('span', { class: 'link' }, 'choose one')),
+					],
 		),
 		h('div', { class: 'examples-head' }, 'Examples'),
 		h(

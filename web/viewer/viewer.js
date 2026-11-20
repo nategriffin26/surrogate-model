@@ -42,6 +42,9 @@ const SUBPIXEL = 0.05;
 /** A full-mesh frame slower than this while the camera moves hands motion to the working mesh. */
 const MOVING_BUDGET_MS = 14;
 const ARRIVAL_MS = 850;
+/** How long the picture glides when what covers the view changes (setInset): as long as a sheet's own move. */
+const INSET_MS = 320;
+const NO_INSET = { top: 0, bottom: 0 };
 /**
  * Bytes per millisecond handed to the GPU while the car uploads: 0.5 GB/s, 8 MB per 60 Hz frame, which the browser's
  * transfer buffer takes without waiting on the GPU process. Measured during a real load: 8 MB a frame never cost
@@ -97,6 +100,8 @@ export class Viewer extends EventTarget {
 		/** What the last frame drew: its layer. */
 		this.drawn = null;
 		this.lod = {};
+		/** Pixels at the top and foot of the view covered by what floats over it (setInset): the car keeps to the rest. */
+		this.inset = NO_INSET;
 		this.resetLod(null);
 
 		const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -643,8 +648,12 @@ export class Viewer extends EventTarget {
 		return this.controls.target;
 	}
 
-	/** The camera placement that frames the car looking along `dir`; returned, not applied. */
-	framing(dir, camera = this.camera) {
+	/**
+	 * The camera placement that frames the car looking along `dir`, its box filling `fill` of the height or width left
+	 * clear; returned, not applied.
+	 */
+	framing(dir, { fill = 0.9 } = {}) {
+		const camera = this.camera;
 		const b = this.bounds ?? [-0.77, 3.94, -1.01, 1.01, -0.32, 1.2];
 		const target = new THREE.Vector3((b[0] + b[1]) / 2, (b[2] + b[3]) / 2, (b[4] + b[5]) / 2);
 		const d = new THREE.Vector3(...dir).normalize();
@@ -653,8 +662,9 @@ export class Viewer extends EventTarget {
 			for (const y of [b[2], b[3]]) for (const z of [b[4], b[5]]) corners.push(new THREE.Vector3(x, y, z));
 		const probe = camera.clone();
 		probe.up.set(0, 0, 1);
-		const fill = 0.9;
 		const { w, h } = this.paneSize();
+		/** The height left clear between what covers the view's top and foot, which the car is fitted into. */
+		const seen = h - this.inset.top - this.inset.bottom;
 		if (camera.isOrthographicCamera) {
 			probe.position.copy(target).addScaledVector(d, ORTHO_DISTANCE);
 			probe.lookAt(target);
@@ -662,12 +672,13 @@ export class Viewer extends EventTarget {
 			let extent = 0;
 			for (const p of corners) {
 				const q = p.clone().applyMatrix4(probe.matrixWorldInverse);
-				extent = Math.max(extent, Math.abs(q.x) / (w / 2), Math.abs(q.y) / (h / 2));
+				extent = Math.max(extent, Math.abs(q.x) / (w / 2), Math.abs(q.y) / (seen / 2));
 			}
 			return { position: probe.position.clone(), target, zoom: fill / extent };
 		}
 		const tanY = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 		const tanX = tanY * (w / h);
+		const tanSeen = tanY * (seen / h);
 		let distance = 10;
 		for (let i = 0; i < 4; i++) {
 			probe.position.copy(target).addScaledVector(d, distance);
@@ -676,7 +687,7 @@ export class Viewer extends EventTarget {
 			let extent = 0;
 			for (const p of corners) {
 				const q = p.clone().applyMatrix4(probe.matrixWorldInverse);
-				extent = Math.max(extent, Math.abs(q.x) / (-q.z * tanX), Math.abs(q.y) / (-q.z * tanY));
+				extent = Math.max(extent, Math.abs(q.x) / (-q.z * tanX), Math.abs(q.y) / (-q.z * tanSeen));
 			}
 			distance *= extent / fill;
 		}
@@ -877,16 +888,55 @@ export class Viewer extends EventTarget {
 		const { W, H, w, h } = this.paneSize();
 		this.renderer.setSize(W, H, false);
 		this.perspective.aspect = w / h;
-		this.perspective.updateProjectionMatrix();
 		const o = this.orthographic;
 		o.left = -w / 2;
 		o.right = w / 2;
 		o.top = h / 2;
 		o.bottom = -h / 2;
-		o.updateProjectionMatrix();
+		this.centreCameras();
 		this.resetLod(this.lod.layer);
 		this.disposeStill();
 		this.render();
+	}
+
+	/**
+	 * Keep the car clear of what covers the view's top and foot, {top, bottom} in px: the picture glides, unless motion
+	 * is reduced, at the same scale, so the orbit centre sits in the middle of the height left clear. With `frame`,
+	 * framing's options, the camera also moves to frame the whole car in that height, along the direction it looks.
+	 */
+	setInset(inset, { frame = null } = {}) {
+		const from = this.inset;
+		if (inset.top === from.top && inset.bottom === from.bottom && !frame) return;
+		if (frame) {
+			this.inset = inset;
+			const goal = this.framing(this.camera.position.clone().sub(this.target).toArray(), frame);
+			this.inset = from;
+			this.moveTo(goal, true, INSET_MS);
+		}
+		const apply = (k) => {
+			this.inset = {
+				top: from.top + (inset.top - from.top) * k,
+				bottom: from.bottom + (inset.bottom - from.bottom) * k,
+			};
+			this.centreCameras();
+			this.requestRender();
+		};
+		if (REDUCED_MOTION.matches) apply(1);
+		else this.animate(INSET_MS, (k) => apply(ease(k)), null, 'inset');
+	}
+
+	/** How far up each camera's picture is shifted, in px, to centre on the height left clear. */
+	get insetShift() {
+		return (this.inset.bottom - this.inset.top) / 2;
+	}
+
+	/** Shift both cameras' pictures up by the inset's shift; without one, each draws its own whole view. */
+	centreCameras() {
+		const { w, h } = this.paneSize();
+		const shift = this.insetShift;
+		for (const camera of [this.perspective, this.orthographic])
+			if (shift) camera.setViewOffset(w, h, 0, shift, w, h);
+			else camera.clearViewOffset();
 	}
 
 	// ---- picking ----------------------------------------------------------------------------------------------------
@@ -901,13 +951,13 @@ export class Viewer extends EventTarget {
 		if (!at) return null;
 		const camera = this.camera;
 		const renderer = this.renderer;
-		camera.setViewOffset(at.w, at.h, at.x, at.y, 1, 1);
+		camera.setViewOffset(at.w, at.h, at.x, at.y + this.insetShift, 1, 1);
 		renderer.setRenderTarget(this.pickTarget);
 		renderer.setClearColor(0x000000, 0);
 		renderer.clear();
 		renderer.render(this.pickScene, camera);
 		renderer.setRenderTarget(null);
-		camera.clearViewOffset();
+		this.centreCameras();
 		const out = new Float32Array(4);
 		const surface = this.surface;
 		await renderer.readRenderTargetPixelsAsync(this.pickTarget, 0, 0, 1, 1, out);
@@ -1213,9 +1263,17 @@ export class Viewer extends EventTarget {
 		this.dispatchEvent(new CustomEvent('camera'));
 	}
 
-	/** Draw now at full detail and return the canvas; read it in the same task, before the browser clears it. */
+	/**
+	 * Draw now at full detail and return the canvas; read it in the same task, before the browser clears it. The
+	 * picture is centred on the whole view, whatever covers its top or foot on screen.
+	 */
 	snapshot() {
+		const inset = this.inset;
+		this.inset = NO_INSET;
+		this.centreCameras();
 		this.render();
+		this.inset = inset;
+		this.centreCameras();
 		return this.canvas;
 	}
 }

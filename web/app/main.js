@@ -20,6 +20,7 @@ import { addFiles, createFilesPanel, defineFileOperations } from './files.js';
 import { icon } from './icons.js';
 import { bandCount, createLegend } from './legend.js';
 import { onOperation, operations, runOperation } from './operations.js';
+import { createPhoneLayout } from './phone.js';
 import { createProbes, defineProbeOperations } from './probes.js';
 import { createProgress } from './progress.js';
 import { defineReport } from './report.js';
@@ -165,13 +166,7 @@ const dock = createDock({
 	view,
 	resizer: $('[data-dock-resizer]'),
 	actions: {
-		tab: (name) => {
-			// Choosing Section turns the section on, which brings its plot up; when it is on already the tab just shows it.
-			if (name === 'section' && !view.section.on) return run('set_section', { on: true });
-			view.dock = name;
-			view.dockCollapsed = false;
-			update('toolbar', 'viewer', 'dock', 'layout');
-		},
+		tab: chooseDockTab,
 		collapse: () => {
 			view.dockCollapsed = !view.dockCollapsed;
 			update('dock', 'layout');
@@ -180,9 +175,24 @@ const dock = createDock({
 });
 $('[data-dock]').append(dock.el);
 
+function chooseDockTab(name) {
+	// Choosing Section turns the section on, which brings its plot up; when it is on already the tab just shows it.
+	if (name === 'section' && !view.section.on) return run('set_section', { on: true });
+	view.dock = name;
+	view.dockCollapsed = false;
+	update('toolbar', 'viewer', 'dock', 'layout');
+}
+
 // ---- top bar: files, case tabs, modes, export, assistant -------------------------------------------------------------
 
-const filesPanel = createFilesPanel({ session, workspace, engine, run, progress: (c) => progress.fraction(c) });
+const filesPanel = createFilesPanel({
+	session,
+	workspace,
+	engine,
+	run,
+	progress: (c) => progress.fraction(c),
+	toggled: () => phone.render(),
+});
 $('.work').prepend(filesPanel.el);
 // The panel opens from the left edge, so its toggle leads the bar, above it.
 $('.brand').before(filesPanel.toggle);
@@ -285,11 +295,38 @@ function setAssistant(open) {
 				close: () => setAssistant(false),
 			}),
 		);
+	phone.render();
 }
 
 // ---- result card ----------------------------------------------------------------------------------------------------------
 
 const resultCard = createResultCard({ host: card, overlay, viewer, active: described, run });
+
+// ---- on a phone: the car under one sheet that holds everything else -------------------------------------------------------
+
+const phone = createPhoneLayout({
+	work: $('.work'),
+	topbar: $('.topbar'),
+	viewer,
+	legend: $('[data-legend]'),
+	parts: {
+		fields: toolbar.el.querySelector('.toolbar-row'),
+		card,
+		dock: dock.el,
+		files: filesPanel.el,
+		assistant: assistantHost,
+		model: modelHost,
+		exports: exportMenu,
+	},
+	pages: {
+		files: { open: (on) => filesPanel.setOpen(on), shown: () => body.classList.contains('files-open') },
+		assistant: { open: setAssistant, shown: () => body.classList.contains('assistant-open') },
+		model: { open: (on) => setMode(on ? 'model' : 'result'), shown: () => mode === 'model' },
+	},
+	dock: { tab: () => view.dock, choose: chooseDockTab },
+	counts: { probes: () => probes.count(), variants: () => variants.panel.count() },
+	active: described,
+});
 
 // ---- the middle of the view: first screen, progress, errors ------------------------------------------------------------
 
@@ -461,6 +498,7 @@ const RENDER = {
 
 function update(...parts) {
 	for (const part of parts) RENDER[part]();
+	phone.render();
 }
 
 /** Whether a case's car is on screen: its surface is the one shown and its mesh has reached the GPU. */
@@ -509,7 +547,11 @@ function present(c) {
 	}
 	placeBackdrop(c);
 	update('layout', 'tabs', 'toolbar', 'legend', 'viewer', 'center', 'card', 'dock', 'markers');
-	if (arriving) viewer.arrive();
+	if (arriving) {
+		viewer.arrive();
+		// On a phone a car opens with its sheet low, on its numbers; a variant keeps the sheet as its car's was left.
+		if (!c.variant) phone.arrived();
+	}
 	showWork(c);
 }
 

@@ -523,18 +523,163 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 @media (max-width: 1060px) {
 	.fields { gap: 12px; }
 }
-@media (max-width: 760px) {
-	.app-name { display: none; }
-	.stage, body.dock-closed .stage { grid-template-rows: 44px minmax(0, 1fr) 0 0; }
-	:is(.dock-host, .dock-resizer, .topbar-end, .tool-group, .legend-tools) { display: none !important; }
-	.work { grid-template-columns: minmax(0, 1fr) 0px !important; }
-	.card-host { top: auto; }
-	.toolbar { gap: 8px; padding: 0 8px; }
-	.legend { width: 220px; }
-	.legend-bar { width: 196px; }
+
+/* ---- phone ---- */
+/* On a phone (phone.js, under the same queries) the car fills the screen under the top bar and one sheet over its foot
+   holds everything else: the field switch and the headline numbers at its low detent, the numbers, section, probes
+   and variants above them, and each page of the top bar's menu. The legend and the view tools float over the car.
+   `--cover` is the height the sheet covers at the foot of the view, which the car and what floats over it keep clear of. */
+.sheet, .more-menu { display: none; }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+	body { grid-template-rows: auto minmax(0, 1fr); padding-bottom: 0; }
+	.topbar { height: calc(48px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 4px 0 14px; gap: 12px; }
+	:is(.app-name, .files-button, .topbar-end) { display: none; }
+	.cases, body[data-mode="model"] .cases { display: flex !important; overflow-x: auto; scrollbar-width: none; padding-left: 0; border-left: 0; }
+	.cases::-webkit-scrollbar { display: none; }
+	.case-tab { flex: none; max-width: 190px; }
+	.more-menu { display: inline-flex; align-self: center; flex: none; margin-left: auto; }
+	.more-button { width: 40px; height: 40px; color: var(--heading); }
+	.more-button .icon { width: 20px; height: 20px; stroke-width: 1.6; }
+	.more-menu .menu-item { justify-content: flex-start; min-width: 200px; min-height: 44px; font-size: 15px; }
+	.more-menu .menu-item .icon { color: var(--steel); }
+	.more-menu .menu-item[aria-checked="true"] { color: var(--link); background: var(--tint); }
+
+	/* The sheet waits below the work area's foot; clipped, it gives the page nothing to scroll to. */
+	.work { display: block; overflow: clip; }
+	.stage { position: absolute; inset: 0; display: block !important; }
+	.viewport { position: absolute; inset: 0; }
+	:is(.dock-host, .dock-resizer) { display: none; }
+	.center { bottom: var(--cover, 0px); }
+	/* A page opened over the first screen stands in for it: Files lists the same examples. */
+	body[data-screen="start"]:has(.sheet:not([hidden])) .center > .start { opacity: 0; pointer-events: none; }
+	.start { gap: 10px; }
+	.drop { padding: 26px 20px 22px; }
+	.examples { gap: 2px 8px; }
 	.silhouette { width: 110px; }
-	.strip { width: calc(100% - 24px); }
+	:is(.strip, .triad) { transition: bottom 0.32s var(--ease); }
+	.strip { bottom: calc(var(--cover, 0px) + 12px); width: calc(100% - 24px); }
 	.strip .progress { flex-wrap: wrap; }
+	.strip .progress-stages { flex-wrap: wrap; row-gap: 8px; }
+	.strip .progress-row { flex-basis: calc(50% - 6px); }
+	/* The axes keep to the right, where the car's nose, drawn at the left in the standard views, is not. */
+	.triad { left: auto; right: 10px; bottom: calc(var(--cover, 0px) + 10px); transition: bottom 0.32s var(--ease), opacity 0.2s; }
+	/* With the sheet up the car is framed into little room, and the axes would sit on it. */
+	.work[data-raised] .triad { opacity: 0; pointer-events: none; }
+
+	/* Glass over the car: the legend at the top left, the view tools in a column at the top right. */
+	.legend-host { top: 10px; left: 10px; }
+	.legend { width: 262px; padding: 4px 10px 0; border-radius: 12px; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(12px) saturate(1.4); -webkit-backdrop-filter: blur(12px) saturate(1.4); box-shadow: 0 4px 18px rgba(13, 34, 51, 0.08); }
+	.legend-bar { width: 242px; }
+	/* With the sheet up or beside the car the legend is its bar and range; title and tools show with the sheet low. */
+	.work[data-raised] .legend-head { display: none; }
+	.work[data-raised] .legend { padding-top: 8px; }
+	.toolbar-host { position: absolute; top: 10px; right: 10px; z-index: 5; border: 0; background: none; }
+	.toolbar { display: block; height: auto; padding: 0; }
+	.toolbar-end { flex-direction: column; gap: 0; padding: 3px; border: 1px solid var(--hair); border-radius: 12px; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(12px) saturate(1.4); -webkit-backdrop-filter: blur(12px) saturate(1.4); box-shadow: 0 4px 18px rgba(13, 34, 51, 0.08); }
+	.toolbar-end > .menu { display: none; }
+	.tool-group { flex-direction: column; gap: 0; padding: 0 0 3px; margin: 0 0 3px; border-right: 0; border-bottom: 1px solid var(--hair); }
+	.tool-group:nth-last-child(2) { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+	.tool { justify-content: center; min-width: 30px; padding: 0; }
+	.toolbar .popover { top: 0; left: auto; right: calc(100% + 8px); }
+
+	/* The sheet. It is as tall as the area under the top bar and slides; what it holds is laid out in the height shown. */
+	.sheet {
+		position: absolute; left: 0; right: 0; top: 0; height: 100%; z-index: 12; display: block; background: #fff;
+		border-radius: 14px 14px 0 0; box-shadow: 0 0 0 1px var(--hair), 0 -6px 26px rgba(13, 34, 51, 0.09);
+		transform: translate3d(0, 100%, 0); will-change: transform;
+	}
+	.sheet.settling { transition: transform 0.32s var(--ease); }
+	.sheet.settling.falling { transition-duration: 0.22s; }
+	.sheet-inner { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+	.sheet-grip { flex: none; display: grid; place-items: center; height: 16px; touch-action: none; cursor: grab; }
+	.sheet-grip i { width: 36px; height: 5px; border-radius: 3px; background: var(--mist); }
+	.sheet-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+	:is(.sheet-head, .files-head, .assistant-head) { touch-action: none; user-select: none; -webkit-user-select: none; }
+	/* The head's first row is the headline while the sheet is low and the panel's tabs once it is up, one height. */
+	.sheet-headline { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 44px; padding: 0 16px; white-space: nowrap; }
+	.work[data-raised] .sheet-headline, .work:not([data-raised]) .sheet-tab-row { display: none; }
+	.sheet-headline:empty { display: none; }
+	:is(.headline-cx, .headline-cp) { display: inline-flex; align-items: baseline; gap: 6px; }
+	.headline-label { color: var(--muted); font-size: 13px; font-weight: 500; }
+	.headline-label sub { font-size: 0.76em; line-height: 0; }
+	.headline-cx b { font: 600 21px/1 var(--head); color: var(--heading); letter-spacing: -0.01em; }
+	.headline-cfd { margin-left: 2px; color: var(--muted); font-size: 12.5px; }
+	.headline-cp b { color: var(--heading); font-size: 14px; font-weight: 600; }
+	.headline-cp i { align-self: center; width: 8px; height: 8px; margin-left: 4px; border-radius: 50%; }
+	.headline-cp i.max { background: var(--cp-high); }
+	.headline-cp i.min { background: var(--cp-low); }
+	.sheet .toolbar-row { width: 100%; height: 44px; padding: 0 16px; touch-action: pan-x; }
+	.sheet .fields { flex: 1 0 auto; justify-content: space-between; gap: 14px; }
+	.sheet-tab-row { flex: none; display: flex; align-items: center; height: 44px; padding: 0 16px; }
+	.sheet-tabs { display: flex; width: 100%; }
+	.sheet-tabs .segment { flex: 1; min-height: 32px; font-size: 13px; }
+	.sheet-body { position: relative; flex: 1; min-height: 0; border-top: 1px solid var(--hair); }
+	.sheet-numbers { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; }
+	.sheet-dock { position: absolute; inset: 0; }
+
+	/* The whole car's numbers, across the sheet. */
+	.sheet .card-host { position: static; display: block; pointer-events: auto; }
+	.sheet .result-card { width: auto; max-height: none; overflow: visible; padding: 12px 16px 16px; border: 0; border-radius: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+	.sheet :is(.result-forces, .result-facts, .result-outside) { font-size: 14px; gap: 5px 12px; }
+	.sheet .extremes { display: grid; justify-items: center; }
+	.sheet .extreme-buttons { width: 234px; }
+	.sheet .profile { display: block; }
+
+	/* The dock's section, probes and variants, under the sheet's tabs. */
+	.sheet .dock { height: 100%; grid-template-rows: auto minmax(0, 1fr); }
+	.sheet .dock-head { padding: 0 16px; border-bottom: 0; }
+	.sheet :is(.dock-tabs, .dock-collapse) { display: none; }
+	.sheet .dock-controls { padding: 8px 0 4px; }
+	.sheet .dock-controls:empty { display: none; }
+	.sheet .dock-controls > * { padding-left: 0; border-left: 0; }
+	.sheet .cut-controls > .control-label:first-child { display: none; }
+	.sheet .position { margin-left: 4px; }
+	.sheet .slider { flex: 1 1 auto; min-width: 60px; }
+	.sheet .dock.collapsed .dock-body { display: block; }
+	.sheet .dock-table { padding: 4px 16px 12px; overflow-x: hidden; }
+	/* Tables wider than the sheet scroll sideways in their own block, under the controls that stay put. */
+	.sheet :is(.probes, .dock-numbers) { overflow-x: auto; overscroll-behavior-x: contain; }
+	.sheet .probe-actions { flex-wrap: wrap; gap: 4px 6px; }
+	.sheet .dock-row { flex-direction: column; gap: 12px; }
+	.sheet .dock-numbers { flex: none; max-width: none; }
+	.sheet :is(.variants, .variants > .dock-row) { height: auto; }
+	.sheet .section-slot { flex: none; height: 180px; min-width: 0; }
+	.sheet .variants-form { flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+	.sheet :is(.variants-part, .variants-form .button) { margin-left: 0; }
+
+	/* The pages: each under a head of the same height, its title and a close at the end. */
+	:is(.sheet .files, .sheet .assistant-host) { position: static; flex: 1; min-height: 0; width: auto; border: 0; box-shadow: none; background: none; }
+	:is(.page-head, .sheet .files-head, .sheet .assistant-head) { display: flex; align-items: center; gap: 6px; flex: none; height: 48px; padding: 0 6px 0 16px; border-bottom: 1px solid var(--hair); }
+	.page-title { margin: 0 auto 0 0; font: 600 16px var(--head); color: var(--heading); }
+	.sheet .files-title, .sheet .assistant-title { font-size: 16px; }
+	.sheet .assistant { grid-template-rows: 48px minmax(0, 1fr) auto; }
+	.sheet-page { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+	.sheet .model-host { flex: 1 0 auto; overflow: visible; }
+	.sheet .model-page { padding: 20px 16px 48px; }
+	.sheet .model-page h1 { font-size: 24px; }
+	/* The whole model in one line keeps its desktop widths and scrolls sideways. */
+	.sheet .model-page .overview {
+		grid-template-columns: 110px 22px 88px 22px 150px 22px 120px 22px 132px 22px 110px 22px 116px;
+		overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scroll-padding-inline: 16px;
+		margin-inline: -16px; padding-inline: 16px;
+	}
+	.sheet .model-page .overview :is(.step, .overview-training) { scroll-snap-align: start; }
+	/* The folds' ten runs share a narrow row; their numbers shrink to keep to their columns. */
+	.sheet .model-page .fold-row { grid-template-columns: 66px repeat(10, minmax(0, 1fr)) 44px; gap: 3px; padding: 0 2px; }
+	.sheet .model-page .fold-run { font-size: 9.5px; letter-spacing: -0.02em; }
+	.sheet .model-page .fold-name { font-size: 12px; }
+	.sheet .model-page :is(.networks-layout, .accuracy-charts, .spread-layout) { flex-direction: column; gap: 28px; }
+	.sheet .export-list { padding: 6px 8px; }
+	.sheet .export-row .menu-item { min-height: 48px; font-size: 15px; }
+}
+/* Held sideways, the sheet is a column at the left of the car, and stays open. */
+@media (max-width: 760px) and (max-height: 500px) and (orientation: landscape), (pointer: coarse) and (max-height: 500px) and (orientation: landscape) {
+	.topbar { height: 44px; padding-top: 0; }
+	.sheet { width: 340px; right: auto; transform: none; border-radius: 0; box-shadow: 1px 0 0 var(--hair); }
+	.sheet-grip { display: none; }
+	.sheet-inner { padding-top: 4px; }
+	body:has(.sheet:not([hidden])) .stage { left: 340px; }
+	:is(.sheet-head, .files-head, .assistant-head) { touch-action: auto; }
 }
 
 /* ---- touch ---- */
@@ -571,4 +716,10 @@ svg .cursor circle { fill: #fff; stroke: var(--link); stroke-width: 1.6; }
 	.dock :is(.tool, .button) { height: 40px; }
 	.probe-table .icon-button { width: 40px; height: 40px; }
 	.menu-item { min-height: 40px; }
+	/* Without hover a file's actions stay shown, over the end of its text, and give way to a name being typed. */
+	.file-actions { opacity: 1; background: linear-gradient(90deg, rgba(255, 255, 255, 0), #fff 20px); }
+	.file-row.current .file-actions { background: linear-gradient(90deg, rgba(238, 245, 251, 0), #eef5fb 20px); }
+	.file-row:has(.file-edit) .file-actions { display: none; }
+	.file-action { height: 36px; }
+	.file-more { width: 40px; height: 40px; }
 }

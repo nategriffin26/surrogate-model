@@ -10,7 +10,7 @@
 
 import { VertexGrid, FaceIndex } from '../viewer/picking.js';
 import { oneOf, round, triple } from './checks.js';
-import { failureNote, h, put, s, segmented } from './dom.js';
+import { TOUCH, failureNote, h, put, s, segmented } from './dom.js';
 import { baseName, defineExport } from './export.js';
 import { FIELDS, faceMean } from './fields.js';
 import { csv, signed } from './format.js';
@@ -40,8 +40,6 @@ const MARGIN = 8;
 const OFF_PLANE = 0.002;
 /** A click this close to where the preview was looked up places the preview: the viewer's own tolerance for a click. */
 const CLICK_PX = 4;
-/** A screen used by touch, where a probe is placed by a tap. */
-const TOUCH = matchMedia('(pointer: coarse)');
 /** Stations along a section: at most this many, and this many when none is said. */
 const MOST_STATIONS = 200;
 const STATIONS = 20;

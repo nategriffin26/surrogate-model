@@ -5,7 +5,7 @@
 // assistant act on the workspace alike.
 
 import { caseSummary } from './cases.js';
-import { download, failureNote, h, s } from './dom.js';
+import { TOUCH, download, failureNote, h, s } from './dom.js';
 import { EXAMPLES, exampleFacts } from './examples.js';
 import { bytes, millions, seconds } from './format.js';
 import { icon } from './icons.js';
@@ -297,11 +297,11 @@ const runFacts = (r) => [
 ];
 
 /**
- * context: { session, workspace, engine, run, progress }; progress(c) is the share of a case's analysis done. A geometry's
- * row offers its CFD to the cars without CFD of their own; the engine holds the car analysed last only, so another is
- * analysed again first (attach_reference).
+ * context: { session, workspace, engine, run, progress, toggled }; progress(c) is the share of a case's analysis done,
+ * and toggled(open) runs when the panel opens or closes. A geometry's row offers its CFD to the cars without CFD of
+ * their own; the engine holds the car analysed last only, so another is analysed again first (attach_reference).
  */
-export function createFilesPanel({ session, workspace, engine, run, progress }) {
+export function createFilesPanel({ session, workspace, engine, run, progress, toggled }) {
 	const input = h('input', {
 		type: 'file',
 		multiple: true,
@@ -363,6 +363,7 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		toggle.setAttribute('aria-pressed', String(open));
 		document.body.classList.toggle('files-open', open);
 		if (open) render();
+		toggled(open);
 	}
 
 	/** Run an operation from a control; a failure shows on the panel until the next action. */
@@ -660,12 +661,15 @@ export function createFilesPanel({ session, workspace, engine, run, progress }) 
 		built.set(key, { signature, el: row });
 		return row;
 	}
-	const empty = h(
-		'label',
-		{ class: 'files-empty' },
-		h('span', {}, 'Drop files here or '),
-		h('span', { class: 'link', onclick: () => input.click() }, 'choose them'),
-	);
+	// A touch screen cannot drop files; the whole box chooses them there.
+	const empty = TOUCH.matches
+		? h('label', { class: 'files-empty', onclick: () => input.click() }, 'Choose files')
+		: h(
+				'label',
+				{ class: 'files-empty' },
+				h('span', {}, 'Drop files here or '),
+				h('span', { class: 'link', onclick: () => input.click() }, 'choose them'),
+			);
 
 	function render() {
 		if (!open) return;

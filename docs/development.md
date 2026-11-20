@@ -71,7 +71,7 @@ web/                 Surrogate Model, the browser tool
   app/                 interface; operations.js (every action, for controls and assistant) and workspace.js
                        (every file) are its two contracts; section.js is the Section tool and mesh-cut.js
                        cuts the mesh; annotations.js holds the layers drawn on a car and expression.js
-                       parses their field expressions; app/model/ is the Model page
+                       parses their field expressions; phone.js is the phone layout; app/model/ is the Model page
   assistant/           the assistant: its conversation loop, panel and prompt, and the Pyodide kernel with
                        pressure.py, the module that gives Python the cases, the operations and the model
   model/               exported weights and model description; the training cars the Model page draws

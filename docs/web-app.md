@@ -16,6 +16,8 @@ Every action, from a control or from the assistant, is one operation in one regi
 
 The Model page, from the toggle in the top bar, draws the model as one diagram for a reader new to it: the whole pipeline in one line, then each step on a fixed reference car, run 1, with a point the reader drags to see what the networks are told there.
 
+On a phone (a window at most 760 px wide, or a touch screen at most 500 px high), the car fills the screen under the top bar and one sheet over its foot holds the rest (`web/app/phone.js`). Low, it shows the whole car's $C_x$, the range of $C_p$ and the field switch; raised, tabs in the headline's place show the numbers, the section, the probes or the variants, at half height or over the whole screen. The top bar's menu opens Files, the assistant, the Model page and Export in the same sheet. The car is framed into the room left above the sheet each time the sheet moves between low and raised. Held sideways, the sheet is a column beside the car.
+
 ## How the analysis runs in the browser
 
 The whole analysis runs in the browser, so the 650 MB file never leaves the machine; `uv run surrogate app` serves the files and the assistant's route to its model.

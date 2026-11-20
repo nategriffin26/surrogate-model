@@ -162,13 +162,16 @@ export function defineExportOperations({ session, workspace, engine }) {
 /**
  * The Export menu: every export, downloaded by its row or saved into the workspace by the folder beside it. Those
  * that cannot be made now are disabled with the reason as their tooltip; the surface file is offered only while the
- * engine holds the car's whole predicted surface. `render()` brings the rows up to date with the case on screen.
+ * engine holds the car's whole predicted surface. `render()` brings the rows up to date with the case on screen;
+ * `refresh()` does that and clears a failure shown, as opening the menu does. `content` is the rows and the failure,
+ * which a phone shows in its sheet rather than under the button (phone.js).
  */
 export function createExportMenu({ run, active }) {
 	const note = failureNote();
 	const list = h('div', { class: 'menu-list export-list' });
 	const button = h('button', { type: 'button', class: 'button export-button' }, icon('download'), 'Export');
-	const exportMenu = menu(button, h('div', {}, list, note.el), { align: 'right' });
+	const content = h('div', {}, list, note.el);
+	const exportMenu = menu(button, content, { align: 'right' });
 
 	async function exportTo(row, name, to) {
 		row.classList.add('busy');
@@ -214,10 +217,11 @@ export function createExportMenu({ run, active }) {
 			}),
 		);
 	}
-	button.addEventListener('click', () => {
+	function refresh() {
 		note.hide();
 		render();
-	});
+	}
+	button.addEventListener('click', refresh);
 
-	return { el: exportMenu.el, render };
+	return { el: exportMenu.el, content, render, refresh };
 }
